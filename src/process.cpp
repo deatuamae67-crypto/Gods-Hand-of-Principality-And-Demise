@@ -2,11 +2,17 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
+#include <shellapi.h>
 #elif defined(__ANDROID__)
 #include <sys/wait.h>  // no ffmpeg to run on Android (and posix_spawn needs API 28)
 #else
@@ -190,6 +196,24 @@ int PipeProcess::finish() {
 }
 
 #endif
+
+bool openWithSystem(const std::string& path) {
+#if defined(_WIN32)
+    const std::wstring w = toPath(path).wstring();
+    return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+#elif defined(__ANDROID__)
+    (void)path;
+    return false;
+#else
+#if defined(__APPLE__)
+    const std::string opener = "open";
+#else
+    const std::string opener = "xdg-open";
+#endif
+    std::thread([opener, path] { runProcess(opener, {path}); }).detach();
+    return true;
+#endif
+}
 
 std::string findProgram(const std::string& baseDir, const std::string& name, const std::string& probeArg) {
 #if defined(_WIN32)

@@ -336,6 +336,10 @@ int App::run(int argc, char** argv) {
     else if (autoRun.state == "credits") state_ = makeCredits();
     else if (autoRun.state == "calibration") state_ = makeCalibration();
     else if (autoRun.state == "modpacks") state_ = makeModPacks();
+    else if (autoRun.state == "editors") state_ = makeEditorMenu();
+    else if (autoRun.state == "character-editor") state_ = makeCharacterEditor();
+    else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
+    else if (autoRun.state == "event-editor") state_ = makeEventEditor();
     else state_ = makeTitle();
     state_->enter();
     logScreen(*state_);

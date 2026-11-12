@@ -35,6 +35,10 @@ private:
 
 // Runs exe with args, waits, returns its exit code (-1 if it could not start).
 int runProcess(const std::string& exe, const std::vector<std::string>& args);
+// Opens a file or folder with what the system uses for it (a text editor for
+// .lua, the file manager for folders), without waiting. False where there is
+// no such thing (Android).
+bool openWithSystem(const std::string& path);
 // exe next to the game or on the PATH, "" if neither runs with `probeArg`.
 std::string findProgram(const std::string& baseDir, const std::string& name, const std::string& probeArg = "--version");
 

@@ -198,6 +198,11 @@ public:
             sfxPlay(sel == 4 ? Sfx::Cancel : Sfx::Confirm);
         }
         if (a.input.back()) { sfxPlay(Sfx::Cancel); a.change(makeTitle()); }
+        // 7: the editors (chart, character, stage, events), as Psych's Master Editor Menu.
+        if (a.input.pressed(KEY_SEVEN) || a.input.pressed(KEY_KP_7)) {
+            sfxPlay(Sfx::Confirm);
+            a.change(makeEditorMenu());
+        }
     }
     void draw() override {
         App& a = app();
@@ -227,7 +232,7 @@ public:
                 gfx::drawNote(gfx::kLeft, {gfx::W / 2 + w, y + size * 0.55f}, 44);
             }
         }
-        hints("UP/DOWN select   ENTER confirm   ESC back   F11 fullscreen");
+        hints("UP/DOWN select   ENTER confirm   7 editors   ESC back   F11 fullscreen");
         gfx::text(FontId::Ui, a.library.report(), 16, gfx::H - 70, 20, fade(kIvory, 0.6f));
         gfx::endCanvas();
     }

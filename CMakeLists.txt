@@ -212,6 +212,7 @@ if(GH_BUILD_GAME)
     src/video.cpp
     src/state_results.cpp
     src/state_editor.cpp
+    src/state_editors.cpp
     src/state_modpacks.cpp
     src/process.cpp
     src/render_mode.cpp
