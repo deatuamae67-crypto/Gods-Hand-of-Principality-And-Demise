@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <thread>
 #include <typeinfo>
 
@@ -79,7 +80,20 @@ void App::applyVolumes() {
     sfxSetVolume(settings.sfxVol);
 }
 
-void App::saveSettings() { settings.save(base + "settings.cfg"); }
+void App::saveSettings() { settings.save(userDir + "settings.cfg"); }
+
+// The first time the per-user folder is used, what the game's folder has
+// (settings, scores, saves, replays) is copied over; nothing is deleted.
+static void moveInUserData(const std::string& from, const std::string& to) {
+    namespace fs = std::filesystem;
+    auto p = [](const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); };
+    std::error_code ec;
+    for (const char* f : {"settings.cfg", "scores.cfg"})
+        if (!fs::exists(p(to + f), ec) && fs::exists(p(from + f), ec)) fs::copy_file(p(from + f), p(to + f), ec);
+    for (const char* d : {"saves", "replays"})
+        if (!fs::exists(p(to + d), ec) && fs::is_directory(p(from + d), ec))
+            fs::copy(p(from + d), p(to + d), fs::copy_options::recursive | fs::copy_options::skip_existing, ec);
+}
 
 void App::volumeKeys() {
     if (platform::kAndroid) return;  // phones have their own volume buttons
@@ -236,6 +250,7 @@ int App::run(int argc, char** argv) {
         return 0;
     }
 
+    const bool baseGiven = !base.empty();
     if (platform::kAndroid) {
         base = platform::dataDir();
         platform::prepareDataDir(base);
@@ -246,8 +261,18 @@ int App::run(int argc, char** argv) {
         std::string cwd = std::string(GetWorkingDirectory()) + "/";
         if (FileExists((cwd + "assets/fonts/Rajdhani-Bold.ttf").c_str())) base = cwd;
     }
-    settings.load(base + "settings.cfg");
-    scores.load(base + "scores.cfg");
+    userDir = base;
+    if (!platform::kAndroid && !baseGiven && !FileExists((base + "portable.txt").c_str())) {
+        const std::string u = platform::userDir();
+        std::error_code ec;
+        if (!u.empty() && (std::filesystem::create_directories(std::filesystem::path(std::u8string(u.begin(), u.end())), ec), !ec ||
+                           DirectoryExists(u.c_str()))) {
+            moveInUserData(base, u);
+            userDir = u;
+        }
+    }
+    settings.load(userDir + "settings.cfg");
+    scores.load(userDir + "scores.cfg");
 
     unsigned flags = platform::kAndroid ? 0u : (FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     if (settings.vsync) flags |= FLAG_VSYNC_HINT;

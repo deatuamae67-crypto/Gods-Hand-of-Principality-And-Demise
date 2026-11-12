@@ -436,8 +436,11 @@ Vector2 PlayState::strumCenter(int side, int lane) const {
 float PlayState::noteSize() const { return std::min(112.0f, 500.0f / float(chart_.keys)) * 0.94f; }
 
 double PlayState::scrollSpeed() const {
-    const Settings& s = app().settings;
-    const double base = s.scrollSpeed > 0.001f ? s.scrollSpeed : chart_.speed;
+    const App& a = app();
+    const Settings& s = a.settings;
+    double base = s.scrollSpeed > 0.001f ? s.scrollSpeed : chart_.speed;
+    if (a.mods.scrollType == 1) base *= a.mods.scrollValue;  // Freeplay modifiers
+    else if (a.mods.scrollType == 2) base = a.mods.scrollValue;
     return base * speedMult_;
 }
 
@@ -947,7 +950,7 @@ void PlayState::finish() {
         record_.score = r.score;
         record_.acc = r.acc;
         record_.misses = r.misses;
-        const std::string dir = a.base + "replays/";
+        const std::string dir = a.userDir + "replays/";
         const std::string last = dir + replayFileName(entry_->id, req_.diff, "last");
         if (record_.save(last)) r.replayPath = last;
         if (r.newBest) record_.save(dir + replayFileName(entry_->id, req_.diff, "best"));

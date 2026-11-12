@@ -36,6 +36,10 @@ public:
 struct Modifiers {
     double rate = 1.0;
     bool botplay = false, practice = false, mirror = false;
+    // Scroll speed, as Psych's gameplay changers: 0 the chart's (or Options'),
+    // 1 that times scrollValue, 2 scrollValue whatever the chart says.
+    int scrollType = 0;
+    double scrollValue = 1.0;
 };
 
 struct PlayRequest {
@@ -70,6 +74,10 @@ struct ResultData {
 class App {
 public:
     std::string base;  // folder with assets/, songs/, mods/ (ends with '/')
+    // Settings, scores, script save data (saves/) and replays (replays/): the
+    // system's per-user folder, so updating the game keeps them; the game's
+    // own folder with portable.txt in it, with --base, and on Android.
+    std::string userDir;
     bool listSongs = false;
     bool checkCharts = false;  // --check-charts with --list-songs
     Settings settings;

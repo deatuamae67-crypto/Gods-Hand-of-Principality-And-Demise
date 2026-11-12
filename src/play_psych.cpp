@@ -2018,7 +2018,7 @@ void PlayState::timeBarColors(uint32_t left, uint32_t right) {
     timeBarBack_ = Color{(unsigned char)(right >> 16), (unsigned char)(right >> 8), (unsigned char)right, 255};
 }
 
-std::string PlayState::saveDir() { return app().base + "saves/"; }
+std::string PlayState::saveDir() { return app().userDir + "saves/"; }
 
 bool PlayState::shadersEnabled() { return app().settings.shaders; }
 
