@@ -1002,10 +1002,14 @@ bool PlayState::handleJsEngineEvent(const psych::ChartEvent& e) {
             if (rainbow_) sc->camGame.filters.push_back(rainbow_);
         }
         if (rainbow_) {
+            // JS Engine: its time starts anywhere from -1000 to 1000 and
+            // advances by elapsed * speed (PulseShader.update).
             rainbow_->floats["uWaveAmplitude"] = {1.0f};
             rainbow_->floats["uFrequency"] = {2.0f};
             rainbow_->floats["uSpeed"] = {float(speed * rate_)};
-            rainbow_->floats["uEnabled"] = {1.0f};
+            rainbow_->floats["uTime"] = {float(GetRandomValue(-1000000, 1000000)) / 1000.0f};
+            rainbow_->timeRate = float(speed * rate_);
+            rainbow_->ints["uEnabled"] = {1};
         }
         return true;
     }
