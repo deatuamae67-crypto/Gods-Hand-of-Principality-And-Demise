@@ -55,6 +55,12 @@ bool Settings::load(const std::string& path) {
         else if (k == "hitPopups") hitPopups = b;
         else if (k == "timeBar") timeBar = clampv(int(d), 0, 3);
         else if (k == "healthBarAlpha") healthBarAlpha = clampv(float(d), 0.0f, 1.0f);
+        else if (k == "hideHud") hideHud = b;
+        else if (k == "scoreZoom") scoreZoom = b;
+        else if (k == "botplayText") botplayText = b;
+        else if (k == "comboStacking") comboStacking = b;
+        else if (k == "opponentNotes") opponentNotes = b;
+        else if (k == "pauseMusic") pauseMusic = clampv(int(d), 0, 2);
         else if (k == "psychFolder") psychFolder = v;
         else if (k == "fullscreen") fullscreen = b;
         else if (k == "showTimings") showTimings = b;
@@ -84,7 +90,9 @@ bool Settings::save(const std::string& path) const {
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
-      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha
+      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nscoreZoom=" << scoreZoom
+      << "\nbotplayText=" << botplayText << "\ncomboStacking=" << comboStacking << "\nopponentNotes=" << opponentNotes
+      << "\npauseMusic=" << pauseMusic
       << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums << "\ntouchControls=" << touchControls
       << "\nfpsCap=" << fpsCap << "\noffsetMs=" << offsetMs << "\nscrollSpeed=" << scrollSpeed
       << "\nmasterVol=" << masterVol << "\nmusicVol=" << musicVol << "\nsfxVol=" << sfxVol

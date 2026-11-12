@@ -113,8 +113,9 @@ private:
     void adaptNoteGap();  // Note detail "Adaptive": see noteGap_
     void drawDebugOverlay();  // F3: chart, clock, audio, notes, frame times (S2X's debug menu)
     void drawHud();
+    void drawUnderNotes();  // rating popups and countdown (under the notes, as Psych's comboGroup)
     void drawHudLayer();  // lanes, effects and HUD with the HUD camera
-    void drawHudCentered();
+    void drawHudCentered(bool underNotes = false);
     void setGameWidth(float w);  // FlxG.width
     void drawPause();
     void drawPsychPause();  // the Psych Engine interface's pause menu
@@ -168,6 +169,9 @@ private:
         Color c;
         double t0;
         long long combo;
+        int rating = -1;     // 0 sick .. 3 shit (the Psych interface's pictures)
+        uint32_t seed = 0;   // Psych's random fall for this one (popUpScore's velocities)
+        float beat = 0.5f;   // a beat (s) when it popped: Psych fades the rating a beat later
     };
     struct DebugLine {
         std::string text;
@@ -245,6 +249,8 @@ private:
     double deadAt_ = 0, loadStart_ = 0, lastHitsound_ = 0, lastMissSfx_ = 0, waitStart_ = 0, endWaitStart_ = 0;
     double lastSplash_[9] = {};
     bool finished_ = false, songStarted_ = false, countdownStarted_ = false, endRequested_ = false;
+    double songStartAt_ = -1;  // when the song started (Psych's time bar fades in)
+    double scoreBopAt_ = -10;  // last note you hit (Psych's score text zoom)
     size_t eventIdx_ = 0;
     std::deque<DebugLine> debug_;
     std::unique_ptr<scene::Scene> scene_ = std::make_unique<scene::Scene>();

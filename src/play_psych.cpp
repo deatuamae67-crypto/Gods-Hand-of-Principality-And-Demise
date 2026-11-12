@@ -1209,6 +1209,7 @@ void PlayState::drawHudLayer() {
         gfx::beginTexture(hudRt_);
         ClearBackground(BLANK);
         gfx::beginCanvas(cam.zoom, focus, cam.angle);
+        drawHudCentered(true);
         drawLanes();
         fx_.draw(true);
         drawHudCentered();
@@ -1217,6 +1218,7 @@ void PlayState::drawHudLayer() {
         DrawTextureRec(hudRt_.texture, {0, 0, float(w), -float(h)}, {0, 0}, gfx::fade(WHITE, cam.alpha));
     } else {
         gfx::beginCanvas(cam.zoom, focus, cam.angle);
+        drawHudCentered(true);
         drawLanes();
         fx_.draw(true);
         drawHudCentered();
@@ -1227,16 +1229,20 @@ void PlayState::drawHudLayer() {
 
 // The health bar and score sit in the middle of the game's width (a script
 // may have narrowed it, Flixel's FlxG.width).
-void PlayState::drawHudCentered() {
+void PlayState::drawHudCentered(bool underNotes) {
     const float shift = (gameW_ - gfx::W) * 0.5f;
+    auto body = [&] {
+        if (underNotes) drawUnderNotes();
+        else drawHud();
+    };
     if (shift == 0) {
-        drawHud();
+        body();
         return;
     }
     rlDrawRenderBatchActive();
     rlPushMatrix();
     rlTranslatef(shift, 0, 0);
-    drawHud();
+    body();
     rlDrawRenderBatchActive();
     rlPopMatrix();
 }

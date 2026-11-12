@@ -44,6 +44,13 @@ struct Settings {
     bool hitPopups = true;     // rating pictures and combo numbers on each hit
     int timeBar = 0;           // 0 time left, 1 time elapsed, 2 song name, 3 off (as in Psych)
     float healthBarAlpha = 1.0f;
+    // Psych Engine's own options (Visuals and UI, Gameplay).
+    bool hideHud = false;       // health bar, icons, score line and ratings hidden
+    bool scoreZoom = true;      // the score line grows a little on each note you hit
+    bool botplayText = true;    // BOTPLAY (or REPLAY) on screen while the game plays by itself
+    bool comboStacking = true;  // ratings and combo numbers pile up (OFF: only the latest)
+    bool opponentNotes = true;  // OFF: the opponent's receptors and notes are hidden
+    int pauseMusic = 2;         // Psych interface's pause menu song: 0 none, 1 Breakfast, 2 Tea Time
     std::string psychFolder;   // a Psych Engine / JS Engine copy to take that interface from
     bool fullscreen = false;
     bool showTimings = true;
