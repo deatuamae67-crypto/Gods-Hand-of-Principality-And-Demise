@@ -70,6 +70,9 @@ public:
             {Row::Bool, "Flashing lights", "Screen flashes on some beats.", &s.flashing},
             {Row::Bool, "Camera zoom on beat", "Only the beat bops: zoom events from charts and scripts always work.", &s.camZoom},
             {Row::Bool, "Shaders", "Mod shaders and screen effects. OFF is faster on weak devices.", &s.shaders},
+            {Row::Choice, "Note detail", "Spam charts: Adaptive draws notes stacked a few pixels apart once while the frame rate is "
+             "under 60 (every note is still played). Full: every pixel.", nullptr, nullptr, 0, 0, 0, &s.noteDetail, {0, 1},
+             {"Adaptive", "Full"}},
             {Row::Header, "INTERFACE", ""},
             {Row::Choice, "Note counter", "Notes hit so far, under the score: your side only, or both sides added up.", nullptr,
              nullptr, 0, 0, 0, &s.noteCounter, {0, 1, 2}, {"Off", "Your side", "Both sides"}},
@@ -90,6 +93,8 @@ public:
              nullptr, nullptr, 0, 0, 0, &s.luaErrors, {0, 1, 2}, {"Always", "luaDebugMode", "Off"}},
             {Row::Choice, "Lua warnings", "Missing images, sounds and objects that mods ask for. Psych: only with luaDebugMode.",
              nullptr, nullptr, 0, 0, 0, &s.luaWarnings, {0, 1, 2}, {"Always", "luaDebugMode", "Off"}},
+            {Row::Bool, "Lua note callbacks", "Scripts hear every hit and miss (goodNoteHit, noteMiss...). OFF is faster on spam "
+             "charts, but mods that count notes or drain health with them stop doing it.", &s.luaNoteCallbacks},
         };
         for (Row& r : rows_) {
             if (r.label == "Scroll speed") r.fmt = [](float v) { return v <= 0.001f ? std::string("Chart") : std::string(TextFormat("%.1f", v)); };
