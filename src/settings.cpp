@@ -41,6 +41,12 @@ bool Settings::load(const std::string& path) {
         else if (k == "shaders") shaders = b;
         else if (k == "noteDetail") noteDetail = clampv(int(d), 0, 1);
         else if (k == "luaNoteCallbacks") luaNoteCallbacks = b;
+        else if (k == "renderMode") renderMode = b;
+        else if (k == "renderSize") renderSize = clampv(int(d), 0, 3);
+        else if (k == "renderFps") renderFps = clampv(int(d), 1, 1000);
+        else if (k == "renderEncoder") renderEncoder = clampv(int(d), 0, 6);
+        else if (k == "renderBitrate") renderBitrate = clampv(int(d), 1, 500);
+        else if (k == "renderAudio") renderAudio = b;
         else if (k == "extraKeys") extraKeys = b;
         else if (k == "noteCounter") noteCounter = clampv(int(d), 0, 2);
         else if (k == "luaErrors") luaErrors = clampv(int(d), 0, 2);
@@ -75,6 +81,8 @@ bool Settings::save(const std::string& path) const {
       << "\nnoteSplashes=" << noteSplashes << "\nflashing=" << flashing << "\ncamZoom=" << camZoom
       << "\nshowFps=" << showFps << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
       << "\nnoteDetail=" << noteDetail << "\nluaNoteCallbacks=" << luaNoteCallbacks
+      << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
+      << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
       << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha
       << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums << "\ntouchControls=" << touchControls

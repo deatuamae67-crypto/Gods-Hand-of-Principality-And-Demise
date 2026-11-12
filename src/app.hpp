@@ -10,6 +10,7 @@
 #include "audio.hpp"
 #include "input.hpp"
 #include "library.hpp"
+#include "render_mode.hpp"
 #include "session.hpp"
 #include "settings.hpp"
 #include "touch_ui.hpp"
@@ -119,6 +120,17 @@ public:
     std::string psychReport;
     std::string psychFolderInUse;  // the folder chosen, or the one found automatically
     bool psychAutomatic = false;   // no folder chosen: the best copy found on disk
+
+    // Rendering mode (render_mode.hpp): the song being played is recorded to a
+    // video. While it records, the game's time moves one video frame per loop.
+    VideoRenderer renderer;
+    bool renderCli = false;  // --render: the rendering mode for this run
+    bool wantsRender() const;
+    bool startRender(const std::string& title, const std::string& diff);  // false (and a notice) if it cannot
+    void stopRender();
+    std::string renderLabel;  // where the song is ("1:23 / 3:05"), shown while recording
+    // A line of text at the bottom of the screen for a few seconds (any screen).
+    void notify(const std::string& text, double seconds = 6.0);
     // Options opened from a song's pause menu: leaving them plays it again.
     std::unique_ptr<PlayRequest> optionsReturn;
     // Deaths on the song played last (Psych's "Blueballed" in the pause menu).
@@ -131,6 +143,13 @@ private:
     void drawVolumeTray();
     double volumeShownAt_ = -10;
     double perfSince_ = 0;
+    double renderClock_ = 0, clockShift_ = 0, renderStartReal_ = 0, lastSwap_ = 0;
+    std::vector<float> renderAudio_;
+    std::string ffmpegPath_;
+    bool ffmpegProbed_ = false;
+    std::string notice_;
+    double noticeUntil_ = 0;
+    void drawRenderBadge();
     int perfFrames_ = 0;
     float perfUpd_ = 0, perfDraw_ = 0, perfWorst_ = 0;
     std::unique_ptr<State> state_, next_;

@@ -214,6 +214,7 @@ if(GH_BUILD_GAME)
     src/state_editor.cpp
     src/state_modpacks.cpp
     src/process.cpp
+    src/render_mode.cpp
     src/platform.cpp
     src/folder_picker.cpp
     src/psych_ui.cpp
@@ -271,7 +272,7 @@ endif()
 
 # Streamed song audio is tested with raylib's decoders when raylib is built.
 if(GH_BUILD_TESTS AND TARGET raylib)
-  target_sources(gh_tests PRIVATE tests/audio_tests.cpp src/audio_decode.cpp)
+  target_sources(gh_tests PRIVATE tests/audio_tests.cpp src/audio_decode.cpp src/render_mode.cpp src/process.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   target_compile_definitions(gh_tests PRIVATE GH_AUDIO_TESTS=1)
 endif()

@@ -1191,19 +1191,19 @@ void PlayState::drawHudLayer() {
     const Vector2 focus{gfx::W * 0.5f - (cam.shakeX + cam.x) / std::max(0.01f, cam.zoom),
                         gfx::H * 0.5f - (cam.shakeY + cam.y) / std::max(0.01f, cam.zoom)};
     if (cam.alpha < 0.999f && !capturing_) {
-        const int w = GetScreenWidth(), h = GetScreenHeight();
+        const int w = gfx::targetWidth(), h = gfx::targetHeight();
         if (!hudRt_.id || hudRt_.texture.width != w || hudRt_.texture.height != h) {
             if (hudRt_.id) UnloadRenderTexture(hudRt_);
             hudRt_ = LoadRenderTexture(w, h);
         }
-        BeginTextureMode(hudRt_);
+        gfx::beginTexture(hudRt_);
         ClearBackground(BLANK);
         gfx::beginCanvas(cam.zoom, focus, cam.angle);
         drawLanes();
         fx_.draw(true);
         drawHudCentered();
         gfx::endCanvas();
-        EndTextureMode();
+        gfx::endTexture();
         DrawTextureRec(hudRt_.texture, {0, 0, float(w), -float(h)}, {0, 0}, gfx::fade(WHITE, cam.alpha));
     } else {
         gfx::beginCanvas(cam.zoom, focus, cam.angle);
@@ -1288,7 +1288,7 @@ void PlayState::psychDraw() {
             if (camRt_.id) UnloadRenderTexture(camRt_);
             camRt_ = LoadRenderTexture(rw, rh);
         }
-        BeginTextureMode(camRt_);
+        gfx::beginTexture(camRt_);
         ClearBackground(BLANK);
         gfx::setRenderTargetSize(rw, rh);
         gfx::beginCanvas();
@@ -1300,7 +1300,7 @@ void PlayState::psychDraw() {
         capturing_ = false;
         gfx::endCanvas();
         gfx::setRenderTargetSize(0, 0);
-        EndTextureMode();
+        gfx::endTexture();
         renderer_.drawFiltered(sc, cam.filters, camRt_, Rectangle{origin.x, origin.y, float(rw), float(rh)});
         gfx::beginCanvas();
     };

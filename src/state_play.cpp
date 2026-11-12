@@ -61,6 +61,7 @@ std::string psychFcLabel(const Session& s) {
 PlayState::PlayState(PlayRequest r) : req_(std::move(r)) {}
 
 PlayState::~PlayState() {
+    stopRendering();
     stopPauseMusic();
     scripts_.reset();
     releaseAudio();
@@ -142,7 +143,10 @@ void PlayState::update(double dt) {
         if (scripts_) scripts_->call("onCustomSubstateUpdatePost", {scene::Value(name), scene::Value(dt)});
     }
     if (popupHold_) {  // "Popup" event: the song waits for OK
-        if (a.input.accept() || a.input.back()) {
+        // While recording nobody presses OK: the popup stays two seconds.
+        const bool recordedLongEnough =
+            rendering_ && std::any_of(notices_.begin(), notices_.end(), [&](const Notice& n) { return n.kind == 2 && now - n.t0 > 2.0; });
+        if (a.input.accept() || a.input.back() || recordedLongEnough) {
             popupHold_ = false;
             notices_.erase(std::remove_if(notices_.begin(), notices_.end(), [](const Notice& n) { return n.kind == 2; }),
                            notices_.end());
@@ -164,7 +168,12 @@ void PlayState::update(double dt) {
         return;
     }
 
-    songMs_ = a.mixer.time(now) * 1000.0 - a.settings.offsetMs * rate_;
+    // The audio offset is for the player's ears; a recording is in sync by itself.
+    songMs_ = a.mixer.time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
+    if (rendering_) {
+        const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(chart_.lengthMs / 1000.0);
+        a.renderLabel = TextFormat("%d:%02d / %d:%02d", at / 60, at % 60, len / 60, len % 60);
+    }
     handleInput();
     if (phase_ != Phase::Playing) return;
     if (!songStarted_ && songMs_ >= 0) {
@@ -317,6 +326,11 @@ void PlayState::setup() {
         cfg_.practice = true;  // a replay never ends early
         cfg_.ghostTapping = playback_.ghostTapping;
         playerLeft_ = playback_.mirror;
+    }
+    // Rendering mode: the song plays by itself and is recorded from here on.
+    if (a.wantsRender() && !replaying_) {
+        rendering_ = a.startRender(entry_->title, req_.diff);
+        if (rendering_) cfg_.botplay = true;
     }
     const CharId opp = entry_->builtin ? charFromName(entry_->opponent) : CharId::Shade;
     left_ = CharacterState{};
@@ -490,6 +504,11 @@ void PlayState::handleInput() {
         const bool pauseKey = e.code == KEY_ESCAPE || e.code == KEY_BACK || e.code == kPadBase + GAMEPAD_BUTTON_MIDDLE_RIGHT ||
                               (e.code == KEY_ENTER && !a.input.isDown(KEY_LEFT_ALT) && !a.input.isDown(KEY_RIGHT_ALT));
         if (e.down && pauseKey && (e.code <= 0 || e.code >= Input::kMaxCodes || keyLane_[size_t(e.code)] < 0)) {
+            if (rendering_) {  // stops the recording: the video keeps what was recorded
+                stopRendering();
+                exitToMenu();
+                return;
+            }
             if (scripts_ && scripts_->callStops("onPause")) continue;
             pause();
             return;
@@ -840,8 +859,15 @@ void PlayState::updateDead() {
     else if (a.input.back()) exitToMenu();
 }
 
+void PlayState::stopRendering() {
+    if (!rendering_) return;
+    rendering_ = false;
+    app().stopRender();
+}
+
 void PlayState::exitToMenu() {
     App& a = app();
+    stopRendering();
     if (scripts_) scripts_->call("onDestroy");
     a.mixer.stop();
     a.mixer.clear();
@@ -850,6 +876,7 @@ void PlayState::exitToMenu() {
 
 void PlayState::openChartEditor() {
     App& a = app();
+    stopRendering();
     if (scripts_) scripts_->call("onDestroy");
     a.mixer.stop();
     a.mixer.clear();
@@ -860,6 +887,7 @@ void PlayState::openChartEditor() {
 // Options from the pause menu: leaving them starts this song again, as in Psych.
 void PlayState::openOptions() {
     App& a = app();
+    stopRendering();
     if (scripts_) scripts_->call("onDestroy");
     a.mixer.stop();
     a.mixer.clear();
@@ -880,6 +908,7 @@ void PlayState::finish() {
         }
     }
     finished_ = true;
+    stopRendering();  // the video ends with the song
     if (scripts_) scripts_->call("onDestroy");
     ResultData r;
     r.req = req_;

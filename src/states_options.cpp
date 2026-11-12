@@ -84,6 +84,18 @@ public:
             {Row::Choice, "Time bar", "The bar at the top of the screen, as in Psych.", nullptr, nullptr, 0, 0, 0, &s.timeBar,
              {0, 1, 2, 3}, {"Time left", "Time elapsed", "Song name", "Off"}},
             {Row::Number, "Health bar opacity", "The health bar and the icons.", nullptr, &s.healthBarAlpha, 0, 1, 0.1f},
+            {Row::Header, "RENDERING", ""},
+            {Row::Bool, "Rendering mode", "Songs play by themselves and are recorded to a video in renders/, frame by frame, as in JS Engine and "
+             "H-Slice: smooth even if the computer cannot keep up. Needs ffmpeg next to the game or installed. ESC stops.", &s.renderMode},
+            {Row::Choice, "Video size", "", nullptr, nullptr, 0, 0, 0, &s.renderSize, {0, 1, 2, 3},
+             {"1280x720", "1920x1080", "2560x1440", "3840x2160"}},
+            {Row::Choice, "Video frame rate", "", nullptr, nullptr, 0, 0, 0, &s.renderFps, {30, 60, 120, 240}},
+            {Row::Choice, "Video encoder", "x264 and x265 use the processor; the NVIDIA, AMD and Intel ones use the graphics card "
+             "(much faster, when the card has one).", nullptr, nullptr, 0, 0, 0, &s.renderEncoder, {0, 1, 2, 3, 4, 5, 6},
+             {"H.264 (x264)", "H.265 (x265)", "VP9 (WebM)", "H.264 NVIDIA", "H.265 NVIDIA", "H.264 AMD", "H.264 Intel"}},
+            {Row::Choice, "Video bitrate", "Higher is sharper and bigger. Spam charts move a lot: 20 Mbps or more.", nullptr, nullptr, 0,
+             0, 0, &s.renderBitrate, {5, 10, 20, 40, 80}, {"5 Mbps", "10 Mbps", "20 Mbps", "40 Mbps", "80 Mbps"}},
+            {Row::Bool, "Video audio", "The song (instrumental and voices) in the video.", &s.renderAudio},
             {Row::Header, "AUDIO", ""},
             {Row::Number, "Master volume", "", nullptr, &s.masterVol, 0, 1, 0.05f},
             {Row::Number, "Music volume", "", nullptr, &s.musicVol, 0, 1, 0.05f},
@@ -119,7 +131,7 @@ public:
             bool controls = false;
             std::vector<Row> kept;
             for (Row& r : rows_) {
-                if (r.kind == Row::Header) controls = r.label.rfind("CONTROLS", 0) == 0;
+                if (r.kind == Row::Header) controls = r.label.rfind("CONTROLS", 0) == 0 || r.label == "RENDERING";  // no ffmpeg on Android
                 if (controls || r.label == "Fullscreen" || r.label == "Touch controls") continue;
                 kept.push_back(std::move(r));
             }

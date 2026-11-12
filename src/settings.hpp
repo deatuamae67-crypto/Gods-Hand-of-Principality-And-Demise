@@ -26,6 +26,14 @@ struct Settings {
     // 1 full (every pixel).
     int noteDetail = 0;
     bool luaNoteCallbacks = true;  // goodNoteHit, opponentNoteHit, noteMiss... (OFF: faster spam charts)
+    // Rendering mode (desktop): songs play by themselves and are recorded to a
+    // video with ffmpeg, frame by frame (render_mode.hpp).
+    bool renderMode = false;
+    int renderSize = 0;       // 0 1280x720, 1 1920x1080, 2 2560x1440, 3 3840x2160
+    int renderFps = 60;
+    int renderEncoder = 0;    // renderEncoders()
+    int renderBitrate = 20;   // Mbps
+    bool renderAudio = true;
     bool extraKeys = true;     // OFF: every chart has 4 keys, like Psych and JS Engine
     int noteCounter = 1;       // HUD note counter: 0 off, 1 your side, 2 both sides
     // Mod script errors and warnings on screen: 0 always, 1 only for scripts

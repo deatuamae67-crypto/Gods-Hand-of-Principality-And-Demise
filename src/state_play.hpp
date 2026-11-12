@@ -225,6 +225,8 @@ private:
     // again once the screen holds clearly fewer than when it had to grow.
     float noteGap_ = 1.0f;
     bool debugOverlay_ = false;
+    bool rendering_ = false;  // the rendering mode records this song (App::renderer)
+    void stopRendering();
     int drawnNotes_ = 0, candidateNotes_ = 0;  // last frame: notes drawn / that 1 px would draw
     double drawnSum_ = 0, candidateSum_ = 0, gapTime_ = 0;
     int gapFrames_ = 0;
