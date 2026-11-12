@@ -146,8 +146,17 @@ struct Ui {
     const Input* in = nullptr;
     std::string focus;  // id of the text field being typed into
     bool used = false;  // the mouse did something in the panel this frame
+    // An open drop-down list (drawn over everything by overlays()).
+    std::string dropId, dropChanged;
+    Rectangle dropRect{};
+    std::vector<std::string> dropOpts;
+    int dropCur = 0, dropPicked = 0;  // the item shown when it opened; the one clicked
+    float dropScroll = 0;
+    bool dropJustOpened = false;  // the click that opened it must not close it
+    static constexpr int kDropRows = 12;
 
-    bool hover(Rectangle r) const { return CheckCollisionPointRec(mouse, r); }
+    // Widgets under an open list do not see the mouse.
+    bool hover(Rectangle r) const { return CheckCollisionPointRec(mouse, r) && !(!dropId.empty() && CheckCollisionPointRec(mouse, dropRect)); }
     void box(Rectangle r, bool on = false, bool hot = false) const {
         DrawRectangleRounded(r, 0.25f, 6, on ? Color{90, 66, 140, 255} : hot ? Color{58, 44, 88, 255} : Color{36, 28, 56, 255});
         DrawRectangleRoundedLinesEx(r, 0.25f, 6, 1.5f, on ? kAccent : Color{110, 92, 150, 200});
@@ -234,6 +243,81 @@ struct Ui {
         EndScissorMode();
         return changed;
     }
+    // label  [option  v]   A click opens the list (wheel to scroll it); a click
+    // on an item picks it. True on the frame after a new pick.
+    bool dropdown(const std::string& id, Rectangle r, const std::string& label, const std::vector<std::string>& opts, int& idx,
+                  float labelW = 92) {
+        if (opts.empty()) return false;
+        bool changed = false;
+        if (dropChanged == id) {  // picked in the list last frame
+            dropChanged.clear();
+            idx = dropPicked;
+            changed = true;
+        }
+        gfx::text(FontId::Ui, label, r.x, r.y + (r.height - 18) * 0.5f, 18, kDim);
+        const Rectangle f{r.x + labelW, r.y, r.width - labelW, r.height};
+        idx = clampv(idx, 0, int(opts.size()) - 1);
+        const bool open = dropId == id;
+        const bool h = hover(f);
+        box(f, open, h);
+        const std::string& o = opts[size_t(idx)];
+        BeginScissorMode(int(gfx::canvasOrigin().x + (f.x + 4) * gfx::canvasScale()), int(gfx::canvasOrigin().y + f.y * gfx::canvasScale()),
+                         int((f.width - 30) * gfx::canvasScale()), int(f.height * gfx::canvasScale()));
+        gfx::text(FontId::Ui, o.empty() ? "(normal)" : o, f.x + 8, f.y + (f.height - 18) * 0.5f, 18, kInk);
+        EndScissorMode();
+        gfx::text(FontId::Ui, open ? "^" : "v", f.x + f.width - 14, f.y + (f.height - 18) * 0.5f, 18, kAccent, Align::Center);
+        if (h && click) {
+            used = true;
+            focus.clear();
+            if (open) {
+                dropId.clear();
+            } else {
+                dropId = id;
+                dropOpts = opts;
+                dropCur = idx;
+                dropJustOpened = true;
+                const int rows = std::min(kDropRows, int(opts.size()));
+                const float rh = 24, listH = rows * rh + 6;
+                const float below = f.y + f.height + 2;
+                dropRect = {f.x, below + listH <= gfx::H - 8 ? below : std::max(8.0f, f.y - 2 - listH), f.width, listH};
+                dropScroll = float(std::clamp(idx - rows / 2, 0, int(opts.size()) - rows));
+            }
+        }
+        return changed;
+    }
+    // Draws the open list (after the rest of the panel) and handles its clicks.
+    void overlays() {
+        if (dropId.empty()) return;
+        const int n = int(dropOpts.size()), rows = std::min(kDropRows, n);
+        const bool over = CheckCollisionPointRec(mouse, dropRect);
+        if (over && wheel != 0) dropScroll = std::clamp(dropScroll - wheel * 3, 0.0f, float(std::max(0, n - rows)));
+        DrawRectangleRec({dropRect.x - 2, dropRect.y - 2, dropRect.width + 4, dropRect.height + 4}, Color{6, 4, 12, 250});
+        DrawRectangleLinesEx(dropRect, 1.5f, kAccent);
+        const float rh = 24;
+        const int first = int(dropScroll);
+        for (int k = 0; k < rows && first + k < n; ++k) {
+            const int i = first + k;
+            const Rectangle it{dropRect.x + 3, dropRect.y + 3 + k * rh, dropRect.width - 6, rh};
+            const bool h = CheckCollisionPointRec(mouse, it);
+            if (i == dropCur || h) DrawRectangleRec(it, i == dropCur ? Color{90, 66, 140, 255} : Color{58, 44, 88, 255});
+            gfx::text(FontId::Ui, dropOpts[size_t(i)].empty() ? "(normal)" : dropOpts[size_t(i)], it.x + 6, it.y + 3, 18, kInk);
+            if (h && click) {
+                dropPicked = i;
+                dropChanged = dropId;
+                dropId.clear();
+                used = true;
+                return;
+            }
+        }
+        if (n > rows) {  // where the list is
+            const float bh = dropRect.height * rows / n, by = dropRect.y + (dropRect.height - bh) * (dropScroll / float(n - rows));
+            DrawRectangleRec({dropRect.x + dropRect.width - 5, by, 3, bh}, kDim);
+        }
+        if (over && click) used = true;
+        if ((click && !over && !dropJustOpened) || (in && in->pressed(KEY_ESCAPE))) dropId.clear();
+        dropJustOpened = false;
+    }
+
     // label  < option >   (click the arrows, or the wheel over it)
     bool choice(Rectangle r, const std::string& label, const std::vector<std::string>& opts, int& idx, float labelW = 92) {
         if (opts.empty()) return false;
@@ -355,8 +439,9 @@ public:
                 cur_ = std::max(0.0, msAtBeat(b));
             }
         }
-        if (in.pressed(KEY_A) && !ctrl) gotoSection(sectionAt(cur_) - 1);
-        if (in.pressed(KEY_D) || in.pressed(KEY_PAGE_DOWN)) gotoSection(sectionAt(cur_) + 1);
+        const int jump = shift ? 4 : 1;  // SHIFT: four sections at a time
+        if (in.pressed(KEY_A) && !ctrl) gotoSection(std::max(0, sectionAt(cur_) - jump));
+        if (in.pressed(KEY_D) || in.pressed(KEY_PAGE_DOWN)) gotoSection(sectionAt(cur_) + jump);
         if (in.pressed(KEY_PAGE_UP)) gotoSection(sectionAt(cur_) - 1);
         if (in.pressed(KEY_HOME)) cur_ = 0;
         if (in.pressed(KEY_END)) cur_ = songLength();
@@ -394,6 +479,7 @@ public:
         if (in.pressed(KEY_MINUS)) { speed_ = std::max(0.1, std::round((speed_ - 0.1) * 10) / 10); dirty_ = true; }
         if (in.pressed(KEY_EQUAL)) { speed_ = std::min(10.0, std::round((speed_ + 0.1) * 10) / 10); dirty_ = true; }
         if (ctrl && in.pressed(KEY_C)) copySelectionOrSection();
+        if (ctrl && in.pressed(KEY_X)) cutSelectionOrSection();
         if (ctrl && in.pressed(KEY_V)) paste();
         if (in.pressed(KEY_M)) mirror();
         if (in.pressed(KEY_DELETE)) {
@@ -734,6 +820,14 @@ private:
         for (psych::ChartEvent& e : clipEvents_) e.timeMs -= base;
         flash(TextFormat("Copied %d notes", int(clipboard_.size())));
     }
+    // Cut: copy, then remove what was copied (the selection, or the section's notes and events).
+    void cutSelectionOrSection() {
+        const bool sel = anySelected();
+        copySelectionOrSection();
+        if (sel) deleteSelection();
+        else clearSection(true, true);
+        flash(TextFormat("Cut %d notes", int(clipboard_.size())));
+    }
     void paste() {
         if (clipboard_.empty() && clipEvents_.empty()) return;
         snapshot();
@@ -973,6 +1067,7 @@ private:
                 n.type = noteTypes_[size_t(typeIdx_)];
                 n.sel = true;
                 notes_.push_back(n);
+                if (ezMode_) ezPlaceSpam(n);  // JS Engine's EZ Spam Mode
                 sortNotes();
                 dragging_ = true;
                 dirty_ = true;
@@ -1026,7 +1121,7 @@ private:
         for (auto it = lo; it != notes_.end() && it->t <= to && count < 4; ++it) {
             const bool player = it->col >= keys_;
             if (player ? !hitPlayer_ : !hitOpponent_) continue;
-            sfxPlay(player ? Sfx::Hit : Sfx::Scroll, player ? 0.45f : 0.25f);
+            sfxPlay(Sfx::Hit, 0.45f);  // the same tick for both sides
             ++count;
         }
         if (metronome_ && std::floor(beatAt(to)) != std::floor(beatAt(from)))
@@ -1352,8 +1447,8 @@ private:
         line(TextFormat("Events %d", int(events_.size())));
         if (const int sc = selectedCount()) line(TextFormat("Selected %d", sc), gfx::rgb(0x9AE6FF));
         y += 6;
-        static const char* help[] = {"SPACE play", "Wheel/W/S move", "A/D section", "LEFT/RIGHT snap",
-                                     "Click add/select", "SHIFT+drag select", "Ctrl+C/V copy",
+        static const char* help[] = {"SPACE play", "Wheel/W/S move", "A/D section (SHIFT: 4)", "LEFT/RIGHT snap",
+                                     "Click add/select", "SHIFT+drag select", "Ctrl+C/X/V copy, cut",
                                      "DEL delete", "M mirror", "Ctrl+Z/Y undo", "ENTER save+play"};
         for (const char* h : help) line(h, gfx::fade(WHITE, 0.55f), 15);
     }
@@ -1431,12 +1526,45 @@ private:
                     rebuildStarts();
                     dirty_ = true;
                 }
+                // Time signature: 7/16 is 7 sixteenth notes, 1.75 beats (Psych's sectionBeats).
+                {
+                    static const std::vector<std::string> dens = {"/2", "/4", "/8", "/16", "/32"};
+                    static const int denVal[] = {2, 4, 8, 16, 32};
+                    int di = 1;
+                    double num = section(s).beats;
+                    for (int k : {1, 2, 3, 4, 0}) {  // 4/4 rather than 2/2, 7/16 for 1.75 beats
+                        const double n = section(s).beats * denVal[k] / 4.0;
+                        if (std::fabs(n - std::round(n)) < 1e-6) { di = k; num = std::round(n); break; }
+                    }
+                    const Rectangle r = row();
+                    gfx::text(FontId::Ui, "Time signature", r.x, r.y + 6, 18, kDim);
+                    double numEdit = num;
+                    int denEdit = di;
+                    const bool c1 = ui_.stepper({r.x + 130, r.y, 150, r.height}, "", numEdit, 1, 1, 64, "%.0f");
+                    const bool c2 = ui_.choice({r.x + 286, r.y, r.width - 286, r.height}, "", dens, denEdit, 0);
+                    if (c1 || c2) {
+                        snapshot();
+                        section(s).beats = std::max(0.125, std::round(numEdit) * 4.0 / denVal[denEdit]);
+                        rebuildStarts();
+                        dirty_ = true;
+                    }
+                }
+                if (ui_.button(row(), "Same length for every section after this")) {
+                    snapshot();
+                    for (int k = s + 1; k < int(sections_.size()); ++k) sections_[size_t(k)].beats = section(s).beats;
+                    rebuildStarts();
+                    dirty_ = true;
+                }
                 double sbpm = section(s).bpm;
                 if (ui_.stepper(row(), "Section BPM", sbpm, 1, 10, 2000, "%.2f")) setSectionBpm(s, sbpm);
                 y += 4;
-                if (ui_.button(half(0), "Copy")) copySelectionOrSection();
-                if (ui_.button(half(1), "Paste")) paste();
-                y += 38;
+                {
+                    const float tw3 = (w - 8) / 3.0f;
+                    if (ui_.button({x, y, tw3 - 2, 30}, "Copy (Ctrl+C)")) copySelectionOrSection();
+                    if (ui_.button({x + tw3 + 2, y, tw3 - 2, 30}, "Cut (Ctrl+X)")) cutSelectionOrSection();
+                    if (ui_.button({x + 2 * tw3 + 4, y, tw3 - 2, 30}, "Paste (Ctrl+V)")) paste();
+                    y += 38;
+                }
                 if (ui_.button(half(0), "Clear notes")) clearSection(true, false);
                 if (ui_.button(half(1), "Clear events")) clearSection(false, true);
                 y += 38;
@@ -1505,7 +1633,7 @@ private:
                         eventNames_.push_back(e->name);
                         idx = int(eventNames_.size()) - 1;
                     }
-                    if (ui_.choice(row(), "Event", eventNames_, idx, 64)) {
+                    if (ui_.dropdown("evname", row(), "Event", eventNames_, idx, 64)) {
                         snapshot();
                         e->name = eventNames_[size_t(idx)];
                         eventIdx_ = idx;
@@ -1530,7 +1658,7 @@ private:
                     y += 38;
                 } else {
                     heading("New events");
-                    ui_.choice(row(), "Event", eventNames_, eventIdx_, 64);
+                    ui_.dropdown("evnew", row(), "Event", eventNames_, eventIdx_, 64);
                     ui_.text("nv1", row(), "Value 1", eventV1_);
                     ui_.text("nv2", row(), "Value 2", eventV2_);
                     if (!eventNames_.empty()) drawEventHelp(eventNames_[size_t(eventIdx_)], y);
@@ -1567,47 +1695,37 @@ private:
                 if (ui_.stepper(row(), "Zoom", z, 0.25, 0.25, 8, "%.2fx")) zoom_ = float(z);
                 break;
             }
-            case 5: {  // EZ Spam: JS Engine's quick spam, over any stretch of the song
-                static const std::vector<std::string> scopes = {"This section", "From here on", "Whole song", "Sections..."};
-                static const std::vector<std::string> patterns = {"One lane", "Stairs up", "Stairs down", "Random", "Zigzag",
-                                                                  "Chords", "Jacks"};
-                static const std::vector<std::string> sides = {"Opponent", "Player", "Both"};
-                ui_.choice(row(), "Where", scopes, ezScope_);
-                if (ezScope_ == 3) {
-                    if (ui_.stepper(half(0), "From", ezFrom_, 1, 0, 1e6, "%.0f")) ezTo_ = std::max(ezTo_, ezFrom_);
-                    if (ui_.stepper(half(1), "To", ezTo_, 1, 0, 1e6, "%.0f")) ezFrom_ = std::min(ezFrom_, ezTo_);
+            case 5: {  // EZ Spam: JS Engine's "Note Spamming" tab
+                heading("Note Spamming (as in JS Engine)");
+                ui_.check(row(), "Enable EZ Spam Mode", ezMode_);
+                auto twoButtons = [&](const char* a, const char* b, double& v, double lo, double hi) {
+                    if (ui_.button(half(0), a)) v = clampv(v * 2, lo, hi);
+                    if (ui_.button(half(1), b)) v = clampv(v / 2, lo, hi);
                     y += 38;
-                }
-                ui_.stepper(row(), "Notes per beat", ezRate_, 1, 1, 1000, "%.0f");
-                ui_.choice(row(), "Pattern", patterns, ezPattern_);
-                if (ezPattern_ == 0) {
-                    double lane = fillLane_;
-                    if (ui_.stepper(row(), "Lane", lane, 1, 0, keys_ - 1, "%.0f")) fillLane_ = int(lane);
-                }
-                ui_.choice(row(), "Side", sides, ezSide_);
-                ui_.stepper(row(), "Hold (steps)", ezHold_, 1, 0, 64, "%.0f");
-                ui_.stepper(row(), "Stacked notes", ezStack_, 1, 1, 65535, "%.0f");
-                ui_.check(row(), "Replace the notes there", ezReplace_);
-                int s0 = 0, s1 = 0;
-                ezRange(s0, s1);
-                // Notes at each step: a chord fills every lane; each side doubles; stacked notes all count.
-                const double each = (ezPattern_ == 5 ? keys_ : 1) * (ezSide_ == 2 ? 2 : 1) * ezStack_;
-                const double beats = sectionBeatStart(s1 + 1) - sectionBeatStart(s0);
-                const double total = std::floor(beats * ezRate_ + 0.5) * each;
-                const double nps = ezRate_ * bpmAt(sectionStart(s0)) / 60.0 * each;
+                };
+                ui_.stepper(row(), "Spam Count", ezCount_, 1, 0, 999999, "%.4g");
+                twoButtons("x2 Amount", "x0.5 Amount", ezCount_, 0, 999999);
+                ui_.stepper(row(), "Spam Multiplier", ezMult_, 1, 0, 999999, "%.4g");
+                twoButtons("x2 SM", "x0.5 SM", ezMult_, 0, 999999);
+                ui_.stepper(row(), "Spam Scroll Amount", ezScroll_, 1, -9999, 9999, "%.0f");
+                ui_.stepper(row(), "Stretch Amount", ezStretch_, 1, 0, 8192, "%.4g");
+                twoButtons("x2 SH", "x0.5 SH", ezStretch_, 0, 8192);
+                if (ui_.button(row(), "Stretch Notes")) ezStretchNotes();
+                ui_.stepper(row(), "Steps to Shift By", ezShift_, 1, -8192, 8192, "%.4g");
+                if (ui_.button(row(), "Shift Notes")) ezShiftNotes();
+                ui_.stepper(row(), "Amount of Duplicates", ezDupes_, 1, 0, 32, "%.0f");
+                if (ui_.button(row(), "Duplicate Notes")) ezDuplicateNotes();
+                const double placed = std::max(1.0, std::floor(ezCount_ * ezMult_));
                 gfx::text(FontId::Ui,
-                          TextFormat("Sections %d-%d: %s notes, %s per second", s0, s1, fmtThousands((long long)total).c_str(),
-                                     fmtThousands((long long)nps).c_str()),
+                          ezMode_ ? TextFormat("Each note placed becomes %s notes, %.4g per step.", fmtThousands((long long)placed).c_str(), ezMult_)
+                                  : "Placing a note places Spam Count x Spam Multiplier notes when on.",
                           x, y, 16, kDim);
-                y += 24;
-                if (ui_.button(row(), "Spam!")) ezSpam();
-                if (ui_.button(half(0), "Clear there")) ezClear();
-                if (ui_.button(half(1), "Thin out (1 in 2)")) ezThin();
-                y += 38;
+                y += 22;
                 break;
             }
             default: break;
         }
+        ui_.overlays();
     }
 
     // ------------------------------------------------- FL Studio (SNIFF) --
@@ -1653,91 +1771,70 @@ private:
     }
 
     // ---------------------------------------------------------- EZ Spam --
-    void ezRange(int& s0, int& s1) {
-        const int here = sectionAt(cur_);
-        const int last = std::max(here, sectionAt(std::max(songLength(), cur_)));
-        if (ezScope_ == 0) s0 = s1 = here;
-        else if (ezScope_ == 1) { s0 = here; s1 = last; }
-        else if (ezScope_ == 2) { s0 = 0; s1 = last; }
-        else { s0 = int(ezFrom_); s1 = std::max(s0, int(ezTo_)); }
-    }
-    bool ezSideOk(int col) const { return ezSide_ == 2 || (col >= keys_ ? 1 : 0) == ezSide_; }
-    void ezSpam() {
-        int s0 = 0, s1 = 0;
-        ezRange(s0, s1);
-        const double b0 = sectionBeatStart(s0), b1 = sectionBeatStart(s1 + 1);
-        const double t0 = msAtBeat(b0), t1 = msAtBeat(b1);
-        const double step = 1.0 / std::max(1.0, ezRate_);
-        if ((b1 - b0) / step * (ezSide_ == 2 ? 2 : 1) > 20e6) { flash("Too many notes at once: fewer per beat, or fewer sections"); return; }
+    // JS Engine's "Note Spamming" tools, on the section under the line.
+    // One step at the section's BPM, as JS Engine's 15000 / BPM.
+    double sectionStepMs(int s) { return 15000.0 / std::max(1.0, section(s).bpm); }
+    void ezStretchNotes() {
         snapshot();
-        if (ezReplace_)
-            notes_.erase(std::remove_if(notes_.begin(), notes_.end(),
-                                        [&](const EdNote& n) { return n.t >= t0 - 0.5 && n.t < t1 - 0.5 && ezSideOk(n.col); }),
-                         notes_.end());
-        std::mt19937 r(unsigned(s0 * 7919 + s1));
-        const std::string type = noteTypes_.empty() ? std::string() : noteTypes_[size_t(typeIdx_)];
-        const size_t before = notes_.size();
-        long k = 0;
-        for (double b = b0; b < b1 - 1e-9; b += step, ++k) {
-            const double t = msAtBeat(b);
-            const double len = ezHold_ > 0 ? ezHold_ * 15000.0 / bpmAt(t) : 0.0;
-            std::vector<int> lanes;
-            switch (ezPattern_) {
-                case 0: lanes = {fillLane_ % keys_}; break;
-                case 1: lanes = {int(k % keys_)}; break;
-                case 2: lanes = {int(keys_ - 1 - k % keys_)}; break;
-                case 3: lanes = {int(r() % unsigned(keys_))}; break;
-                case 4: lanes = {int((k % 2) ? keys_ - 1 - (k / 2) % keys_ : (k / 2) % keys_)}; break;
-                case 5: for (int l = 0; l < keys_; ++l) lanes.push_back(l); break;  // chords: every lane
-                default: lanes = {int(k % 2) * (keys_ - 1)}; break;                  // jacks: the two outer lanes
-            }
-            for (int sd = 0; sd < 2; ++sd) {
-                if (ezSide_ != 2 && ezSide_ != sd) continue;
-                for (int lane : lanes) {
-                    EdNote n;
-                    n.t = t;
-                    n.col = sd * keys_ + lane;
-                    n.len = len;
-                    n.type = type;
-                    n.stack = int(ezStack_);
-                    notes_.push_back(n);
-                }
-            }
+        const int s = sectionAt(cur_);
+        const double a = sectionStart(s), b = sectionStart(s + 1);
+        for (EdNote& n : notes_) {
+            if (n.t < a - 0.5 || n.t >= b - 0.5) continue;
+            if (n.len > 0) n.len *= ezStretch_;
+            n.t = std::max(a, a + (n.t - a) * ezStretch_);
         }
         sortNotes();
         dirty_ = true;
-        flash(TextFormat("EZ Spam: %s notes in sections %d-%d", fmtThousands((long long)(notes_.size() - before)).c_str(), s0, s1));
+        flash(TextFormat("Stretched the section's notes x%.4g", ezStretch_));
     }
-    void ezClear() {
-        int s0 = 0, s1 = 0;
-        ezRange(s0, s1);
-        const double t0 = sectionStart(s0), t1 = sectionStart(s1 + 1);
+    void ezShiftNotes() {
         snapshot();
-        const size_t before = notes_.size();
-        notes_.erase(std::remove_if(notes_.begin(), notes_.end(),
-                                    [&](const EdNote& n) { return n.t >= t0 - 0.5 && n.t < t1 - 0.5 && ezSideOk(n.col); }),
-                     notes_.end());
+        const int s = sectionAt(cur_);
+        const double a = sectionStart(s), b = sectionStart(s + 1), by = ezShift_ * sectionStepMs(s);
+        for (EdNote& n : notes_)
+            if (n.t >= a - 0.5 && n.t < b - 0.5) n.t = std::max(0.0, n.t + by);
+        sortNotes();
         dirty_ = true;
-        flash(TextFormat("Cleared %s notes", fmtThousands((long long)(before - notes_.size())).c_str()));
+        flash(TextFormat("Shifted the section's notes %.4g steps", ezShift_));
     }
-    // Every other note of each lane goes (half the density, same pattern).
-    void ezThin() {
-        int s0 = 0, s1 = 0;
-        ezRange(s0, s1);
-        const double t0 = sectionStart(s0), t1 = sectionStart(s1 + 1);
+    void ezDuplicateNotes() {
         snapshot();
-        std::vector<int> count(size_t(2 * keys_), 0);
-        const size_t before = notes_.size();
-        std::vector<EdNote> kept;
-        kept.reserve(notes_.size());
-        for (const EdNote& n : notes_) {
-            if (n.t >= t0 - 0.5 && n.t < t1 - 0.5 && ezSideOk(n.col) && n.col >= 0 && n.col < 2 * keys_ && (count[size_t(n.col)]++ % 2))
-                continue;
-            kept.push_back(n);
+        const int s = sectionAt(cur_);
+        const double a = sectionStart(s), b = sectionStart(s + 1), by = ezShift_ * sectionStepMs(s);
+        std::vector<EdNote> src;
+        for (const EdNote& n : notes_)
+            if (n.t >= a - 0.5 && n.t < b - 0.5) src.push_back(n);
+        // Each copy moves "Steps to Shift By" further, as in JS Engine.
+        for (int d = 1; d <= int(ezDupes_); ++d)
+            for (EdNote n : src) {
+                n.t = std::max(0.0, n.t + by * d);
+                n.sel = false;
+                notes_.push_back(n);
+            }
+        sortNotes();
+        dirty_ = true;
+        flash(TextFormat("%s notes added", fmtThousands((long long)(src.size() * size_t(ezDupes_))).c_str()));
+    }
+    // EZ Spam Mode: a note placed at (t, col) brings Spam Count x Spam
+    // Multiplier - 1 more, each 1/Multiplier step later and Scroll Amount
+    // lanes over (wrapping round both sides' lanes).
+    void ezPlaceSpam(const EdNote& first) {
+        const long long more = (long long)std::floor(ezCount_ * ezMult_) - 1;
+        if (more <= 0 || ezMult_ <= 0) return;
+        const long long cap = std::min<long long>(more, 5000000);  // a click must not freeze the editor
+        const double gap = sectionStepMs(sectionAt(first.t)) / ezMult_;
+        const int cols = keys_ * 2, shift = int(std::floor(ezScroll_));
+        EdNote n = first;
+        n.sel = false;
+        n.len = 0;
+        notes_.reserve(notes_.size() + size_t(cap));
+        for (long long k = 0; k < cap; ++k) {
+            n.t += gap;
+            n.col = ((n.col + shift) % cols + cols) % cols;
+            notes_.push_back(n);
         }
-        notes_.swap(kept);
-        dirty_ = true;
-        flash(TextFormat("Thinned out: %s notes removed", fmtThousands((long long)(before - notes_.size())).c_str()));
+        sortNotes();
+        if (cap < more) flash("EZ Spam: stopped at 5,000,000 notes for one click");
     }
 
     void drawEventHelp(const std::string& name, float& y) {
@@ -1783,9 +1880,9 @@ private:
     bool needsVoices_ = true, eventsSeparate_ = true, boxing_ = false;
     bool hitPlayer_ = true, hitOpponent_ = true, metronome_ = false, muteVoices_ = false;
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
-    int ezScope_ = 0, ezPattern_ = 1, ezSide_ = 1;  // EZ Spam
-    double ezRate_ = 16, ezFrom_ = 0, ezTo_ = 0, ezHold_ = 0, ezStack_ = 1;
-    bool ezReplace_ = true;
+    // EZ Spam (JS Engine's Note Spamming tab)
+    bool ezMode_ = false;
+    double ezCount_ = 1, ezMult_ = 1, ezScroll_ = 0, ezStretch_ = 1, ezShift_ = 1, ezDupes_ = 1;
     long selEvent_ = -1;
     double cur_ = 0, lastT_ = 0, speed_ = 1, flashAt_ = -10, escAt_ = -10;
     double playRate_ = 1, instVol_ = 1, voiceVol_ = 1, stackAmount_ = 10, copyBack_ = 1;
