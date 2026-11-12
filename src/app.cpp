@@ -136,6 +136,14 @@ void App::drawVolumeTray() {
               WHITE, gfx::Align::Center, 1.0f);
 }
 
+void App::psychUiForSong(const std::vector<std::string>& modRoots) {
+    PsychUi& ui = psychUi();
+    if (!ui.active() || psychFolderInUse.empty()) return;
+    std::string rep;
+    if (ui.load(psychFolderInUse, rep, modRoots) > 0) ui.setActive(true);
+    ui.applySounds();
+}
+
 void App::applyPsychUi() {
     PsychUi& ui = psychUi();
     ui.unload();

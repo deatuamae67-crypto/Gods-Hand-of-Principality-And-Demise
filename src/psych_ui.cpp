@@ -86,14 +86,16 @@ PsychUi& psychUi() {
     return ui;
 }
 
-int PsychUi::load(const std::string& folder, std::string& report) {
+int PsychUi::load(const std::string& folder, std::string& report) { return load(folder, report, {}); }
+
+int PsychUi::load(const std::string& folder, std::string& report, const std::vector<std::string>& firstRoots) {
     unload();
     root_ = folder;
     if (!root_.empty() && root_.back() != '/' && root_.back() != '\\') root_ += '/';
     // The engine's own folder, its assets/ folder or the library folders
     // inside it: wherever the player pointed, the same names are found.
     scene::Files f;
-    std::vector<std::string> roots;
+    std::vector<std::string> roots = firstRoots;
     for (const char* sub : {"", "assets/", "assets/shared/", "assets/preload/", "assets/embed/", "shared/", "preload/", "../",
                             "../shared/", "../preload/"})
         roots.push_back(root_ + sub);
@@ -518,6 +520,17 @@ bool skipWhenSearching(const std::string& name) {
 }
 
 }  // namespace
+
+bool hasPsychPieces(const std::vector<std::string>& roots) {
+    scene::Files f;
+    f.setRoots(roots);
+    for (const char* rel : {"images/NOTE_assets.png", "images/noteSkins/NOTE_assets.png", "images/noteskins/NOTE_assets.png",
+                            "images/healthBar.png", "images/timeBar.png", "fonts/vcr.ttf", "images/sick.png",
+                            "images/ratings/default/sick.png", "images/num0.png", "images/alphabet.png", "images/ready.png",
+                            "sounds/scrollMenu.ogg", "sounds/confirmMenu.ogg", "sounds/missnote1.ogg", "music/breakfast.ogg"})
+        if (!f.find(rel).empty()) return true;
+    return false;
+}
 
 int psychFolderScore(const std::string& folder) {
     const scene::Files f = libraryRoots(folder);

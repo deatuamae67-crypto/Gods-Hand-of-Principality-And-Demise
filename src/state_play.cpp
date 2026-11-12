@@ -62,6 +62,7 @@ PlayState::PlayState(PlayRequest r) : req_(std::move(r)) {}
 
 PlayState::~PlayState() {
     stopRendering();
+    if (uiFromMod_) app().psychUiForSong({});  // the interface as it was
     stopPauseMusic();
     scripts_.reset();
     releaseAudio();
@@ -184,12 +185,13 @@ void PlayState::update(double dt) {
     handleNoteEvents();
     processChartEvents();
     adaptNoteGap();
-    if (a.settings.noteCounter > 0) {  // notes per second, counted like the note counter
-        const long long hits = session_.judged() + (a.settings.noteCounter == 2 ? session_.opponentHits : 0);
-        npsWindow_.emplace_back(now, hits);
-        while (npsWindow_.size() > 1 && now - npsWindow_.front().first > 1.0) npsWindow_.pop_front();
-        nps_ = hits - npsWindow_.front().second;
+    if (a.settings.noteCounter > 0) {  // notes per second of each side
+        npsWindow_.push_back({now, session_.judged(), session_.opponentHits});
+        while (npsWindow_.size() > 1 && now - npsWindow_.front().t > 1.0) npsWindow_.pop_front();
+        nps_ = session_.judged() - npsWindow_.front().player;
+        npsOpp_ = session_.opponentHits - npsWindow_.front().opponent;
         maxNps_ = std::max(maxNps_, nps_);
+        maxNpsOpp_ = std::max(maxNpsOpp_, npsOpp_);
     }
 
     // Psych order: onBeatHit, then onStepHit, then onSectionHit.
@@ -469,7 +471,7 @@ void PlayState::restart() {
     camZoom_ = hudZoom_ = 1.0f;
     zoomingOn_ = false;
     npsWindow_.clear();
-    nps_ = maxNps_ = 0;
+    nps_ = maxNps_ = npsOpp_ = maxNpsOpp_ = 0;
     speedMult_ = 1.0;
     speedTweenDur_ = 0;
     left_.singUntil = right_.singUntil = -10;
@@ -1235,7 +1237,11 @@ void PlayState::drawHud() {
         } else {
             line = "Notes " + fmtThousands(session_.judged()) + " / " + fmtThousands((long long)session_.totalPlayerNotes);
         }
-        line += "   |   NPS " + fmtThousands(nps_) + " (max " + fmtThousands(maxNps_) + ")";
+        if (s.noteCounter == 2)  // each side on its own: opponent / yours
+            line += "   |   NPS " + fmtThousands(npsOpp_) + " / " + fmtThousands(nps_) + " (max " + fmtThousands(maxNpsOpp_) + " / " +
+                    fmtThousands(maxNps_) + ")";
+        else
+            line += "   |   NPS " + fmtThousands(nps_) + " (max " + fmtThousands(maxNps_) + ")";
         if (cfg_.practice && !replaying_) line += "   |   PRACTICE MODE";
         if (const Font* f = ui.active() ? ui.font() : nullptr) {
             float size = 16;

@@ -127,6 +127,9 @@ public:
     void applyPsychUi();
     std::string psychReport;
     std::string psychFolderInUse;  // the folder chosen, or the one found automatically
+    // During a song: the Psych interface takes what the song's own mod has
+    // first (fonts, health bar, notes, ratings, sounds); {} goes back.
+    void psychUiForSong(const std::vector<std::string>& modRoots);
     bool psychAutomatic = false;   // no folder chosen: the best copy found on disk
 
     // Rendering mode (render_mode.hpp): the song being played is recorded to a

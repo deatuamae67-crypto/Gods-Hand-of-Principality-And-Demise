@@ -11,6 +11,7 @@
 #include "common.hpp"
 #include "effects.hpp"
 #include "platform.hpp"
+#include "psych_ui.hpp"
 #include "state_play.hpp"
 #include "rlgl.h"
 
@@ -404,6 +405,15 @@ bool PlayState::setupPsych() {
     roots.push_back(a.base + "mods/");
     sc.files.setRoots(roots);
     sc.files.setSharedRoots(a.library.sharedAssetRootsFor(*entry_));  // what this mod lacks, from the other mods
+    // The Psych interface: this song's own mod first, as Psych's Paths does.
+    {
+        std::vector<std::string> own = entry_->assetRoots;
+        if (own.empty() && !entry_->modRoot.empty()) own.push_back(entry_->modRoot);
+        if (psychUi().active() && !own.empty() && hasPsychPieces(own)) {
+            a.psychUiForSong(own);
+            uiFromMod_ = true;
+        }
+    }
 
     // Charts from older engines name no stage: the original game picks it from the song.
     auto baseStageAvailable = [&](const std::string& st) {

@@ -18,6 +18,10 @@ public:
     // folder, or shared/). Returns how many pieces were found; `report`
     // says what is missing.
     int load(const std::string& folder, std::string& report);
+    // The same, looking in `firstRoots` before the folder: a song's own mod
+    // brings its own fonts, health bar, notes, ratings and sounds, as in Psych
+    // (Paths looks in the current mod first).
+    int load(const std::string& folder, std::string& report, const std::vector<std::string>& firstRoots);
     void unload();
     bool active() const { return active_; }
     void setActive(bool on) { active_ = on; }
@@ -88,5 +92,8 @@ struct PsychFolder {
 };
 std::vector<PsychFolder> findPsychFolders(const std::string& gameBase);
 int psychFolderScore(const std::string& folder);
+// Whether a mod's folders hold any piece of the interface (a font, the health
+// bar, a note skin, ratings, sounds...).
+bool hasPsychPieces(const std::vector<std::string>& roots);
 
 }  // namespace gh

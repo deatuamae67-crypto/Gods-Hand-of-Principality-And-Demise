@@ -217,8 +217,12 @@ private:
     std::vector<int> keyLane_ = std::vector<int>(Input::kMaxCodes, -1);
     std::vector<Popup> popups_;
     // Notes per second for the note counter (JS Engine / H-Slice): hits in the last second.
-    std::deque<std::pair<double, long long>> npsWindow_;
-    long long nps_ = 0, maxNps_ = 0;
+    struct NpsMark {
+        double t;
+        long long player, opponent;  // hits so far
+    };
+    std::deque<NpsMark> npsWindow_;
+    long long nps_ = 0, maxNps_ = 0, npsOpp_ = 0, maxNpsOpp_ = 0;  // yours, the opponent's
     // Spam charts (S2X's adaptive note budget): notes of a lane closer than
     // noteGap_ pixels are drawn once. 1 = every pixel; doubled while the frame
     // rate stays under its target with thousands of notes on screen, halved
@@ -226,6 +230,7 @@ private:
     float noteGap_ = 1.0f;
     bool debugOverlay_ = false;
     bool rendering_ = false;  // the rendering mode records this song (App::renderer)
+    bool uiFromMod_ = false;  // the Psych interface took pieces from this song's mod
     void stopRendering();
     int drawnNotes_ = 0, candidateNotes_ = 0;  // last frame: notes drawn / that 1 px would draw
     double drawnSum_ = 0, candidateSum_ = 0, gapTime_ = 0;
