@@ -117,6 +117,8 @@ public:
     // sounds and menu music. `psychReport` says what was found.
     void applyPsychUi();
     std::string psychReport;
+    std::string psychFolderInUse;  // the folder chosen, or the one found automatically
+    bool psychAutomatic = false;   // no folder chosen: the best copy found on disk
     // Options opened from a song's pause menu: leaving them plays it again.
     std::unique_ptr<PlayRequest> optionsReturn;
     // Deaths on the song played last (Psych's "Blueballed" in the pause menu).

@@ -124,8 +124,21 @@ void App::applyPsychUi() {
     PsychUi& ui = psychUi();
     ui.unload();
     psychReport.clear();
-    if (settings.psychUi && !settings.psychFolder.empty()) {
-        if (ui.load(settings.psychFolder, psychReport) > 0) ui.setActive(true);
+    psychFolderInUse.clear();
+    if (settings.psychUi) {
+        // No folder chosen (or it is gone): the most complete Psych Engine /
+        // JS Engine copy already on disk, such as an engine installed as a mod pack.
+        std::string folder = settings.psychFolder;
+        psychAutomatic = folder.empty() || !DirectoryExists(folder.c_str());
+        if (psychAutomatic) {
+            const std::vector<PsychFolder> found = findPsychFolders(base);
+            folder = found.empty() ? std::string() : found.front().path;
+            platform::log(found.empty() ? std::string("no Psych Engine copy found")
+                                        : "Psych Engine interface from " + folder + " (" + std::to_string(found.size()) + " copies found)");
+        }
+        psychFolderInUse = folder;
+        if (folder.empty()) psychReport = "no Psych Engine or JS Engine copy found among your mods";
+        else if (ui.load(folder, psychReport) > 0) ui.setActive(true);
         else psychReport = "nothing of the Psych Engine interface found there";
     }
     ui.applySounds();
