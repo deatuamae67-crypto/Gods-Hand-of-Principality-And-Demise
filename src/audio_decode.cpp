@@ -24,6 +24,16 @@ constexpr uint64_t kRate = 44100;
 
 // ------------------------------------------------------------- sources --
 // A decoder of one file: interleaved 16-bit frames at the file's own rate.
+// The files are opened here and handed to the decoders: inside raylib,
+// fopen() on Android only looks in the APK, and the mods are outside it.
+
+FILE* openRead(const std::string& path) { return std::fopen(path.c_str(), "rb"); }
+
+bool seekFile(void* f, int offset, bool fromCurrent) {
+    return std::fseek(static_cast<FILE*>(f), long(offset), fromCurrent ? SEEK_CUR : SEEK_SET) == 0;
+}
+
+size_t readFile(void* f, void* out, size_t n) { return std::fread(out, 1, n, static_cast<FILE*>(f)); }
 
 struct Source {
     unsigned rate = 0, channels = 0;
@@ -39,8 +49,10 @@ struct OggSource final : Source {
         if (v) stb_vorbis_close(v);
     }
     bool open(const std::string& path) {
+        FILE* f = openRead(path);
+        if (!f) return false;
         int e = 0;
-        v = stb_vorbis_open_filename(path.c_str(), &e, nullptr);
+        v = stb_vorbis_open_file(f, 1, &e, nullptr);  // closes f when done (or on failure)
         if (!v) return false;
         const stb_vorbis_info info = stb_vorbis_get_info(v);
         rate = info.sample_rate;
@@ -64,12 +76,19 @@ struct OggSource final : Source {
 
 struct Mp3Source final : Source {
     drmp3 m{};
+    FILE* f = nullptr;
     bool ok = false;
     ~Mp3Source() override {
         if (ok) drmp3_uninit(&m);
+        if (f) std::fclose(f);
+    }
+    static size_t onRead(void* u, void* out, size_t n) { return readFile(u, out, n); }
+    static drmp3_bool32 onSeek(void* u, int offset, drmp3_seek_origin o) {
+        return seekFile(u, offset, o == drmp3_seek_origin_current) ? 1 : 0;
     }
     bool open(const std::string& path) {
-        if (!drmp3_init_file(&m, path.c_str(), nullptr)) return false;
+        f = openRead(path);
+        if (!f || !drmp3_init(&m, onRead, onSeek, f, nullptr)) return false;
         ok = true;
         rate = m.sampleRate;
         channels = m.channels;
@@ -83,12 +102,19 @@ struct Mp3Source final : Source {
 
 struct WavSource final : Source {
     drwav w{};
+    FILE* f = nullptr;
     bool ok = false;
     ~WavSource() override {
         if (ok) drwav_uninit(&w);
+        if (f) std::fclose(f);
+    }
+    static size_t onRead(void* u, void* out, size_t n) { return readFile(u, out, n); }
+    static drwav_bool32 onSeek(void* u, int offset, drwav_seek_origin o) {
+        return seekFile(u, offset, o == drwav_seek_origin_current) ? 1 : 0;
     }
     bool open(const std::string& path) {
-        if (!drwav_init_file(&w, path.c_str(), nullptr)) return false;
+        f = openRead(path);
+        if (!f || !drwav_init(&w, onRead, onSeek, f, nullptr)) return false;
         ok = true;
         rate = w.sampleRate;
         channels = w.channels;
