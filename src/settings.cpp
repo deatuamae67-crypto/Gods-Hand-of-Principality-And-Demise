@@ -36,6 +36,10 @@ bool Settings::load(const std::string& path) {
         else if (k == "flashing") flashing = b;
         else if (k == "camZoom") camZoom = b;
         else if (k == "showFps") showFps = b;
+        else if (k == "fpsMemory") fpsMemory = b;
+        else if (k == "fpsFrameTimes") fpsFrameTimes = b;
+        else if (k == "fpsUsage") fpsUsage = b;
+        else if (k == "fpsHardware") fpsHardware = b;
         else if (k == "lowDetail") lowDetail = b;
         else if (k == "vsync") vsync = b;
         else if (k == "shaders") shaders = b;
@@ -85,7 +89,8 @@ bool Settings::save(const std::string& path) const {
         for (int j = 0; j < 2; ++j) f << "key" << i << j << "=" << keys4[i][j] << "\n";
     f << "downscroll=" << downscroll << "\nmiddlescroll=" << middlescroll << "\nghostTapping=" << ghostTapping
       << "\nnoteSplashes=" << noteSplashes << "\nflashing=" << flashing << "\ncamZoom=" << camZoom
-      << "\nshowFps=" << showFps << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
+      << "\nshowFps=" << showFps << "\nfpsMemory=" << fpsMemory << "\nfpsFrameTimes=" << fpsFrameTimes << "\nfpsUsage=" << fpsUsage
+      << "\nfpsHardware=" << fpsHardware << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
       << "\nnoteDetail=" << noteDetail << "\nluaNoteCallbacks=" << luaNoteCallbacks
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio

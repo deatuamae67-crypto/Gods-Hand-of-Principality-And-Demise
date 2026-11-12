@@ -15,6 +15,7 @@
 #include "gfx.hpp"
 #include "platform.hpp"
 #include "process.hpp"
+#include "sysinfo.hpp"
 #include "raylib.h"
 
 namespace gh {
@@ -463,7 +464,7 @@ void App::frame() {
     }
     gfx::beginCanvas();
     if (fade_ > 0) DrawRectangleRec({-10, -10, gfx::W + 20, gfx::H + 20}, gfx::fade(BLACK, fade_));
-    if (settings.showFps) gfx::text(gfx::FontId::Ui, TextFormat("%d FPS", int(fps + 0.5f)), 8, 4, 20, WHITE, gfx::Align::Left, 1.5f);
+    drawFpsPanel();
     drawVolumeTray();
     if (renderer.active()) drawRenderBadge();
     const std::string msg = VideoRenderer::takeMessage();
@@ -502,6 +503,7 @@ void App::frame() {
     updateMs = updateMs * 0.9f + upd * 0.1f;
     drawMs = drawMs * 0.9f + drw * 0.1f;
     perfWorst_ = std::max(perfWorst_, float(dt * 1000.0));
+    frameHist_[frameHistPos_++ % frameHist_.size()] = float(dt * 1000.0);
     perfUpd_ += upd;
     perfDraw_ += drw;
     ++perfFrames_;
@@ -513,6 +515,82 @@ void App::frame() {
         perfSince_ = now;
         perfFrames_ = 0;
         perfUpd_ = perfDraw_ = perfWorst_ = 0;
+    }
+}
+
+// ------------------------------------------------------------ FPS panel --
+
+void App::drawFpsPanel() {
+    const Settings& s = settings;
+    if (!s.showFps && !s.fpsMemory && !s.fpsFrameTimes && !s.fpsUsage && !s.fpsHardware) return;
+    // Memory and processor use change slowly and cost a system call to read:
+    // twice a second is enough.
+    if ((s.fpsMemory || s.fpsUsage) && now - statsAt_ >= 0.5) {
+        const double cpu = sysinfo::processCpuSeconds(), wall = nowSec();
+        if (statsAt_ > 0 && wall > cpuAt_) {
+            const int threads = std::max(1, sysinfo::hardware().threads);
+            cpuUse_ = float(std::clamp((cpu - cpuSecs_) / (wall - cpuAt_) / threads * 100.0, 0.0, 100.0));
+        }
+        cpuSecs_ = cpu;
+        cpuAt_ = wall;
+        memNow_ = sysinfo::processMemory();
+        memPeak_ = std::max<unsigned long long>(sysinfo::peakProcessMemory(), memNow_);
+        if (s.fpsUsage) sysUsed_ = sysinfo::systemMemoryUsed();
+        statsAt_ = now;
+    }
+    std::vector<std::pair<std::string, Color>> lines;
+    const Color dim{205, 205, 215, 255};
+    if (s.showFps) {
+        // Red at half the frame limit or under, as Psych's counter.
+        const int f = int(fps + 0.5f);
+        int cap = s.fpsCap > 0 && !s.vsync ? s.fpsCap : GetMonitorRefreshRate(GetCurrentMonitor());
+        if (cap <= 0) cap = 60;
+        lines.push_back({TextFormat("%d FPS", f), f <= cap / 2 ? Color{255, 90, 90, 255} : WHITE});
+    }
+    if (s.fpsMemory)
+        lines.push_back({"Memory: " + (memNow_ ? sysinfo::formatBytes(memNow_) : std::string("?")) +
+                             (memPeak_ ? "  (peak " + sysinfo::formatBytes(memPeak_) + ")" : std::string()),
+                         dim});
+    if (s.fpsFrameTimes)
+        lines.push_back({TextFormat("Frame %.2f ms  (update %.2f, draw %.2f, worst %.1f)", dt * 1000.0, updateMs, drawMs, worstFrameMs), dim});
+    const sysinfo::Hardware& hw = sysinfo::hardware();
+    if (s.fpsUsage) {
+        std::string l = TextFormat("CPU %.0f%% of %d threads", cpuUse_, hw.threads);
+        if (hw.totalRam) l += "   RAM " + (sysUsed_ ? sysinfo::formatBytes(sysUsed_) + " / " : std::string()) + sysinfo::formatBytes(hw.totalRam);
+        lines.push_back({l, dim});
+    }
+    if (s.fpsHardware) {
+        lines.push_back({hw.cpu, dim});
+        if (!hw.gpu.empty()) lines.push_back({hw.gpu, dim});
+        if (!hw.gl.empty()) lines.push_back({"OpenGL " + hw.gl, dim});
+        if (!hw.os.empty()) lines.push_back({hw.os, dim});
+    }
+    const float size = 17, lineH = 20;
+    float w = 0;
+    for (auto& l : lines) w = std::max(w, gfx::measure(gfx::FontId::Ui, l.first, size).x);
+    const float graphH = s.fpsFrameTimes ? 44.0f : 0.0f;
+    if (s.fpsFrameTimes) w = std::max(w, 240.0f);
+    const bool panel = lines.size() > 1 || graphH > 0;
+    if (panel) DrawRectangleRec({2, 2, w + 14, lines.size() * lineH + graphH + 8}, gfx::fade(BLACK, 0.55f));
+    float y = 5;
+    for (auto& l : lines) {
+        gfx::text(gfx::FontId::Ui, l.first, 8, y, l.first == lines.front().first && s.showFps ? 20.0f : size, l.second, gfx::Align::Left, 1.5f);
+        y += lineH;
+    }
+    if (graphH > 0) {
+        // One bar per frame (oldest on the left), 0 to 50 ms high; green under
+        // 17 ms (60 FPS), yellow under 34, red above.
+        const float gx = 8, gy = y + 4, gh = graphH - 8;
+        DrawRectangleRec({gx, gy, 240, gh}, gfx::fade(BLACK, 0.4f));
+        DrawLineEx({gx, gy + gh - gh * 16.7f / 50.0f}, {gx + 240, gy + gh - gh * 16.7f / 50.0f}, 1, gfx::fade(WHITE, 0.25f));
+        const size_t n = frameHist_.size();
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = frameHist_[(frameHistPos_ + i) % n];
+            if (ms <= 0) continue;
+            const float hgt = std::min(gh, gh * ms / 50.0f);
+            const Color c = ms < 17.5f ? Color{110, 230, 120, 255} : (ms < 34.0f ? Color{255, 210, 90, 255} : Color{255, 90, 90, 255});
+            DrawRectangleRec({gx + float(i), gy + gh - hgt, 1, hgt}, c);
+        }
     }
 }
 

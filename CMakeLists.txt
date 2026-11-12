@@ -218,6 +218,7 @@ if(GH_BUILD_GAME)
     src/platform.cpp
     src/folder_picker.cpp
     src/psych_ui.cpp
+    src/sysinfo.cpp
     src/touch_ui.cpp
   )
   if(ANDROID)
@@ -254,7 +255,7 @@ if(GH_BUILD_GAME)
     target_link_libraries(godshand PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL")
   endif()
   if(WIN32)
-    target_link_libraries(godshand PRIVATE shell32 ole32)  # the folder dialog
+    target_link_libraries(godshand PRIVATE shell32 ole32 opengl32)  # the folder dialog; the FPS counter's graphics card name
   endif()
 
   # Runtime layout next to the executable: assets/, songs/, mods/

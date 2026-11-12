@@ -18,6 +18,11 @@ struct Settings {
     bool flashing = true;
     bool camZoom = true;
     bool showFps = false;
+    // More in the FPS counter (JS Engine's RAM and debug info, and more):
+    bool fpsMemory = false;      // the game's memory and its peak
+    bool fpsFrameTimes = false;  // update, draw and worst frame times, with a graph
+    bool fpsUsage = false;       // processor use and the system's memory
+    bool fpsHardware = false;    // processor, graphics card, OpenGL and system names
     bool lowDetail = false;
     bool vsync = false;
     bool shaders = true;       // mod shaders and screen effects

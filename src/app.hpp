@@ -161,6 +161,14 @@ private:
     std::string notice_;
     double noticeUntil_ = 0;
     void drawRenderBadge();
+    // The FPS counter and what Options adds under it (memory, frame times,
+    // processor use, hardware), sampled twice a second.
+    void drawFpsPanel();
+    double statsAt_ = -10, cpuAt_ = 0, cpuSecs_ = 0;
+    float cpuUse_ = 0;
+    unsigned long long memNow_ = 0, memPeak_ = 0, sysUsed_ = 0;
+    std::array<float, 240> frameHist_{};  // the last frames' times (ms), for the graph
+    size_t frameHistPos_ = 0;
     int perfFrames_ = 0;
     float perfUpd_ = 0, perfDraw_ = 0, perfWorst_ = 0;
     std::unique_ptr<State> state_, next_;
