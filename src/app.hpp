@@ -167,6 +167,9 @@ private:
     double statsAt_ = -10, cpuAt_ = 0, cpuSecs_ = 0;
     float cpuUse_ = 0;
     unsigned long long memNow_ = 0, memPeak_ = 0, sysUsed_ = 0;
+    double gpuBusy_ = -1;  // the graphics card's use (-1: the system does not say)
+    bool gpuReady_ = false;
+    unsigned long long vramUsed_ = 0, vramTotal_ = 0, vramFree_ = 0;
     std::array<float, 240> frameHist_{};  // the last frames' times (ms), for the graph
     size_t frameHistPos_ = 0;
     int perfFrames_ = 0;

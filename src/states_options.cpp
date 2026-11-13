@@ -82,7 +82,7 @@ public:
             {Row::Bool, "FPS: memory", "Under the frame rate: the memory the game uses, and the most it has used.", &s.fpsMemory},
             {Row::Bool, "FPS: frame times", "How long updating and drawing take, the slowest frame of the last second, and a graph.",
              &s.fpsFrameTimes},
-            {Row::Bool, "FPS: processor and RAM", "How much of the processor the game uses, and the system's memory in use.", &s.fpsUsage},
+            {Row::Bool, "FPS: CPU, GPU and RAM", "How much of the processor the game uses, how busy the graphics card is and its memory, and the system's memory in use.", &s.fpsUsage},
             {Row::Bool, "FPS: hardware", "The processor, graphics card, OpenGL version and system the game runs on.", &s.fpsHardware},
             {Row::Bool, "Low detail", "Fewer particles and effects for slower machines.", &s.lowDetail},
             {Row::Bool, "Flashing lights", "Screen flashes on some beats.", &s.flashing},
