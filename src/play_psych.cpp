@@ -1682,7 +1682,7 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     if (c == "FlxG.drawFramerate" || c == "FlxG.updateFramerate") return num(s.fpsCap > 0 ? s.fpsCap : 240);
     if (c == "FlxG.game.ticks") return num(a.now * 1000.0);
     if (c == "FlxG.autoPause") return flag(true);
-    if (c == "Conductor.safeZoneOffset") return num(kMissWindowMs);
+    if (c == "Conductor.safeZoneOffset") return num(cfg_.windows[kSinful]);
     if (c == "Conductor.offset") return num(0);
     if (c == "PlayState.deathCounter" || c == "PlayState.storyWeek" || c == "PlayState.campaignScore" ||
         c == "PlayState.campaignMisses")
@@ -1704,11 +1704,29 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     if (c == "ClientPrefs.oldSusStyle" || c == "ClientPrefs.ffmpegMode" || c == "ClientPrefs.showcaseMode" ||
         c == "ClientPrefs.lessBotLag" || c == "ClientPrefs.ezSpam")
         return flag(false);
-    if (c == "ClientPrefs.ratingOffset" || c.rfind("ClientPrefs.comboOffset[", 0) == 0) return num(0);
-    if (c == "ClientPrefs.sickWindow") return num(45);
-    if (c == "ClientPrefs.goodWindow") return num(90);
-    if (c == "ClientPrefs.badWindow") return num(135);
-    if (c == "ClientPrefs.safeFrames") return num(10);
+    // The player's own options, by Psych's names (ClientPrefs / ClientPrefs.data).
+    if (c == "ClientPrefs.ratingOffset") return num(s.ratingOffset);
+    if (c.rfind("ClientPrefs.comboOffset[", 0) == 0) {
+        const int i = std::atoi(std::string(c.substr(24)).c_str());  // after "ClientPrefs.comboOffset["
+        return num(i >= 0 && i < 4 ? s.comboOffset[i] : 0);
+    }
+    if (c == "ClientPrefs.sickWindow") return num(s.sickWindow);
+    if (c == "ClientPrefs.goodWindow") return num(s.goodWindow);
+    if (c == "ClientPrefs.badWindow") return num(s.badWindow);
+    if (c == "ClientPrefs.safeFrames") return num(s.safeFrames);
+    if (c == "ClientPrefs.scoreZoom") return flag(s.scoreZoom);
+    if (c == "ClientPrefs.comboStacking") return flag(s.comboStacking);
+    if (c == "ClientPrefs.opponentStrums") return flag(s.opponentNotes);
+    if (c == "ClientPrefs.autoPause") return flag(s.autoPause);
+    if (c == "ClientPrefs.noReset") return flag(s.noReset);
+    if (c == "ClientPrefs.splashAlpha") return num(s.splashAlpha);
+    if (c == "ClientPrefs.hitsoundVolume") return num(s.hitsoundVol);
+    if (c == "ClientPrefs.noteSkin") { out = s.noteSkin.empty() ? std::string("Default") : s.noteSkin; return true; }
+    if (c == "ClientPrefs.pauseMusic") {
+        static const char* songs[3] = {"None", "Breakfast", "Tea Time"};
+        out = std::string(songs[clampv(s.pauseMusic, 0, 2)]);
+        return true;
+    }
     if (c == "ClientPrefs.iconBounceType") { out = std::string("Psych"); return true; }
     if (c == "ClientPrefs.downScroll") return flag(s.downscroll);
     if (c == "ClientPrefs.middleScroll") return flag(s.middlescroll);
@@ -1717,12 +1735,16 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     if (c == "ClientPrefs.camZooms") return flag(s.camZoom);
     if (c == "ClientPrefs.lowQuality") return flag(s.lowDetail);
     if (c == "ClientPrefs.framerate") return num(s.fpsCap > 0 ? s.fpsCap : 240);
-    if (c == "ClientPrefs.antialiasing" || c == "ClientPrefs.globalAntialiasing") return flag(true);
+    if (c == "ClientPrefs.antialiasing" || c == "ClientPrefs.globalAntialiasing") return flag(s.antialiasing);
     if (c == "ClientPrefs.noteOffset") return num(s.offsetMs);
-    if (c == "ClientPrefs.hideHud") return flag(false);
+    if (c == "ClientPrefs.hideHud") return flag(s.hideHud);
     if (c == "ClientPrefs.shaders") return flag(s.shaders);
-    if (c == "ClientPrefs.healthBarAlpha") return num(1);
-    if (c == "ClientPrefs.timeBarType") { out = std::string("Time Left"); return true; }
+    if (c == "ClientPrefs.healthBarAlpha") return num(s.healthBarAlpha);
+    if (c == "ClientPrefs.timeBarType") {
+        static const char* types[4] = {"Time Left", "Time Elapsed", "Song Name", "Disabled"};
+        out = std::string(types[clampv(s.timeBar, 0, 3)]);
+        return true;
+    }
     if (c == "Conductor.songPosition") return num(songMs_);
     if (c == "Conductor.bpm") return num(chart_.bpmAt(std::max(0.0, songMs_)));
     if (c == "Conductor.crochet") return num(60000.0 / chart_.bpmAt(std::max(0.0, songMs_)));
@@ -1978,7 +2000,7 @@ bool PlayState::noteGet(std::string_view group, int index, std::string_view f, V
     if (f == "wasGoodHit") { out = n->state == kHit || n->state == kHolding || n->state == kHeldDone; return true; }
     if (f == "tooLate") { out = n->state == kMissed; return true; }
     if (f == "hitByOpponent") { out = side == 0 && n->state != kPending; return true; }
-    if (f == "canBeHit") { out = std::fabs(n->t - songMs_) <= kMissWindowMs * rate_; return true; }
+    if (f == "canBeHit") { out = std::fabs(n->t - songMs_) <= cfg_.windows[kSinful] * rate_; return true; }
     if (f == "alpha" || f == "multAlpha") { out = double(vis ? vis->alpha : 1.0f); return true; }
     if (f == "visible") { out = vis ? vis->visible : true; return true; }
     if (f == "offsetX") { out = double(vis ? vis->offsetX : 0.0f); return true; }

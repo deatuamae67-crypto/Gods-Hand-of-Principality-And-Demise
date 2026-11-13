@@ -129,6 +129,15 @@ void PlayState::update(double dt) {
     fx_.update(float(dt));
     if (phase_ == Phase::Paused) { updatePause(); return; }
     if (phase_ == Phase::Dead) { updateDead(); return; }
+    // Psych's Auto Pause: the song pauses when the window loses focus (Android
+    // pauses on its own when the app goes to the background).
+    if (a.settings.autoPause && phase_ == Phase::Playing && !rendering_ && !a.autoRun.enabled && !platform::kAndroid &&
+        IsWindowReady() && !IsWindowFocused()) {
+        if (!(scripts_ && scripts_->callStops("onPause"))) {
+            pause();
+            return;
+        }
+    }
     if (psych_ && updateVideos(dt)) return;  // a cutscene holds the game
     if (psych_ && substate_.active) {
         const std::string name = substate_.name;
@@ -266,6 +275,7 @@ void PlayState::update(double dt) {
 void PlayState::draw() {
     App& a = app();
     const double now = a.now;
+    SceneRenderer::smoothScaling = a.settings.antialiasing;
     if (phase_ == Phase::Loading || phase_ == Phase::Error) {
         drawLoading();
         return;
@@ -324,11 +334,19 @@ void PlayState::setup() {
     cfg_.botplay = !req_.story && a.mods.botplay;
     cfg_.practice = !req_.story && a.mods.practice;
     cfg_.rate = rate_;
+    // Psych's hit windows, Safe Frames (frames of 1/60 s) and Rating Offset.
+    cfg_.windows[kDivine] = a.settings.sickWindow;
+    cfg_.windows[kGrace] = a.settings.goodWindow;
+    cfg_.windows[kMortal] = a.settings.badWindow;
+    cfg_.windows[kSinful] = a.settings.safeFrames / 60.0 * 1000.0;
+    cfg_.ratingOffset = a.settings.ratingOffset;
     playerLeft_ = !req_.story && a.mods.mirror;
     if (replaying_) {
         cfg_.botplay = false;
         cfg_.practice = true;  // a replay never ends early
         cfg_.ghostTapping = playback_.ghostTapping;
+        for (int k = 0; k < kRatingCount; ++k) cfg_.windows[k] = playback_.windows[k];  // judged as it was played
+        cfg_.ratingOffset = playback_.ratingOffset;
         playerLeft_ = playback_.mirror;
     }
     // Rendering mode: the song plays by itself and is recorded from here on.
@@ -530,6 +548,14 @@ void PlayState::handleInput() {
             openChartEditor();
             return;
         }
+        // R: Psych's Reset button, an instant loss (unless R is a lane, Options:
+        // Disable reset button, practice mode, a replay or before the song starts).
+        if (e.down && e.code == KEY_R && !keyReserved(e.code) && !a.settings.noReset && !replaying_ && !cfg_.practice && !rendering_ &&
+            songMs_ >= 0 && !cutscene_) {
+            session_.setHealth(0);
+            session_.dead = true;
+            return;
+        }
         if (e.code <= 0 || e.code >= Input::kMaxCodes || replaying_) continue;
         const int lane = keyLane_[size_t(e.code)];
         if (lane < 0) continue;
@@ -648,6 +674,7 @@ void PlayState::splash(int side, int lane) {
     ring.p = p;
     ring.kind = 2;
     ring.c = c;
+    ring.c.a = (unsigned char)(255 * clampv(app().settings.splashAlpha, 0.0f, 1.0f));  // Options: note splash opacity
     ring.size = noteSize() * 0.75f;
     ring.life = ring.maxLife = 0.3f;
     fx_.add(ring);
@@ -658,6 +685,7 @@ void PlayState::splash(int side, int lane) {
         s.v = {std::cos(ang) * sp, std::sin(ang) * sp};
         s.kind = 1;
         s.c = gfx::brighten(c, 0.3f);
+        s.c.a = ring.c.a;
         s.size = 3.5f;
         s.life = s.maxLife = gfx::randf(0.2f, 0.35f);
         fx_.add(s);
@@ -972,6 +1000,8 @@ void PlayState::finish() {
         record_.mirror = playerLeft_;
         record_.ghostTapping = cfg_.ghostTapping;
         record_.keys = chart_.keys;
+        for (int k = 0; k < kRatingCount; ++k) record_.windows[k] = cfg_.windows[k];
+        record_.ratingOffset = cfg_.ratingOffset;
         record_.score = r.score;
         record_.acc = r.acc;
         record_.misses = r.misses;
@@ -1626,8 +1656,10 @@ void PlayState::drawUnderNotes() {
                 if (rs.x <= 0) continue;
                 const float rk = std::floor(rs.x * 0.7f) / rs.x;
                 const float rvx = -irange(0, 10), rvy = -irange(140, 175);
-                const float rx = gfx::W * 0.35f - 40.0f + rvx * tau;
-                const float ry = (gfx::H - rs.y) * 0.5f - 60.0f + rvy * tau + 0.5f * 550.0f * tau * tau;
+                // Psych's comboOffset (Options: rating / combo position): x right, y up.
+                const float* off = s.comboOffset;
+                const float rx = gfx::W * 0.35f - 40.0f + off[0] + rvx * tau;
+                const float ry = (gfx::H - rs.y) * 0.5f - 60.0f - off[1] + rvy * tau + 0.5f * 550.0f * tau * tau;
                 const float ra = tau < p.beat ? 1.0f : std::max(0.0f, 1.0f - (tau - p.beat) / 0.2f);
                 if (ra > 0.002f) ui.ratingAt(std::min(p.rating, 3), rx, ry, rk, ra * comboAlpha);
                 std::string digits = std::to_string(std::max(0LL, p.combo));
@@ -1639,16 +1671,16 @@ void PlayState::drawUnderNotes() {
                     const Vector2 ns = ui.numSize(d);
                     if (ns.x <= 0 || da <= 0.002f) continue;
                     const float nk = std::floor(ns.x * 0.5f) / ns.x;
-                    const float x = gfx::W * 0.35f + 43.0f * float(i) - 90.0f + vx * tau;
-                    const float y = (gfx::H - ns.y) * 0.5f + 80.0f + vy * tau + 0.5f * ay * tau * tau;
+                    const float x = gfx::W * 0.35f + 43.0f * float(i) - 90.0f + off[2] + vx * tau;
+                    const float y = (gfx::H - ns.y) * 0.5f + 80.0f - off[3] + vy * tau + 0.5f * ay * tau * tau;
                     ui.numAt(d, x, y, nk, da * comboAlpha);
                 }
                 if (!p.timing.empty() && ra > 0.002f)
                     ui.text(p.timing, rx + rs.x * rk * 0.5f, ry - 22.0f, 20, fade(WHITE, ra * comboAlpha), 0, 1.25f);
             }
         } else {
-            const float px = s.middlescroll ? 1030.0f : gfx::W / 2;
-            const float py = s.downscroll ? 400.0f : 300.0f;
+            const float px = (s.middlescroll ? 1030.0f : gfx::W / 2) + s.comboOffset[0];
+            const float py = (s.downscroll ? 400.0f : 300.0f) - s.comboOffset[1];
             const Popup& p = popups_.back();
             const float age = float(now - p.t0);
             if (age <= 0.7f) {
