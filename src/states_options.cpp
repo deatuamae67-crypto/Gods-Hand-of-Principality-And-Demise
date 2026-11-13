@@ -236,6 +236,7 @@ public:
                     if (r.label == "Fullscreen") a.toggleFullscreen();
                     else *r.b = !*r.b;
                     if (r.label == "VSync") platform::setVsync(a.settings.vsync);
+                    if (r.b == &a.settings.antialiasing) psychUi().setSmooth(a.settings.antialiasing);  // the loaded pictures too
                     if (r.label == "Psych Engine interface") {
                         a.applyPsychUi();  // no folder chosen: the best copy found among the mods
                         if (a.settings.psychUi && a.settings.psychFolder.empty() && !psychUi().active()) chooseFolder();

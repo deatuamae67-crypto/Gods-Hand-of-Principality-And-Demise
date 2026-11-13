@@ -1353,9 +1353,36 @@ void PlayState::updateScoreText(bool miss) {
     if (!st) return;
     // On spam charts the scripts hear it once a frame at most (Options: Lua note callbacks).
     const bool calls = scripts_ && app().settings.luaNoteCallbacks;
-    if (calls && scripts_->callStops("preUpdateScore", {scene::Value(miss)})) return;
+    inScoreUpdate_ = true;
+    if (calls && scripts_->callStops("preUpdateScore", {scene::Value(miss)})) {
+        inScoreUpdate_ = false;
+        return;
+    }
     st->text.text = scoreEngineText_ = psychScoreLine();
+    scoreStale_ = false;
     if (calls) scripts_->call("onUpdateScore", {scene::Value(miss)});
+    inScoreUpdate_ = false;
+}
+
+// Scripts set the score, misses or rating (setProperty, setRatingName...):
+// the line shows the new values, without Psych's score callbacks, and only
+// when no script wrote a text of its own.
+void PlayState::refreshScoreLine() {
+    scoreStale_ = false;
+    scene::Sprite* st = hudObject("scoreTxt");
+    if (!st) return;
+    const std::string line = psychScoreLine();
+    if (st->text.text == scoreEngineText_) st->text.text = line;
+    scoreEngineText_ = line;
+}
+
+// Psych's RecalculateRating, from addScore, setScore, addMisses...: updateScore
+// at the end of the frame's notes, with the score text's zoom (doScoreBop).
+// Not from inside preUpdateScore / onUpdateScore, which would call them again.
+void PlayState::recalculateRating() {
+    if (!psych_ || inScoreUpdate_) return;
+    scoreDirty_ = true;
+    if (!cfg_.botplay) scoreBopAt_ = app().now;
 }
 
 // Draws what `draw` draws turned by `angle` degrees and scaled around `c`, as
@@ -1478,31 +1505,35 @@ void PlayState::drawHud() {
                            (ratingNameOverride_.empty() ? session_.rank() : ratingNameOverride_) + ")";
         const std::string cl = ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_;
         if (!cl.empty()) line += "   |   " + cl;
+        if (look && so && scoreStale_) refreshScoreLine();
         if (look) line = so ? scoreEngineText_ : psychScoreLine();  // Psych Engine's own score line
         if (so && !so->text.text.empty() && so->text.text != scoreEngineText_) line = so->text.text;  // a script wrote it
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
         // Long numbers (spam charts) shrink the line to fit instead of running off screen.
         constexpr float kMaxLineW = gfx::W - 40.0f;
-        turned({scoreX, scoreTop + 12}, so ? so->angle : 0.0f, 1, 1, [&] {
-            if (psychText) {
-                // vcr.ttf 20 with a black outline; with "Score text zoom on hit" it
-                // grows to 1.075 on each note you hit and eases back in 0.2 s, around
-                // the middle of its box (two lines high: Psych ends it with a line break).
-                float size = 20;
-                const float w = ui.textWidth(line, size);
-                if (w > kMaxLineW) size *= kMaxLineW / w;
-                float zoom = 1;
-                if (so) zoom = so->scaleX;
-                else if (s.scoreZoom && now - scoreBopAt_ < 0.2) zoom = 1.075f - 0.075f * float((now - scoreBopAt_) / 0.2);
-                const float mid = scoreTop + ui.lineHeight(size) + 2;
-                ui.text(line, scoreX, mid + (scoreTop + 2 - mid) * zoom - 2, size * zoom, fade(WHITE, scoreAlpha), 0, 1.25f * zoom);
-            } else {
+        if (psychText) {
+            // vcr.ttf 20 with a black outline, turned and scaled as the object
+            // is (scale.x and scale.y apart) around the middle of its box, as
+            // Flixel does; the box is two lines high (Psych ends the text with
+            // a line break). "Score text zoom on hit" grows it to 1.075 on each
+            // note you hit and eases it back in 0.2 s (the object's scale in
+            // Psych songs).
+            float size = 20;
+            const float w = ui.textWidth(line, size);
+            if (w > kMaxLineW) size *= kMaxLineW / w;
+            float sx = so ? so->scaleX : 1.0f, sy = so ? so->scaleY : 1.0f;
+            if (!so && s.scoreZoom && now - scoreBopAt_ < 0.2) sx = sy = 1.075f - 0.075f * float((now - scoreBopAt_) / 0.2);
+            const float mid = scoreTop + ui.lineHeight(size) + 2;
+            turned({scoreX, mid}, so ? so->angle : 0.0f, sx, sy,
+                   [&] { ui.text(line, scoreX, scoreTop, size, fade(WHITE, scoreAlpha), 0, 1.25f); });
+        } else {
+            turned({scoreX, scoreTop + 12}, so ? so->angle : 0.0f, 1, 1, [&] {
                 float size = 24;
                 const float w = gfx::measure(FontId::Ui, line, size).x;
                 if (w > kMaxLineW) size *= kMaxLineW / w;
                 gfx::text(FontId::Ui, line, scoreX, home.y + 5 + 36 + scoreMoved.y, size, fade(WHITE, scoreAlpha), Align::Center, 2.0f);
-            }
-        });
+            });
+        }
     }
     // Note counter (Options, Note counter): notes hit so far out of the chart's
     // total, for your side, or both sides added up the way H-Slice shows them

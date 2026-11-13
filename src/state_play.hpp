@@ -46,6 +46,7 @@ public:
     double songPosition() const override { return songMs_; }
     bool getGameProp(std::string_view path, scene::Value& out) override;
     bool setGameProp(std::string_view path, const scene::Value& v) override;
+    void recalculateRating() override;
     void triggerEvent(const std::string& name, const std::string& v1, const std::string& v2) override;
     void debugPrint(const std::string& text, uint32_t argb) override;
     void debugNotice(const std::string& text, bool error, bool debugMode) override;
@@ -140,6 +141,7 @@ private:
     void updateHudObjects(double dt);
     std::string psychScoreLine() const;
     void updateScoreText(bool miss);  // Psych's updateScore: preUpdateScore, the text, onUpdateScore
+    void refreshScoreLine();          // the values changed by a script, without the callbacks
     scene::Sprite* hudObject(const char* name) const;  // nullptr outside Psych songs
     Vector2 hudMoved(const char* name) const;           // how far scripts moved it from Psych's place
     double scrollSpeed() const;
@@ -273,6 +275,7 @@ private:
     float iconHomeX_[2] = {0, 0};     // where the engine put iconP2 (0) and iconP1 (1) this frame
     std::string scoreEngineText_, timeEngineText_, botEngineText_;  // what the engine wrote in them
     bool scoreDirty_ = false, scoreDirtyMiss_ = false, scoreBopping_ = false, timeFadeDone_ = false;
+    bool scoreStale_ = false, inScoreUpdate_ = false;  // a script changed the values; in preUpdateScore/onUpdateScore
     double botplaySine_ = 0;
     size_t eventIdx_ = 0;
     std::deque<DebugLine> debug_;

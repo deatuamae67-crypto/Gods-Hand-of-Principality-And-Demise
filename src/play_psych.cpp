@@ -1768,12 +1768,13 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
 bool PlayState::setGameProp(std::string_view path, const Value& v) {
     const double d = scene::toNum(v);
     if (path == "health") { session_.setHealth(clampv(d, 0.0, 2.0)); return true; }
-    if (path == "songScore") { session_.score = (long long)d; return true; }
-    if (path == "songMisses") { session_.misses = (long long)d; return true; }
+    // The score line shows what scripts set (it is drawn from these values).
+    if (path == "songScore") { session_.score = (long long)d; scoreStale_ = true; return true; }
+    if (path == "songMisses") { session_.misses = (long long)d; scoreStale_ = true; return true; }
     if (path == "combo") { session_.combo = (long long)d; return true; }
     if (path == "songHits") return true;
-    if (path == "ratingName") { ratingNameOverride_ = scene::toStr(v); return true; }
-    if (path == "ratingFC") { ratingFcOverride_ = scene::toStr(v); return true; }
+    if (path == "ratingName") { ratingNameOverride_ = scene::toStr(v); scoreStale_ = true; return true; }
+    if (path == "ratingFC") { ratingFcOverride_ = scene::toStr(v); scoreStale_ = true; return true; }
     if (path == "ratingPercent") return true;
     if (path == "songSpeed") {
         const Settings& s = app().settings;

@@ -1022,14 +1022,20 @@ int setGameNum(lua_State* L, const char* path, double v) { G(L).setGameProp(path
 int l_setHealth(lua_State* L) { return setGameNum(L, "health", num(L, 1)); }
 int l_addHealth(lua_State* L) { return setGameNum(L, "health", gameNum(L, "health") + num(L, 1)); }
 int l_getHealth(lua_State* L) { return retNum(L, gameNum(L, "health")); }
-int l_addScore(lua_State* L) { return setGameNum(L, "songScore", gameNum(L, "songScore") + num(L, 1)); }
-int l_setScore(lua_State* L) { return setGameNum(L, "songScore", num(L, 1)); }
+// Psych's addScore, setScore, addMisses... set the value and call RecalculateRating.
+int setStat(lua_State* L, const char* path, double v) {
+    G(L).setGameProp(path, v);
+    G(L).recalculateRating();
+    return 0;
+}
+int l_addScore(lua_State* L) { return setStat(L, "songScore", gameNum(L, "songScore") + num(L, 1)); }
+int l_setScore(lua_State* L) { return setStat(L, "songScore", num(L, 1)); }
 int l_getScore(lua_State* L) { return retNum(L, gameNum(L, "songScore")); }
-int l_addMisses(lua_State* L) { return setGameNum(L, "songMisses", gameNum(L, "songMisses") + num(L, 1)); }
-int l_setMisses(lua_State* L) { return setGameNum(L, "songMisses", num(L, 1)); }
+int l_addMisses(lua_State* L) { return setStat(L, "songMisses", gameNum(L, "songMisses") + num(L, 1)); }
+int l_setMisses(lua_State* L) { return setStat(L, "songMisses", num(L, 1)); }
 int l_getMisses(lua_State* L) { return retNum(L, gameNum(L, "songMisses")); }
-int l_addHits(lua_State* L) { return setGameNum(L, "songHits", gameNum(L, "songHits") + num(L, 1)); }
-int l_setHits(lua_State* L) { return setGameNum(L, "songHits", num(L, 1)); }
+int l_addHits(lua_State* L) { return setStat(L, "songHits", gameNum(L, "songHits") + num(L, 1)); }
+int l_setHits(lua_State* L) { return setStat(L, "songHits", num(L, 1)); }
 int l_getHits(lua_State* L) { return retNum(L, gameNum(L, "songHits")); }
 int l_setRatingPercent(lua_State* L) { G(L).setGameProp("ratingPercent", num(L, 1)); return 0; }
 int l_setRatingName(lua_State* L) { G(L).setGameProp("ratingName", str(L, 1)); return 0; }

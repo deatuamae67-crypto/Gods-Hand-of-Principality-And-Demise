@@ -131,25 +131,31 @@ void PsychUi::setSmooth(bool smooth) {
         if (t.id) SetTextureFilter(t, filter);
 }
 
+// The engine copy's folders PsychUi::load() looks in, wherever the player
+// pointed (the engine's folder, its assets/ or a library folder inside it).
+static const char* const kLoadSubdirs[] = {"",        "assets/",  "assets/shared/", "assets/preload/", "assets/embed/",
+                                           "shared/", "preload/", "../",            "../shared/",      "../preload/"};
+
 std::vector<std::string> psychNoteSkins(const std::string& folder) {
     std::vector<std::string> out;
     if (folder.empty()) return out;
     std::string root = folder;
     if (root.back() != '/' && root.back() != '\\') root += '/';
     namespace fs = std::filesystem;
-    for (const char* sub : {"", "assets/", "assets/shared/", "shared/", "mods/"}) {
-        std::error_code ec;
-        const std::string dir = root + sub + "images/noteSkins";
-        for (const auto& e : fs::directory_iterator(fs::path(std::u8string(dir.begin(), dir.end())), ec)) {
-            const auto u = e.path().filename().u8string();
-            const std::string n(u.begin(), u.end());
-            const std::string pre = "NOTE_assets-";
-            if (n.size() > pre.size() + 4 && n.rfind(pre, 0) == 0 && endsWithI(n, ".png")) {
-                const std::string skin = n.substr(pre.size(), n.size() - pre.size() - 4);
-                if (std::find(out.begin(), out.end(), skin) == out.end()) out.push_back(skin);
+    const std::string pre = "NOTE_assets-";
+    for (const char* sub : kLoadSubdirs)
+        for (const char* skins : {"images/noteSkins", "images/noteskins"}) {
+            std::error_code ec;
+            const std::string dir = root + sub + skins;
+            for (const auto& e : fs::directory_iterator(fs::path(std::u8string(dir.begin(), dir.end())), ec)) {
+                const auto u = e.path().filename().u8string();
+                const std::string n(u.begin(), u.end());
+                if (n.size() > pre.size() + 4 && n.rfind(pre, 0) == 0 && endsWithI(n, ".png")) {
+                    const std::string skin = n.substr(pre.size(), n.size() - pre.size() - 4);
+                    if (std::find(out.begin(), out.end(), skin) == out.end()) out.push_back(skin);
+                }
             }
         }
-    }
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -169,9 +175,7 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
     // inside it: wherever the player pointed, the same names are found.
     scene::Files f;
     std::vector<std::string> roots = firstRoots;
-    for (const char* sub : {"", "assets/", "assets/shared/", "assets/preload/", "assets/embed/", "shared/", "preload/", "../",
-                            "../shared/", "../preload/"})
-        roots.push_back(root_ + sub);
+    for (const char* sub : kLoadSubdirs) roots.push_back(root_ + sub);
     f.setRoots(roots);
     int found = 0;
     std::vector<std::string> missing;
