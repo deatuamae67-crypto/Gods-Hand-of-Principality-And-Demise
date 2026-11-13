@@ -535,6 +535,7 @@ bool PlayState::setupPsych() {
     sc.keys = chart_.keys;
     psych_ = true;  // layoutStrums uses Psych positions from here on
     layoutStrums();
+    initHudObjects();  // healthBar, iconP1, scoreTxt...: Psych's places
 
     scripts_ = std::make_unique<ScriptHost>(sc, *this);
     scripts_->songDataDir = "data/" + entry_->songKey + "/";
@@ -635,6 +636,7 @@ void PlayState::psychUpdate(double dt) {
     scripts_->dispatchCompletions();
     updateSounds(dt);
     if (scripts_->kadeMode) scripts_->call("update", {Value(dt)});
+    updateHudObjects(dt);  // Psych moves its icons, zooms the score and writes the time before onUpdatePost
     scripts_->call("onUpdatePost", {Value(dt)});
     (void)a;
 }
@@ -726,6 +728,9 @@ void PlayState::psychMiss(const GameEvent& ev, bool ghost) {
 void PlayState::psychBeat(int b) {
     App& a = app();
     scene::Scene& sc = *scene_;
+    if (b >= 1)  // Psych's beatHit: the icons grow to 1.2 (updateHudObjects eases them back)
+        for (const char* n : {"iconP1", "iconP2"})
+            if (scene::Sprite* o = hudObject(n)) o->scaleX = o->scaleY = 1.2f;
     scripts_->setGlobal("curBeat", double(b));
     scripts_->setGlobal("curDecBeat", chart_.beatAt(songMs_));
     for (Character* c : {sc.bf.get(), sc.dad.get(), sc.gf.get()}) {
