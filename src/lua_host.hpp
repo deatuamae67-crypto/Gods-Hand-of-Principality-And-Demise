@@ -32,6 +32,9 @@ public:
     virtual void debugNotice(const std::string& text, bool error, bool debugMode) {
         debugPrint(text, error ? 0xFFFF4050 : 0xFFFFD040);
     }
+    // Psych's RecalculateRating (addScore, setScore, addMisses...): the score
+    // text is written again, with its callbacks and zoom.
+    virtual void recalculateRating() {}
     virtual void endSong() {}
     virtual void restartSong() {}
     virtual void exitSong() {}
