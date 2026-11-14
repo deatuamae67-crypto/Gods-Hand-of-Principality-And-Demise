@@ -140,29 +140,9 @@ jobs:
           name: android-emulator-screenshots
           path: android-shots
 
-  source:
-    name: Complete source package
-    needs: tests
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Package the game with every library
-        run: tools/make_source_package.sh "$PWD/GodsHand-complete-source.zip"
-      - name: Check that it builds offline
-        run: |
-          tools/ci_apt_install.sh libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libasound2-dev
-          mkdir offline && cd offline && unzip -q ../GodsHand-complete-source.zip
-          cmake -S GodsHand-source -B build -DCMAKE_BUILD_TYPE=Release -DFETCHCONTENT_FULLY_DISCONNECTED=ON
-          cmake --build build --parallel
-          ./build/gh_tests
-      - uses: actions/upload-artifact@v4
-        with:
-          name: GodsHand-complete-source
-          path: GodsHand-complete-source.zip
-
   release:
     name: Publish downloads
-    needs: [tests, build, android, android-test, source]
+    needs: [tests, build, android, android-test]
     # Publish whatever platforms built, so one unavailable runner does not hold
     # back the other downloads. A run cancelled by a newer push publishes
     # nothing: the newer run does.
@@ -170,17 +150,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
+        if: ${{ inputs.release != '' || startsWith(github.ref, 'refs/tags/') }}
         with:
           path: artifacts
           merge-multiple: true
-      - name: Publish release
+      - name: Publish the release
+        # An official release: a pushed v* tag, or a manual run with a tag to create.
+        # The game's packages only: the source code is not published with them.
+        if: ${{ inputs.release != '' || startsWith(github.ref, 'refs/tags/') }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.release }}
         run: |
           shopt -s nullglob
-          files=(artifacts/*.zip artifacts/*.apk)
+          files=(artifacts/GodsHand-windows-x64.zip artifacts/GodsHand-linux-x64.zip artifacts/GodsHand-macos-arm64.zip artifacts/*.apk)
           if [ ${#files[@]} -eq 0 ]; then echo "No packages were built."; exit 1; fi
           ls -la artifacts
           cat > notes.md <<'EOF'
@@ -190,21 +174,30 @@ jobs:
           | `GodsHand-linux-x64.zip` | Linux x64 | Extract, run `./godshand` |
           | `GodsHand-macos-arm64.zip` | macOS (Apple Silicon) | Extract; the first time, right-click `godshand` > Open |
           | `GodsHand-android.apk` | Android 7+ | Open it on the phone and allow installing from this source |
-          | `GodsHand-complete-source.zip` | Source | The game plus every library it uses: builds without internet (see `BUILDING.txt`) |
 
           Mod packs: Freeplay > MOD PACKS in the game, or the [`mods`](https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise/releases/tag/mods) release. Not all of the mods are by deatuamae67-crypto: some are, and the others belong to their original creators.
 
           License: God's Hand Source-Available Collaboration License (see `LICENSE`): play it, make mods for it, and fork it to collaborate; publishing copies, modified versions or rebrands needs the owner's written permission. Versions up to 1.6.2 were published under the MIT License.
           EOF
-          # An official release: a pushed v* tag, or a manual run with a tag to create.
           tag="$RELEASE_TAG"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"; fi
-          if [ -n "$tag" ]; then
-            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Release tags look like v1.2.3, not '$tag'."; exit 1; }
-            gh release create "$tag" "${files[@]}" --target "$GITHUB_SHA" --title "God's Hand $tag" --notes-file notes.md
-          else
-            gh release delete nightly --cleanup-tag -y || true
-            printf '\nAutomatic build of %s from %s.\n' "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" >> notes.md
-            gh release create nightly "${files[@]}" --prerelease --target "$GITHUB_SHA" \
-              --title "God's Hand - latest build" --notes-file notes.md
-          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Release tags look like v1.2.3, not '$tag'."; exit 1; }
+          gh release create "$tag" "${files[@]}" --target "$GITHUB_SHA" --title "God's Hand $tag" --notes-file notes.md
+      - name: Keep only the newest release and the mod packs
+        # Older releases are removed with their tags (and so with the source code
+        # GitHub attaches to every tag); push builds no longer publish a
+        # "latest build". Runs after a release is published, and on every push.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --limit 500 --json tagName,isDraft,isPrerelease > releases.json
+          keep="$(jq -r '[.[] | select((.isDraft | not) and (.isPrerelease | not) and (.tagName | test("^v[0-9]+[.][0-9]+[.][0-9]+$")))]
+                         | sort_by(.tagName | ltrimstr("v") | split(".") | map(tonumber)) | last | .tagName // empty' releases.json)"
+          if [ -z "$keep" ]; then echo "No official release yet: nothing removed."; exit 0; fi
+          echo "Keeping $keep and mods."
+          jq -r '.[].tagName' releases.json | while read -r t; do
+            case "$t" in "" | mods | "$keep") continue ;; esac
+            echo "Removing release $t and its tag"
+            gh release delete "$t" --cleanup-tag -y || echo "  (already gone)"
+          done
