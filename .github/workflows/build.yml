@@ -192,7 +192,9 @@ jobs:
           | `GodsHand-android.apk` | Android 7+ | Open it on the phone and allow installing from this source |
           | `GodsHand-complete-source.zip` | Source | The game plus every library it uses: builds without internet (see `BUILDING.txt`) |
 
-          Mod packs: Freeplay > MOD PACKS in the game, or the [`mods`](https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise/releases/tag/mods) release.
+          Mod packs: Freeplay > MOD PACKS in the game, or the [`mods`](https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise/releases/tag/mods) release. Not all of the mods are by deatuamae67-crypto: some are, and the others belong to their original creators.
+
+          License: God's Hand Source-Available Collaboration License (see `LICENSE`): play it, make mods for it, and fork it to collaborate; publishing copies, modified versions or rebrands needs the owner's written permission. Versions up to 1.6.2 were published under the MIT License.
           EOF
           # An official release: a pushed v* tag, or a manual run with a tag to create.
           tag="$RELEASE_TAG"

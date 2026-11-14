@@ -600,7 +600,7 @@ public:
             "of Principality and Demise",
             "",
             "@A RHYTHM DUEL",
-            "Created for deatuamae67-crypto",
+            "A project by deatuamae67-crypto",
             "",
             "@ENGINE, MUSIC, ART AND CHARTS",
             "Written from scratch in C++20",

@@ -116,6 +116,8 @@ public:
         gfx::beginCanvas();
         drawMenuBackground(a.now, 0x5A3C8C, menuPulse());
         gfx::text(FontId::Title, "MOD PACKS", gfx::W / 2, 40, 54, gfx::rgb(0xFFE08A), Align::Center, 3);
+        gfx::text(FontId::Ui, "Not all of these mods are by deatuamae67-crypto: the others belong to their creators", gfx::W / 2, 98,
+                  17, gfx::fade(WHITE, 0.5f), Align::Center);
         std::string status, current;
         bool busy;
         {
