@@ -400,6 +400,18 @@ bool PsychUi::note(int dir, Vector2 c, float size, float alpha, float angle) con
     return drawFrame(fr[0], c, size / std::max(1.0f, fr[0].fw), alpha, angle);
 }
 
+Vector2 PsychUi::noteExtent(int dir, float size) const {
+    if (!active_ || dir < 0 || dir > 3) return {0, 0};
+    const std::vector<Frame> fr = frames(kColors[dir]);
+    if (fr.empty()) return {0, 0};
+    // As drawFrame places it: the stored part, moved by its trim offsets.
+    const Frame& f = fr[0];
+    const float scale = size / std::max(1.0f, f.fw);
+    const float w = f.rotated ? f.src.height : f.src.width, h = f.rotated ? f.src.width : f.src.height;
+    const float ox = (-f.fx + w * 0.5f - f.fw * 0.5f) * scale, oy = (-f.fy + h * 0.5f - f.fh * 0.5f) * scale;
+    return {2.0f * (std::fabs(ox) + w * scale * 0.5f), 2.0f * (std::fabs(oy) + h * scale * 0.5f)};
+}
+
 bool PsychUi::strum(int dir, Vector2 c, float size, int state, float alpha, float angle, double t) const {
     if (!active_ || dir < 0 || dir > 3) return false;
     const std::vector<Frame> idle = frames(kArrows[dir]);

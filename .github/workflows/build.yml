@@ -190,7 +190,7 @@ jobs:
 
           Mod packs: Freeplay > MOD PACKS in the game, or the [`mods`](https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise/releases/tag/mods) release. Not all of the mods are by deatuamae67-crypto: some are, and the others belong to their original creators.
 
-          License: all rights reserved (see `LICENSE`). You may play the game and make mods for it; forking, copying, republishing, rebranding or reusing the code is not allowed. The only way to contribute is to open an issue in the official repository. Versions up to 1.6.2 were published under the MIT License.
+          License: all rights reserved (see `LICENSE`). You may play the game and make mods for it; forking, copying, republishing, rebranding or reusing the code is not allowed. The only way to contribute is to open an issue in the official repository. The license covers every version, including those first published under the MIT License (up to 1.6.2) and 1.6.3: those licenses were withdrawn.
           EOF
           tag="$RELEASE_TAG"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"; fi

@@ -30,6 +30,7 @@ struct Sprite {
     // Per row, the columns that are not fully transparent: [x0, x1) packed
     // as x0 | x1 << 16 (empty rows 0). Made by findSpans; blit skips the rest.
     std::vector<uint32_t> spans;
+    int left = 0, top = 0, right = 0, bottom = 0;  // around the visible pixels (findSpans)
 };
 void findSpans(Sprite& s);
 
@@ -44,9 +45,12 @@ public:
     void begin();  // a new frame
     // s with its top-left corner at (x, y), clipped to the picture.
     void blit(const Sprite& s, int x, int y, float alpha, bool useAsm);
-    // Rows to upload this frame, [uploadTop, uploadBottom); empty when equal.
+    // What to upload now: [uploadLeft, uploadRight) x [uploadTop, uploadBottom),
+    // what was drawn since begin() and what begin() cleared; empty when equal.
     int uploadTop() const;
     int uploadBottom() const;
+    int uploadLeft() const;
+    int uploadRight() const;
     const uint32_t* pixels() const { return px_.data(); }
     uint64_t blendedPixels() const { return blended_; }  // this frame
 
@@ -54,7 +58,7 @@ private:
     int w_ = 0, h_ = 0;
     std::vector<uint32_t> px_;
     int top_ = 0, bottom_ = 0, left_ = 0, right_ = 0;  // drawn this frame
-    int prevTop_ = 0, prevBottom_ = 0;                  // drawn last frame (cleared now)
+    int prevTop_ = 0, prevBottom_ = 0, prevLeft_ = 0, prevRight_ = 0;  // drawn before begin() (cleared now)
     uint64_t blended_ = 0;
 };
 

@@ -29,6 +29,12 @@ struct Settings {
     bool fpsHardware = false;    // processor, graphics card, OpenGL and system names
     bool lowDetail = false;
     bool vsync = false;
+    // With V-sync: no frames queued, each drawn just before its refresh
+    // (frame_pacer.hpp). OFF: the driver's own queue.
+    bool lowLatency = true;
+    // The audio device's buffer: 0 lowest (3 ms x 2), 1 low (5 ms x 3),
+    // 2 normal (10 ms x 3, miniaudio's own), 3 safe (20 ms x 3). Next start.
+    int audioLatency = 1;
     bool shaders = true;       // mod shaders and screen effects
     // Spam charts: 0 adaptive (notes stacked closer than a few pixels are drawn
     // once while the frame rate is under its target; all are still played),

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "audio.hpp"
+#include "frame_pacer.hpp"
 #include "input.hpp"
 #include "library.hpp"
 #include "render_mode.hpp"
@@ -160,6 +161,10 @@ private:
     double volumeShownAt_ = -10;
     double perfSince_ = 0;
     double renderClock_ = 0, clockShift_ = 0, renderStartReal_ = 0, lastSwap_ = 0;
+    FramePacer pacer_;           // Options > GRAPHICS > Low latency
+    double frameStart_ = 0;      // when this frame started (real time)
+    int pacerMonitor_ = -1;      // the monitor the pacer measured
+    double pacerCheckAt_ = 0;
     std::vector<float> renderAudio_;
     std::string ffmpegPath_;
     bool ffmpegProbed_ = false;

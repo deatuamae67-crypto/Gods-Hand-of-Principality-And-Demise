@@ -73,13 +73,19 @@ bool selfTest() {
 
 void findSpans(Sprite& s) {
     s.spans.assign(size_t(std::max(0, s.h)), 0u);
+    s.left = s.w, s.top = s.h, s.right = 0, s.bottom = 0;
     for (int y = 0; y < s.h; ++y) {
         const uint32_t* row = &s.px[size_t(y) * size_t(s.w)];
         int x0 = 0, x1 = s.w;
         while (x0 < x1 && (row[x0] >> 24) == 0) ++x0;
         while (x1 > x0 && (row[x1 - 1] >> 24) == 0) --x1;
         s.spans[size_t(y)] = x0 < x1 ? uint32_t(x0) | uint32_t(x1) << 16 : 0u;
+        if (x0 < x1) {
+            s.left = std::min(s.left, x0), s.right = std::max(s.right, x1);
+            s.top = std::min(s.top, y), s.bottom = y + 1;
+        }
     }
+    if (s.right <= s.left) s.left = s.top = s.right = s.bottom = 0;
 }
 
 void Layer::resize(int w, int h) {
@@ -89,8 +95,8 @@ void Layer::resize(int w, int h) {
     px_.assign(size_t(w_) * size_t(h_), 0u);  // the caller makes a new, empty texture too
     top_ = prevTop_ = h_;
     bottom_ = prevBottom_ = 0;
-    left_ = w_;
-    right_ = 0;
+    left_ = prevLeft_ = w_;
+    right_ = prevRight_ = 0;
 }
 
 void Layer::begin() {
@@ -99,6 +105,8 @@ void Layer::begin() {
         for (int y = top_; y < bottom_; ++y) std::memset(&px_[size_t(y) * w_ + left_], 0, size_t(right_ - left_) * 4);
     prevTop_ = top_;
     prevBottom_ = bottom_;
+    prevLeft_ = left_;
+    prevRight_ = right_;
     top_ = h_;
     bottom_ = 0;
     left_ = w_;
@@ -147,6 +155,18 @@ int Layer::uploadBottom() const {
     const bool now = bottom_ > top_, before = prevBottom_ > prevTop_;
     if (now && before) return std::max(bottom_, prevBottom_);
     return now ? bottom_ : (before ? prevBottom_ : 0);
+}
+
+int Layer::uploadLeft() const {
+    const bool now = bottom_ > top_, before = prevBottom_ > prevTop_;
+    if (now && before) return std::min(left_, prevLeft_);
+    return now ? left_ : (before ? prevLeft_ : 0);
+}
+
+int Layer::uploadRight() const {
+    const bool now = bottom_ > top_, before = prevBottom_ > prevTop_;
+    if (now && before) return std::max(right_, prevRight_);
+    return now ? right_ : (before ? prevRight_ : 0);
 }
 
 }  // namespace gh::raster

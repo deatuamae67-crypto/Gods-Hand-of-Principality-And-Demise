@@ -63,6 +63,9 @@ public:
             {Row::Number, "Audio offset", "Positive if you hear the music late. Hold SHIFT for steps of 10 ms.", nullptr,
              &s.offsetMs, -300, 300, 1},
             {Row::Action, "Calibrate offset...", "Tap along to a metronome to measure your offset."},
+            {Row::Choice, "Audio latency", "The sound card's buffer: smaller is heard sooner (hit sounds, the song). Raise it "
+             "if the sound crackles. Applied the next time the game starts.", nullptr, nullptr, 0, 0, 0, &s.audioLatency,
+             {0, 1, 2, 3}, {"Lowest (6 ms)", "Low (15 ms)", "Normal (30 ms)", "Safe (60 ms)"}},
             {Row::Bool, "Show timing (ms)", "Shows how early or late each hit was.", &s.showTimings},
             {Row::Bool, "Opponent notes", "OFF hides the opponent's receptors and notes, as Psych's Opponent Notes.", &s.opponentNotes},
             {Row::Bool, "Opponent strums", "Light up the opponent's receptors when they sing.", &s.opponentStrums},
@@ -79,6 +82,9 @@ public:
             {Row::Header, "GRAPHICS", ""},
             {Row::Bool, "Fullscreen", "Borderless fullscreen (F11 works anywhere).", &s.fullscreen},
             {Row::Bool, "VSync", "Waits for the screen's refresh. OFF: the frame limit below decides (most precise input).", &s.vsync},
+            {Row::Bool, "Low latency", "With VSync: no frames waiting in the driver, and each one drawn just before the screen "
+             "shows it while the keys are read every millisecond. What you press shows a refresh or more sooner.",
+             &s.lowLatency},
             {Row::Choice, "Frame limit", "Higher limits make notes smoother. Input is polled at ~1000 Hz regardless.",
              nullptr, nullptr, 0, 0, 0, &s.fpsCap, {60, 120, 144, 165, 240, 360, 500, 0}},
             {Row::Bool, "Show FPS", "The frame rate at the top left.", &s.showFps},

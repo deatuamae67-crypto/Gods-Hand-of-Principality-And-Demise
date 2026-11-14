@@ -50,6 +50,8 @@ void afterWindowInit();
 // Wait for the screen's refresh (on) or present frames as soon as they are
 // ready (off). Applied at once; Android asks EGL for it.
 void setVsync(bool on);
+// Waits until the graphics card has done everything asked so far (glFinish).
+void gpuFinish();
 // The player picks a folder. Desktop: the system's dialog (blocking); its
 // path comes back ("" if cancelled). Android: the system folder picker
 // opens and the files the Psych Engine interface needs are copied into

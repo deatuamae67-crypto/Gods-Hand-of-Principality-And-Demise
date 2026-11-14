@@ -104,6 +104,7 @@ add_library(gh_core STATIC
   src/mod_install.cpp
   src/autochart.cpp
   src/note_raster.cpp
+  src/frame_pacer.cpp
 )
 target_include_directories(gh_core PUBLIC src)
 # The note renderer's inner loop in x86-64 assembly (SSE2): GAS syntax for GCC
@@ -127,7 +128,7 @@ else()
 endif()
 
 if(GH_BUILD_TESTS)
-  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/raster_tests.cpp)
+  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/raster_tests.cpp tests/pacer_tests.cpp)
   target_link_libraries(gh_tests PRIVATE gh_core)
   enable_testing()
   add_test(NAME core COMMAND gh_tests)
@@ -182,6 +183,28 @@ if(GH_BUILD_GAME)
   # The main loop polls input ~1000 times per second and only renders at the
   # frame limit, so raylib must not swap/poll/sleep inside EndDrawing().
   target_compile_definitions(raylib PRIVATE SUPPORT_CUSTOM_FRAME_CONTROL=1)
+  # Options > Audio latency: raylib opens the audio device with miniaudio's
+  # default buffer (10 ms x 3). Two variables added to raudio.c let the game
+  # pick the size before InitAudioDevice(). Applied once, in raylib's source.
+  set(gh_raudio ${raylib_SOURCE_DIR}/src/raudio.c)
+  file(READ ${gh_raudio} gh_src)
+  if(NOT gh_src MATCHES "GhAudioPeriodMs")
+    set(gh_cb "    config.dataCallback = OnSendAudioDataToDevice;")
+    set(gh_init "void InitAudioDevice(void)\n{")
+    string(FIND "${gh_src}" "${gh_cb}" gh_at1)
+    string(FIND "${gh_src}" "${gh_init}" gh_at2)
+    if(gh_at1 EQUAL -1 OR gh_at2 EQUAL -1)
+      message(FATAL_ERROR "Could not patch ${gh_raudio} (raylib 5.5 expected)")
+    endif()
+    string(REPLACE "${gh_cb}"
+      "${gh_cb}\n    config.periodSizeInMilliseconds = GhAudioPeriodMs;  // God's Hand: Options > Audio latency\n    config.periods = GhAudioPeriods;"
+      gh_src "${gh_src}")
+    string(REPLACE "${gh_init}"
+      "unsigned int GhAudioPeriodMs = 0, GhAudioPeriods = 0;  // God's Hand: the audio buffer (0: miniaudio's default)\n\n${gh_init}"
+      gh_src "${gh_src}")
+    file(WRITE ${gh_raudio} "${gh_src}")
+    message(STATUS "Patched raylib's raudio.c: the game picks the audio buffer")
+  endif()
   if(ANDROID)
     # Android: make raylib follow the window when it changes size (see
     # cmake/raylib_android_resize.c). Applied once, in raylib's own source.

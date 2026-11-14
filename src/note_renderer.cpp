@@ -90,8 +90,18 @@ void NoteRenderer::prepare(int maxPerFrame) {
 
 raster::Sprite NoteRenderer::bake(const Want& w) const {
     raster::Sprite s;
-    const int side = int(std::ceil(w.px * 1.35f)) + 4;  // Psych notes are a little taller than wide
-    RenderTexture2D rt = LoadRenderTexture(side, side);
+    const PsychUi& ui = psychUi();
+    // Room for the whole note: our arrows fill a square; a Psych skin's frame
+    // may be wider or taller, and its trim offsets move it off centre.
+    int bw = w.px + 4, bh = w.px + 4;
+    if (w.psych) {
+        const Vector2 e = ui.noteExtent(w.dir, float(w.px));
+        bw = std::max(bw, int(std::ceil(e.x)) + 4);
+        bh = std::max(bh, int(std::ceil(e.y)) + 4);
+    }
+    bw += bw & 1;  // even: the centre falls on a pixel corner, as note() places it
+    bh += bh & 1;
+    RenderTexture2D rt = LoadRenderTexture(bw, bh);
     if (!rt.id) return s;
     BeginTextureMode(rt);
     ClearBackground(BLANK);
@@ -99,8 +109,7 @@ raster::Sprite NoteRenderer::bake(const Want& w) const {
     // would square the alpha of a picture drawn into an empty one).
     rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
     BeginBlendMode(BLEND_CUSTOM_SEPARATE);
-    const Vector2 c{side * 0.5f, side * 0.5f};
-    const PsychUi& ui = psychUi();
+    const Vector2 c{bw * 0.5f, bh * 0.5f};
     bool drawn = false;
     if (w.psych) {
         ui.beginDir(w.dir);
@@ -140,7 +149,7 @@ void NoteRenderer::beginFrame(float pixelsPerUnit) {
         Image img = GenImageColor(w, h, BLANK);
         tex_ = LoadTextureFromImage(img);
         UnloadImage(img);
-        SetTextureFilter(tex_, TEXTURE_FILTER_BILINEAR);
+        SetTextureFilter(tex_, smooth_ ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
     }
     if (psychUi().generation() != look_) {
         look_ = psychUi().generation();
@@ -148,8 +157,15 @@ void NoteRenderer::beginFrame(float pixelsPerUnit) {
     }
     layer_.begin();
     t0_ = seconds();
-    notes_ = 0;
+    notes_ = pending_ = 0;
+    pixels_ = 0;
     inFrame_ = tex_.id != 0;
+}
+
+void NoteRenderer::setSmooth(bool smooth) {
+    if (smooth == smooth_) return;
+    smooth_ = smooth;
+    if (tex_.id) SetTextureFilter(tex_, smooth_ ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
 }
 
 bool NoteRenderer::note(int dir, Vector2 c, float size, float alpha, bool psychLook) {
@@ -168,26 +184,78 @@ bool NoteRenderer::note(int dir, Vector2 c, float size, float alpha, bool psychL
     if (s.w <= 0) return false;
     const int x = int(std::lround((c.x + kMargin) * scale_)) - s.w / 2;
     const int y = int(std::lround((c.y + kMargin) * scale_)) - s.h / 2;
+    // A note reaching past the picture (moved there by a script, maybe
+    // brought on screen by a camera) is drawn whole by the GPU instead.
+    if (x < 0 || y < 0 || x + s.w > layer_.width() || y + s.h > layer_.height()) return false;
     layer_.blit(s, x, y, alpha, usingAsm());
     ++notes_;
+    if (s.right <= s.left) return true;  // nothing visible
+    // The box of its visible pixels, in canvas units.
+    const float l = float(x + s.left) / scale_ - kMargin, t = float(y + s.top) / scale_ - kMargin;
+    const float r = float(x + s.right) / scale_ - kMargin, b = float(y + s.bottom) / scale_ - kMargin;
+    if (pending_++ == 0) {
+        boxL_ = l, boxT_ = t, boxR_ = r, boxB_ = b;
+    } else {
+        boxL_ = std::min(boxL_, l), boxT_ = std::min(boxT_, t);
+        boxR_ = std::max(boxR_, r), boxB_ = std::max(boxB_, b);
+    }
     return true;
+}
+
+bool NoteRenderer::covers(Rectangle r) const {
+    return inFrame_ && pending_ > 0 && r.x < boxR_ && r.x + r.width > boxL_ && r.y < boxB_ && r.y + r.height > boxT_;
+}
+
+// What was drawn or cleared since the last upload goes to the graphics
+// card, so the texture always matches the picture: whole rows, or only the
+// columns that changed when they are a small part of them.
+void NoteRenderer::upload() {
+    const int top = layer_.uploadTop(), bottom = layer_.uploadBottom();
+    const int left = layer_.uploadLeft(), right = layer_.uploadRight();
+    if (bottom <= top || right <= left) return;
+    const int W = layer_.width();
+    if ((right - left) * 3 > W * 2) {
+        UpdateTextureRec(tex_, {0, float(top), float(W), float(bottom - top)}, layer_.pixels() + size_t(top) * size_t(W));
+        return;
+    }
+    const size_t cols = size_t(right - left);
+    staging_.resize(cols * size_t(bottom - top));
+    for (int y = top; y < bottom; ++y)
+        std::memcpy(&staging_[size_t(y - top) * cols], layer_.pixels() + size_t(y) * size_t(W) + size_t(left), cols * 4);
+    UpdateTextureRec(tex_, {float(left), float(top), float(cols), float(bottom - top)}, staging_.data());
+}
+
+// Only the part of the picture with notes in it is drawn.
+void NoteRenderer::drawLayer() {
+    const float pad = 1.0f / scale_;  // a texel more, for the filtered edge
+    const float l = std::max(-kMargin, boxL_ - pad), t = std::max(-kMargin, boxT_ - pad);
+    const float r = std::min(gfx::W + kMargin, boxR_ + pad), b = std::min(gfx::H + kMargin, boxB_ + pad);
+    if (r <= l || b <= t) return;
+    const Rectangle src{(l + kMargin) * scale_, (t + kMargin) * scale_, (r - l) * scale_, (b - t) * scale_};
+    BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
+    DrawTexturePro(tex_, src, {l, t, r - l, b - t}, {0, 0}, 0, WHITE);
+    EndBlendMode();
+    rlDrawRenderBatchActive();  // drawn before the texture changes again
+}
+
+void NoteRenderer::flush() {
+    if (!inFrame_ || pending_ == 0) return;
+    upload();
+    drawLayer();
+    pixels_ += layer_.blendedPixels();
+    layer_.begin();  // the notes that follow go into a clear picture
+    pending_ = 0;
 }
 
 void NoteRenderer::endFrame() {
     if (!inFrame_) return;
     inFrame_ = false;
-    const int top = layer_.uploadTop(), bottom = layer_.uploadBottom();
-    if (bottom > top)
-        UpdateTextureRec(tex_, {0, float(top), float(layer_.width()), float(bottom - top)},
-                         layer_.pixels() + size_t(top) * size_t(layer_.width()));
+    upload();  // also rows only cleared, so the next frame starts from a clear texture
+    if (pending_ > 0) drawLayer();
+    pending_ = 0;
     lastMs_ = (seconds() - t0_) * 1000.0;
     lastNotes_ = notes_;
-    lastPixels_ = layer_.blendedPixels();
-    if (notes_ == 0) return;
-    BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
-    DrawTexturePro(tex_, {0, 0, float(tex_.width), float(tex_.height)},
-                   {-kMargin, -kMargin, gfx::W + 2 * kMargin, gfx::H + 2 * kMargin}, {0, 0}, 0, WHITE);
-    EndBlendMode();
+    lastPixels_ = pixels_ + layer_.blendedPixels();
 }
 
 }  // namespace gh

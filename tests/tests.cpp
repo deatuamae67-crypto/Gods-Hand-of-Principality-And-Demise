@@ -28,6 +28,7 @@ void runAudioTests();
 int printFlp(int argc, char** argv, int first);
 void runExtraTests(bool audio);
 void runRasterTests(bool timings);
+void runPacerTests();
 int runPsychCorpus(const char* dir);
 #define CHECK(cond)                                                              \
     do {                                                                         \
@@ -467,6 +468,7 @@ int main(int argc, char** argv) {
 #endif
     runExtraTests(audio);
     runRasterTests(false);
+    runPacerTests();
     testComposer(audio, wav);
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

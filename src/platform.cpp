@@ -20,11 +20,16 @@
 #include <android/native_activity.h>
 #include <android/window.h>
 #include <EGL/egl.h>
+#include <GLES2/gl2.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
 #include <time.h>
 
 extern "C" struct android_app* GetAndroidApp(void);  // raylib, rcore_android.c
+#elif defined(_WIN32)
+extern "C" __declspec(dllimport) void __stdcall glFinish(void);  // opengl32, which raylib links
+#else
+extern "C" void glFinish(void);  // libGL / the OpenGL framework, which raylib links
 #endif
 
 namespace gh::platform {
@@ -317,6 +322,8 @@ void setVsync(bool on) {
     if (d != EGL_NO_DISPLAY) eglSwapInterval(d, on ? 1 : 0);
 }
 
+void gpuFinish() { glFinish(); }
+
 void afterWindowInit() {
     g_background = false;
     g_resumed = false;
@@ -445,6 +452,8 @@ void setVsync(bool on) {
     if (on) SetWindowState(FLAG_VSYNC_HINT);
     else ClearWindowState(FLAG_VSYNC_HINT);
 }
+
+void gpuFinish() { glFinish(); }
 bool inBackground() { return false; }
 bool takeResumed() { return false; }
 void rememberVolume(float) {}

@@ -21,6 +21,12 @@
 #include "sysinfo.hpp"
 #include "raylib.h"
 
+// The audio buffer raylib opens the device with (CMakeLists.txt adds them
+// to raylib's raudio.c; 0: miniaudio's default).
+extern "C" {
+extern unsigned int GhAudioPeriodMs, GhAudioPeriods;
+}
+
 namespace gh {
 
 static App* g_app = nullptr;
@@ -266,6 +272,7 @@ int App::run(int argc, char** argv) {
     }
 
     const bool baseGiven = !base.empty();
+    if (baseGiven && base.back() != '/' && base.back() != '\\') base += '/';  // --base dir works without the slash too
     if (platform::kAndroid) {
         base = platform::dataDir();
         platform::prepareDataDir(base);
@@ -304,6 +311,14 @@ int App::run(int argc, char** argv) {
         if (settings.fullscreen && !autoRun.enabled) ToggleBorderlessWindowed();
     }
 
+    {
+        // Options > Audio latency: the sound card's buffer, set in raylib's
+        // raudio.c (patched by CMakeLists.txt) before the device opens.
+        static const unsigned kPeriodMs[4] = {3, 5, 10, 20}, kPeriods[4] = {2, 3, 3, 3};
+        const int l = clampv(settings.audioLatency, 0, 3);
+        GhAudioPeriodMs = kPeriodMs[l];
+        GhAudioPeriods = kPeriods[l];
+    }
     InitAudioDevice();
     mixer.init();
     sfxInit();
@@ -378,6 +393,26 @@ int App::run(int argc, char** argv) {
             else std::this_thread::yield();
             continue;
         }
+        // Low latency with V-sync: the frame starts as late as it can and
+        // still be ready for the next refresh; the keys are read meanwhile.
+        if (settings.vsync && settings.lowLatency) {
+            if (pacerMonitor_ < 0 || now - pacerCheckAt_ > 1.0) {  // the screen, once a second
+                pacerCheckAt_ = now;
+                const int monitor = platform::kAndroid ? 0 : GetCurrentMonitor();
+                if (monitor != pacerMonitor_) {  // a new screen (or the first): its refresh rate
+                    pacerMonitor_ = monitor;
+                    pacer_.reset(platform::kAndroid ? 0.0 : double(GetMonitorRefreshRate(monitor)));
+                }
+            }
+            const double wait = pacer_.startAt() - nowSec();
+            if (wait > 0.0) {
+                if (wait > 0.0012) std::this_thread::sleep_for(std::chrono::microseconds(500));
+                else std::this_thread::yield();
+                continue;
+            }
+        } else if (pacerMonitor_ >= 0) {
+            pacerMonitor_ = -1;  // measured again when it is turned back on
+        }
         if (cap > 0) {
             nextFrame += 1.0 / cap;
             if (now - nextFrame > 0.1) nextFrame = now;
@@ -404,6 +439,7 @@ int App::run(int argc, char** argv) {
 }
 
 void App::frame() {
+    frameStart_ = nowSec();
     input.beginFrame(dt);
     if (GetScreenWidth() != shownW_ || GetScreenHeight() != shownH_) {
         shownW_ = GetScreenWidth();
@@ -504,7 +540,17 @@ void App::frame() {
     // second leaves the rest of the time to drawing and encoding.
     const double realNow = nowSec();
     if (!rendering || realNow - lastSwap_ >= 1.0 / 30.0) {
+        // Low latency with V-sync: the graphics card finishes the frame (its
+        // time is measured), then the game waits until the screen shows it,
+        // so no frame waits in the driver's queue.
+        const bool pace = settings.vsync && settings.lowLatency && !rendering && pacerMonitor_ >= 0;
+        if (pace) platform::gpuFinish();
+        const double work = nowSec() - frameStart_;
         SwapScreenBuffer();
+        if (pace) {
+            platform::gpuFinish();
+            pacer_.shown(nowSec(), work);
+        }
         lastSwap_ = realNow;
     }
 
