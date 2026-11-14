@@ -1589,7 +1589,8 @@ public:
         feedUi(ui_);
         if (sc_) runStage(dt);
         view_.handle(in, ui_, overPanel(ui_));
-        dragCharacters(in);
+        if (tab_ == 4) dragObjects(in);
+        else dragCharacters(in);
         if (!ui_.focus.empty()) return;
         const bool ctrl = in.isDown(KEY_LEFT_CONTROL) || in.isDown(KEY_RIGHT_CONTROL);
         if (in.pressed(KEY_ESCAPE)) {
@@ -1711,6 +1712,9 @@ private:
     std::string loadedText_, saveName_;
     std::string who_[3] = {"bf", "gf", "dad"};
     scene::CharacterPtr chars_[3];
+    std::vector<scene::SpritePtr> objSprites_;  // per stage object (null for the characters' places)
+    int objSel_ = 0;
+    bool objDrag_ = false;
     bool dirty_ = false, leaveArmed_ = false, showCam_ = true;
     int drag_ = -1;
     Vector2 dragLast_{};
@@ -1749,7 +1753,9 @@ private:
         sc.gfMarker->tag = "gfGroup";
         for (int i = 0; i < 3; ++i) makeChar(i);
         bool placed = false;
+        objSprites_.clear();
         for (const psych::StageObject& o : def_.objects) {
+            objSprites_.push_back(nullptr);
             const std::string t = toLower(o.type);
             if (t == "gf" || t == "gfgroup") {
                 sc.order.push_back(sc.gfMarker);
@@ -1798,6 +1804,7 @@ private:
             s->inScene = true;
             if (!o.name.empty()) sc.objects[o.name] = s;
             sc.order.push_back(s);
+            objSprites_.back() = s;
         }
         if (!placed) {
             sc.order.push_back(sc.gfMarker);
@@ -1905,11 +1912,12 @@ private:
         panelBox(8, gfx::H - 40);
         float y = 16;
         const float x = kPanelX, w = kPanelW, rh = 30;
-        static const char* tabs[4] = {"Stage", "BF", "GF", "Dad"};
-        for (int i = 0; i < 4; ++i)
-            if (ui_.button({x + i * (w / 4), y, w / 4 - 4, rh}, tabs[i], tab_ == i)) tab_ = i;
+        static const char* tabs[5] = {"Stage", "BF", "GF", "Dad", "Objects"};
+        for (int i = 0; i < 5; ++i)
+            if (ui_.button({x + i * (w / 5), y, w / 5 - 4, rh}, tabs[i], tab_ == i)) tab_ = i;
         y += rh + 12;
         if (tab_ == 0) drawStageTab(x, y, w, rh);
+        else if (tab_ == 4) drawObjectsTab(x, y, w, rh);
         else drawCharTab(tab_ - 1, x, y, w, rh);
         ui_.overlays();
     }
@@ -1941,6 +1949,214 @@ private:
         y += 26;
         if (ui_.button({x, y, w * 0.5f - 4, rh + 4}, "Save")) save();
         if (ui_.button({x + w * 0.5f + 4, y, w * 0.5f - 4, rh + 4}, "Reload")) load(saveName_);
+    }
+
+    // Issue #22: the stage's own objects (Psych 0.7.3 "objects"): pick one
+    // (here or by clicking it), drag it, change what it is and how it shows,
+    // its layer, add sprites and remove them. Saved with the stage's JSON.
+    void drawObjectsTab(float x, float y, float w, float rh) {
+        std::vector<std::string> names;
+        for (size_t i = 0; i < def_.objects.size(); ++i) names.push_back(objLabel(i));
+        if (!names.empty()) {
+            objSel_ = std::clamp(objSel_, 0, int(names.size()) - 1);
+            ui_.dropdown("obj", {x, y, w, rh}, "Object", names, objSel_);
+            y += rh + 8;
+        } else {
+            gfx::text(FontId::Ui, "No objects in the stage's JSON yet.", x, y, 16, kDim);
+            y += 26;
+        }
+        auto changed = [&] {
+            dirty_ = true;
+            leaveArmed_ = false;
+            applyObject(size_t(objSel_));
+        };
+        if (!names.empty()) {
+            psych::StageObject& o = def_.objects[size_t(objSel_)];
+            const std::string t = toLower(o.type);
+            if (t == "gf" || t == "gfgroup" || t == "dad" || t == "dadgroup" || t == "boyfriend" || t == "boyfriendgroup") {
+                gfx::text(FontId::Ui, "Where this character is drawn (its layer).", x, y, 16, kDim);
+                y += 26;
+            } else {
+                ui_.text("objname", {x, y, w, rh}, "Name", o.name);
+                y += rh + 6;
+                std::string img = o.image;
+                if (ui_.text("objimg", {x, y, w - 92, rh}, "Image", img)) o.image = img;
+                if (ui_.button({x + w - 86, y, 86, rh}, "Load")) {
+                    dirty_ = true;
+                    buildScene(saveName_);
+                }
+                y += rh + 6;
+                auto step = [&](const char* label, float& f, double inc, double lo, double hi, const char* fmt) {
+                    double d = f;
+                    if (ui_.stepper({x, y, w, rh}, label, d, inc, lo, hi, fmt)) {
+                        f = float(d);
+                        changed();
+                    }
+                    y += rh + 6;
+                };
+                step("X", o.x, 10, -100000, 100000, "%.0f");
+                step("Y", o.y, 10, -100000, 100000, "%.0f");
+                step("Scale X", o.scaleX, 0.05, -50, 50, "%.2f");
+                step("Scale Y", o.scaleY, 0.05, -50, 50, "%.2f");
+                step("Scroll X", o.scrollX, 0.05, -10, 10, "%.2f");
+                step("Scroll Y", o.scrollY, 0.05, -10, 10, "%.2f");
+                step("Alpha", o.alpha, 0.05, 0, 1, "%.2f");
+                step("Angle", o.angle, 1, -3600, 3600, "%.0f");
+                if (ui_.check({x, y, w / 3, rh}, "Flip X", o.flipX)) changed();
+                if (ui_.check({x + w / 3, y, w / 3, rh}, "Flip Y", o.flipY)) changed();
+                if (ui_.check({x + 2 * w / 3, y, w / 3, rh}, "Smooth", o.antialiasing)) changed();
+                y += rh + 8;
+            }
+            const float bw = (w - 12) / 4;
+            if (ui_.button({x, y, bw, rh}, "Back") && objSel_ > 0) moveObject(objSel_, objSel_ - 1);
+            if (ui_.button({x + bw + 4, y, bw, rh}, "Front") && objSel_ + 1 < int(def_.objects.size())) moveObject(objSel_, objSel_ + 1);
+            if (ui_.button({x + 2 * (bw + 4), y, bw, rh}, "Copy")) {
+                psych::StageObject c = def_.objects[size_t(objSel_)];
+                c.name += "_copy";
+                c.x += 40;
+                c.y += 40;
+                def_.objects.insert(def_.objects.begin() + objSel_ + 1, c);
+                ++objSel_;
+                dirty_ = true;
+                buildScene(saveName_);
+            }
+            if (ui_.button({x + 3 * (bw + 4), y, bw, rh}, "Delete")) {
+                def_.objects.erase(def_.objects.begin() + objSel_);
+                objSel_ = std::max(0, objSel_ - 1);
+                dirty_ = true;
+                buildScene(saveName_);
+            }
+            y += rh + 8;
+        }
+        if (ui_.button({x, y, w, rh}, "Add a sprite (an image of the mod)")) {
+            psych::StageObject o;
+            o.type = "sprite";
+            o.name = "sprite" + std::to_string(def_.objects.size() + 1);
+            o.image = def_.objects.empty() ? "stageback" : def_.objects[size_t(objSel_)].image;
+            if (sc_) {  // where the view is looking
+                const Vector2 c = view_.toWorld({gfx::W * 0.4f, gfx::H * 0.5f});
+                o.x = std::round(c.x);
+                o.y = std::round(c.y);
+            }
+            if (def_.objects.empty()) {  // the characters keep their places among the objects
+                for (const char* who : {"gf", "dad", "boyfriend"}) {
+                    psych::StageObject m;
+                    m.type = who;
+                    def_.objects.push_back(m);
+                }
+                def_.objects.insert(def_.objects.begin(), o);
+                objSel_ = 0;
+            } else {
+                def_.objects.insert(def_.objects.begin() + objSel_ + 1, o);
+                ++objSel_;
+            }
+            dirty_ = true;
+            buildScene(saveName_);
+        }
+        y += rh + 6;
+        gfx::text(FontId::Ui, "Click an object in the view to pick it; drag to move it.", x, y, 15, kDim);
+    }
+
+    std::string objLabel(size_t i) const {
+        const psych::StageObject& o = def_.objects[i];
+        const std::string t = toLower(o.type);
+        if (t == "gf" || t == "gfgroup") return std::to_string(i) + ": (girlfriend)";
+        if (t == "dad" || t == "dadgroup") return std::to_string(i) + ": (opponent)";
+        if (t == "boyfriend" || t == "boyfriendgroup") return std::to_string(i) + ": (boyfriend)";
+        return std::to_string(i) + ": " + (o.name.empty() ? o.image : o.name);
+    }
+
+    // The sprite on screen follows the object's numbers.
+    void applyObject(size_t i) {
+        if (i >= objSprites_.size() || !objSprites_[i]) return;
+        const psych::StageObject& o = def_.objects[i];
+        scene::Sprite& s = *objSprites_[i];
+        s.x = o.x;
+        s.y = o.y;
+        s.scaleX = o.scaleX;
+        s.scaleY = o.scaleY;
+        if (toLower(o.type) == "square") s.setGraphicSize(o.scaleX, o.scaleY);
+        s.updateHitbox();
+        s.scrollX = o.scrollX;
+        s.scrollY = o.scrollY;
+        s.alpha = o.alpha;
+        s.angle = o.angle;
+        s.flipX = o.flipX;
+        s.flipY = o.flipY;
+        s.antialiasing = o.antialiasing;
+    }
+    void moveObject(int from, int to) {
+        std::swap(def_.objects[size_t(from)], def_.objects[size_t(to)]);
+        objSel_ = to;
+        dirty_ = true;
+        buildScene(saveName_);
+    }
+
+    // Objects: a click picks the front one under the mouse; a drag moves it.
+    void dragObjects(const Input& in) {
+        if (!sc_ || tab_ != 4) return;
+        const Vector2 w = view_.toWorld(ui_.mouse);
+        if (in.mousePressed(MOUSE_BUTTON_LEFT) && !overPanel(ui_) && ui_.focus.empty()) {
+            for (int i = int(objSprites_.size()) - 1; i >= 0; --i) {
+                const scene::SpritePtr& s = objSprites_[size_t(i)];
+                if (!s) continue;
+                const float sx = s->x - s->offsetX, sy = s->y - s->offsetY;
+                if (w.x >= sx && w.x <= sx + s->width && w.y >= sy && w.y <= sy + s->height) {
+                    objSel_ = i;
+                    objDrag_ = true;
+                    dragLast_ = w;
+                    break;
+                }
+            }
+        }
+        if (!objDrag_) return;
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            objDrag_ = false;
+            return;
+        }
+        const float dx = std::round(w.x - dragLast_.x), dy = std::round(w.y - dragLast_.y);
+        if ((dx != 0 || dy != 0) && objSel_ >= 0 && objSel_ < int(def_.objects.size())) {
+            def_.objects[size_t(objSel_)].x += dx;
+            def_.objects[size_t(objSel_)].y += dy;
+            dragLast_.x += dx;
+            dragLast_.y += dy;
+            applyObject(size_t(objSel_));
+            dirty_ = true;
+            leaveArmed_ = false;
+        }
+    }
+
+    // The objects as Psych 0.7.3 writes them.
+    std::string objectsJson() const {
+        std::string o = "[";
+        for (size_t i = 0; i < def_.objects.size(); ++i) {
+            const psych::StageObject& b = def_.objects[i];
+            o += i ? ",\n\t\t{" : "\n\t\t{";
+            o += "\"type\": " + jsonStr(b.type.empty() ? std::string("sprite") : b.type);
+            const std::string t = toLower(b.type);
+            if (t != "gf" && t != "gfgroup" && t != "dad" && t != "dadgroup" && t != "boyfriend" && t != "boyfriendgroup") {
+                o += ", \"name\": " + jsonStr(b.name) + ", \"image\": " + jsonStr(b.image) + ", \"x\": " + jnum(b.x) +
+                     ", \"y\": " + jnum(b.y) + ", \"scale\": " + pair(b.scaleX, b.scaleY) + ", \"scroll\": " + pair(b.scrollX, b.scrollY) +
+                     ", \"alpha\": " + jnum(b.alpha) + ", \"angle\": " + jnum(b.angle) + ", \"color\": " +
+                     jsonStr(TextFormat("#%06X", unsigned(b.color & 0xFFFFFF))) + ", \"flipX\": " + (b.flipX ? "true" : "false") +
+                     ", \"flipY\": " + (b.flipY ? "true" : "false") + ", \"antialiasing\": " + (b.antialiasing ? "true" : "false");
+                if (!b.anims.empty()) {
+                    o += ", \"animations\": [";
+                    for (size_t k = 0; k < b.anims.size(); ++k) {
+                        const psych::AnimDef& a = b.anims[k];
+                        std::string ind;
+                        for (size_t q = 0; q < a.indices.size(); ++q) ind += (q ? ", " : "") + std::to_string(a.indices[q]);
+                        o += std::string(k ? ", " : "") + "{\"anim\": " + jsonStr(a.anim) + ", \"name\": " + jsonStr(a.prefix) +
+                             ", \"fps\": " + jnum(a.fps) + ", \"loop\": " + (a.loop ? "true" : "false") + ", \"indices\": [" + ind +
+                             "], \"offsets\": " + pair(a.offX, a.offY) + "}";
+                    }
+                    o += "]";
+                }
+                if (!b.firstAnim.empty()) o += ", \"firstAnimation\": " + jsonStr(b.firstAnim);
+            }
+            o += "}";
+        }
+        return o + (def_.objects.empty() ? "]" : "\n\t]");
     }
 
     void drawCharTab(int i, float x, float y, float w, float rh) {
@@ -1991,9 +2207,11 @@ private:
             {"camera_girlfriend", pair(def_.camGf[0], def_.camGf[1])},
             {"camera_speed", jnum(def_.camSpeed)},
         };
+        std::vector<std::pair<std::string, std::string>> all = fields;
+        if (!def_.objects.empty()) all.push_back({"objects", objectsJson()});
         const std::string path = mod_.roots[0] + "stages/" + name + ".json";
         std::string err;
-        if (!saveText(path, writeObject(fields, loadedText_), err)) {
+        if (!saveText(path, writeObject(all, loadedText_), err)) {
             status_.set(err, true);
             return;
         }
