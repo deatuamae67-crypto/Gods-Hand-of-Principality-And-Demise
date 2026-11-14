@@ -52,6 +52,12 @@ void afterWindowInit();
 void setVsync(bool on);
 // Waits until the graphics card has done everything asked so far (glFinish).
 void gpuFinish();
+// Android: options for the game given to the intent that started it
+// ("--es args ..."), as if typed after the program's name. Empty elsewhere.
+std::vector<std::string> launchArgs();
+// Rendering mode on Android: copies the video into Movies/GodsHand (Android
+// 10+). Where it went, as the player would say it, or "" (it stays put).
+std::string publishVideo(const std::string& path, const std::string& name);
 // The player picks a folder. Desktop: the system's dialog (blocking); its
 // path comes back ("" if cancelled). Android: the system folder picker
 // opens and the files the Psych Engine interface needs are copied into

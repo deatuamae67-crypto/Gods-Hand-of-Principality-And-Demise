@@ -209,6 +209,14 @@ void App::toggleFullscreen() {
 }
 
 int App::run(int argc, char** argv) {
+    // The command line; on Android, the options given to the intent instead.
+    std::vector<std::string> argStore;
+    for (int i = 0; i < argc; ++i) argStore.push_back(argv[i]);
+    for (std::string& s : platform::launchArgs()) argStore.push_back(std::move(s));
+    std::vector<char*> argPtrs;
+    for (std::string& s : argStore) argPtrs.push_back(s.data());
+    argc = int(argPtrs.size());
+    argv = argPtrs.data();
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
@@ -676,15 +684,15 @@ void App::drawFpsPanel() {
 
 // -------------------------------------------------------- rendering mode --
 
-bool App::wantsRender() const { return !platform::kAndroid && (settings.renderMode || renderCli); }
+bool App::wantsRender() const { return settings.renderMode || renderCli; }
 
 bool App::startRender(const std::string& title, const std::string& diff) {
     if (renderer.active()) return true;
-    if (!ffmpegProbed_) {
+    if (!ffmpegProbed_ && !platform::kAndroid) {  // Android uses the phone's own encoders
         ffmpegPath_ = findProgram(base, "ffmpeg", "-version");
         ffmpegProbed_ = true;
     }
-    if (ffmpegPath_.empty()) {
+    if (ffmpegPath_.empty() && !platform::kAndroid) {
         notify("Rendering mode needs ffmpeg: put ffmpeg next to the game, or install it", 10.0);
         return false;
     }

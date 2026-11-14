@@ -105,10 +105,12 @@ add_library(gh_core STATIC
   src/autochart.cpp
   src/note_raster.cpp
   src/frame_pacer.cpp
+  src/android_encoder.cpp
 )
 target_include_directories(gh_core PUBLIC src)
-# The note renderer's inner loop in x86-64 assembly (SSE2): GAS syntax for GCC
-# and Clang, MASM for MSVC. Other processors use the C++ version.
+# The note renderer's inner loop in assembly: x86-64 (SSE2; GAS syntax for
+# GCC and Clang, MASM for MSVC) and ARM64 (NEON; Android, Apple Silicon, ARM
+# Linux). Other processors use the C++ version.
 if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64|X64)$")
   if(MSVC)
     enable_language(ASM_MASM)
@@ -119,6 +121,11 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD6
   endif()
   target_compile_definitions(gh_core PRIVATE GH_X86_ASM=1)
   message(STATUS "Note renderer: x86-64 assembly")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  enable_language(ASM)
+  target_sources(gh_core PRIVATE src/asm/blend_arm64.S)
+  target_compile_definitions(gh_core PRIVATE GH_ARM_ASM=1)
+  message(STATUS "Note renderer: ARM64 assembly")
 endif()
 target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz)
 if(MSVC)
@@ -264,7 +271,7 @@ if(GH_BUILD_GAME)
     # NativeActivity loads libgodshand.so; raylib's android_main() calls main().
     add_library(godshand SHARED ${GH_GAME_SOURCES})
     target_include_directories(godshand PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
-    target_link_libraries(godshand PRIVATE gh_core raylib android log EGL GLESv2 OpenSLES m)
+    target_link_libraries(godshand PRIVATE gh_core raylib android log EGL GLESv2 OpenSLES mediandk m)
     target_link_options(godshand PRIVATE -u ANativeActivity_onCreate -Wl,--no-undefined -Wl,-z,max-page-size=16384)
   else()
     add_executable(godshand WIN32 ${GH_GAME_SOURCES})

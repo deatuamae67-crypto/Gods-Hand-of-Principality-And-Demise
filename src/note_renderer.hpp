@@ -2,11 +2,12 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Options > GRAPHICS > Note renderer: notes drawn by the graphics card (GPU,
-// the usual way) or by the processor (CPU), with the x86-64 assembly routine
-// or with C++. On the processor every note is a picture made once (with the
-// note skin, its colours and size) and blended into a picture of the screen
-// (note_raster), which reaches the graphics card in one piece. Notes that are
-// turned, mines and lanes turned by scripts stay on the GPU.
+// the usual way) or by the processor (CPU), with the assembly routine (x86-64
+// SSE2, or ARM64 NEON on phones and Apple Silicon) or with C++. On the
+// processor every note is a picture made once (with the note skin, its colours
+// and size) and blended into a picture of the screen (note_raster), which
+// reaches the graphics card in one piece. Notes that are turned, mines and
+// lanes turned by scripts stay on the GPU.
 #pragma once
 
 #include <cstdint>

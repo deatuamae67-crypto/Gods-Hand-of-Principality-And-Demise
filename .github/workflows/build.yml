@@ -64,6 +64,14 @@ jobs:
           cmake -S . -B build-raster -DGH_BUILD_GAME=OFF -DGH_BUILD_TESTS=ON
           cmake --build build-raster --config Release --target gh_tests --parallel
           build-raster/Release/gh_tests.exe --raster
+      - name: Note renderer assembly (ARM64)
+        # The NEON version, checked against the C++ one on Apple Silicon itself
+        # (Android phones run the same routine).
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build-raster -DGH_BUILD_GAME=OFF -DGH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-raster --target gh_tests --parallel
+          build-raster/gh_tests --raster
       - name: Package
         shell: bash
         run: |

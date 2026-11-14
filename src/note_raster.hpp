@@ -18,8 +18,9 @@ namespace gh::raster {
 //   s = src * alpha256 / 256;  dst = s + dst * (255 - s.a) / 255
 // Both versions give exactly the same pixels.
 void blendRowC(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256);
-void blendRowAsm(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256);  // blendRowC without the assembly
-bool haveAsm();  // this build has the x86-64 assembly routine
+void blendRowAsm(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256);  // blendRowC where there is no assembly
+bool haveAsm();  // this build has an assembly routine (x86-64 SSE2 or ARM64 NEON)
+const char* asmName();  // "x86-64 SSE2", "ARM64 NEON" or "" (none)
 // Compares the assembly routine with the C++ one on random pixels; false
 // when they differ (the game then uses the C++ one).
 bool selfTest();

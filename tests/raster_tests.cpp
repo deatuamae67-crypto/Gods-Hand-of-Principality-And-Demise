@@ -1,7 +1,7 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
-// The processor note renderer: the x86-64 assembly blend gives exactly the
+// The processor note renderer: the assembly blend (x86-64 or ARM64) gives exactly the
 // C++ one's pixels, and the layer clips, clears and reports its rows.
 // gh_tests --raster runs only these (the Windows CI does, for the MSVC assembly).
 #include <chrono>
@@ -71,7 +71,8 @@ void testAsmMatchesC() {
         }
     }
     CHECK(mismatches == 0);
-    std::printf("  note renderer: %s\n", raster::haveAsm() ? "x86-64 assembly (SSE2) matches C++" : "C++ only on this processor");
+    if (raster::haveAsm()) std::printf("  note renderer: %s assembly matches C++\n", raster::asmName());
+    else std::printf("  note renderer: C++ only on this processor\n");
 }
 
 void testLayer() {

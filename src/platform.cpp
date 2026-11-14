@@ -221,6 +221,25 @@ jclass activityClass(JNIEnv* env) {
     return env->GetObjectClass(app->activity->clazz);
 }
 
+std::string staticString(const char* name) {
+    Jni j;
+    if (!j.env) return {};
+    jclass cls = activityClass(j.env);
+    if (!cls) return {};
+    std::string out;
+    if (jfieldID f = j.env->GetStaticFieldID(cls, name, "Ljava/lang/String;")) {
+        if (auto s = static_cast<jstring>(j.env->GetStaticObjectField(cls, f))) {
+            const char* u = j.env->GetStringUTFChars(s, nullptr);
+            if (u) out = u;
+            j.env->ReleaseStringUTFChars(s, u);
+            j.env->DeleteLocalRef(s);
+        }
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    return out;
+}
+
 int staticInt(const char* name, int fallback) {
     Jni j;
     if (!j.env) return fallback;
@@ -323,6 +342,45 @@ void setVsync(bool on) {
 }
 
 void gpuFinish() { glFinish(); }
+
+std::vector<std::string> launchArgs() {
+    std::vector<std::string> out;
+    const std::string s = staticString("launchArgs");
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && s[i] == ' ') ++i;
+        size_t e = i;
+        while (e < s.size() && s[e] != ' ') ++e;
+        if (e > i) out.push_back(s.substr(i, e - i));
+        i = e;
+    }
+    return out;
+}
+
+std::string publishVideo(const std::string& path, const std::string& name) {
+    Jni j;
+    if (!j.env) return {};
+    jclass cls = activityClass(j.env);
+    if (!cls) return {};
+    std::string out;
+    if (jmethodID m = j.env->GetMethodID(cls, "publishVideo", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")) {
+        jstring jp = j.env->NewStringUTF(path.c_str()), jn = j.env->NewStringUTF(name.c_str());
+        auto r = static_cast<jstring>(j.env->CallObjectMethod(GetAndroidApp()->activity->clazz, m, jp, jn));
+        std::string err;
+        if (!j.failed(err, "publishing the video") && r) {
+            const char* u = j.env->GetStringUTFChars(r, nullptr);
+            if (u) out = u;
+            j.env->ReleaseStringUTFChars(r, u);
+        }
+        if (r) j.env->DeleteLocalRef(r);
+        j.env->DeleteLocalRef(jp);
+        j.env->DeleteLocalRef(jn);
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    if (!out.empty()) logInfo("video in " + out);
+    return out;
+}
 
 void afterWindowInit() {
     g_background = false;
@@ -454,6 +512,8 @@ void setVsync(bool on) {
 }
 
 void gpuFinish() { glFinish(); }
+std::vector<std::string> launchArgs() { return {}; }
+std::string publishVideo(const std::string&, const std::string&) { return {}; }
 bool inBackground() { return false; }
 bool takeResumed() { return false; }
 void rememberVolume(float) {}

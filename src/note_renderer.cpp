@@ -33,8 +33,9 @@ NoteRenderer::~NoteRenderer() { unload(); }
 const char* NoteRenderer::name() const {
     if (mode_ == kGpu) return auto_ ? "Auto: GPU" : "GPU";
     if (mode_ == kCpuAsm) {
-        if (!usingAsm()) return auto_ ? "Auto: CPU (C++, no x86 ASM here)" : "CPU (C++, no x86 ASM here)";
-        return auto_ ? "Auto: CPU (x86 ASM)" : "CPU (x86 ASM)";
+        if (!usingAsm()) return auto_ ? "Auto: CPU (C++, no assembly here)" : "CPU (C++, no assembly here)";
+        static const std::string a = std::string("CPU (") + raster::asmName() + " ASM)", b = "Auto: " + a;
+        return auto_ ? b.c_str() : a.c_str();
     }
     return "CPU (C++)";
 }
@@ -73,7 +74,7 @@ void NoteRenderer::prepare(int maxPerFrame) {
     if (mode_ == kCpuAsm && !asmChecked_) {
         asmChecked_ = true;
         asmOk_ = raster::selfTest();  // a wrong result never reaches the screen
-        if (!asmOk_) platform::log("note renderer: the x86-64 assembly differs from C++; using C++");
+        if (!asmOk_) platform::log(std::string("note renderer: the ") + raster::asmName() + " assembly differs from C++; using C++");
     }
     const uint32_t look = psychUi().generation();
     if (look != look_) {

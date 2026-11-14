@@ -11,6 +11,13 @@
 #if GH_X86_ASM
 // src/asm/blend_x64.S (GCC, Clang) or src/asm/blend_x64.asm (MSVC).
 extern "C" void gh_blend_row_sse2(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256);
+#define GH_ASM_ROW gh_blend_row_sse2
+#define GH_ASM_NAME "x86-64 SSE2"
+#elif GH_ARM_ASM
+// src/asm/blend_arm64.S (Android, Apple Silicon, ARM Linux).
+extern "C" void gh_blend_row_neon(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256);
+#define GH_ASM_ROW gh_blend_row_neon
+#define GH_ASM_NAME "ARM64 NEON"
 #endif
 
 namespace gh::raster {
@@ -33,18 +40,26 @@ void blendRowC(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256) 
 }
 
 void blendRowAsm(uint32_t* dst, const uint32_t* src, size_t n, uint32_t alpha256) {
-#if GH_X86_ASM
-    gh_blend_row_sse2(dst, src, n, alpha256);
+#if defined(GH_ASM_ROW)
+    GH_ASM_ROW(dst, src, n, alpha256);
 #else
     blendRowC(dst, src, n, alpha256);
 #endif
 }
 
 bool haveAsm() {
-#if GH_X86_ASM
+#if defined(GH_ASM_ROW)
     return true;
 #else
     return false;
+#endif
+}
+
+const char* asmName() {
+#if defined(GH_ASM_ROW)
+    return GH_ASM_NAME;
+#else
+    return "";
 #endif
 }
 
