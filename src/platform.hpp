@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // What differs between desktop and Android: where the game keeps its files,
 // what to do when the app goes to the background, and how files are
 // downloaded. On desktop most of these do nothing.

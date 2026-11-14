@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // The editors' widgets (chart, character, stage and event editors): an
 // immediate-mode panel toolkit drawn in canvas units. Each frame the editor
 // fills in the mouse, clicks and wheel, then calls the widgets, which draw

@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Timestamped keyboard/gamepad input. The main loop polls far more often than
 // it renders, so every press carries a ~1 ms accurate timestamp that gameplay
 // converts into song time.

@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Mod packs screen (Freeplay: M): downloads the packs published on the
 // game's "mods" release (with the system's curl; on Android through Java)
 // and installs them.

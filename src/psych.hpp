@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Psych Engine / FNF content formats: Sparrow and Packer atlases, character
 // and stage JSON, chart events, easing and colours. Pure data, no rendering,
 // so every parser here is covered by the headless tests.

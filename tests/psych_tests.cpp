@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Headless tests for the Psych compatibility layer: atlases, character and
 // stage JSON, events, the scene model and the Lua API. Also a corpus runner:
 // gh_tests --psych-corpus <dir> loads every atlas, character, stage and

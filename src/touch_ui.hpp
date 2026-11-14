@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // On-screen controls for touchscreens: arrows, OK and BACK for the menus,
 // labelled buttons each screen can ask for (MODS, PAUSE...) and, during a
 // song, the lanes themselves. Everything presses the same key codes a

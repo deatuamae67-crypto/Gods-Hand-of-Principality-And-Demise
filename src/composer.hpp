@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Procedural composer for the built-in songs. A song is described by a short
 // definition (tempo, key, structure); compose() turns it into audio stems and
 // melody data, and buildChart() derives playable charts from that melody.

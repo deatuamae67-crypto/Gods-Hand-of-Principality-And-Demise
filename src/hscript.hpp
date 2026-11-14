@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // HScript: the Haxe subset Psych Engine runs through runHaxeCode() and .hx
 // script files. A small tree-walking interpreter (expressions, var/final,
 // functions and arrow functions, closures, if/while/do/for/switch/try,

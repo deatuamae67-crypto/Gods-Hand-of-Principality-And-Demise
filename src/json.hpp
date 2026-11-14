@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Compact JSON DOM built for speed on very large FNF charts (millions of numbers).
 // All values live in one flat array; arrays/objects reference a contiguous run of
 // child indices, so parsing allocates only a handful of growing vectors.
