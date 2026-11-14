@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Options menu and audio offset calibration.
 #include <array>
@@ -97,6 +96,11 @@ public:
             {Row::Choice, "Note detail", "Spam charts: Adaptive draws notes stacked a few pixels apart once while the frame rate is "
              "under 60 (every note is still played). Full: every pixel.", nullptr, nullptr, 0, 0, 0, &s.noteDetail, {0, 1},
              {"Adaptive", "Full"}},
+            {Row::Choice, "Note renderer", "What draws the notes. Auto: the graphics card, or the processor's assembly when "
+             "OpenGL itself runs on the processor (llvmpipe, SwiftShader...), where that is faster. GPU: the graphics card. "
+             "CPU (x86 ASM): the processor, with SSE2 assembly (x86-64; other processors use C++). CPU (C++): the processor, "
+             "in C++. Turned notes and mines stay on the GPU. F3 in a song shows the time it takes.", nullptr, nullptr, 0, 0,
+             0, &s.noteRenderer, {3, 0, 1, 2}, {"Auto", "GPU", "CPU (x86 ASM)", "CPU (C++)"}},
             {Row::Header, "INTERFACE", ""},
             {Row::Choice, "Note counter", "Notes hit so far, under the score: your side only, or both sides added up.", nullptr,
              nullptr, 0, 0, 0, &s.noteCounter, {0, 1, 2}, {"Off", "Your side", "Both sides"}},

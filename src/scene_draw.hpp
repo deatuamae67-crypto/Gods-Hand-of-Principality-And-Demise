@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Renders a scene::Scene with raylib, reproducing Flixel's sprite transform
 // (trimmed atlas frames, origin, scale, rotation, flips, scroll factors) and

@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Application shell: main loop, global services and the game-state machine.
 #pragma once
@@ -35,6 +34,8 @@ public:
     // This screen uses the key itself (a lane, typing, rebinding), so the
     // game-wide volume keys leave it alone.
     virtual bool keyReserved(int key) const { return false; }
+    // More for godshand --perf (a song: how its notes were drawn).
+    virtual std::string perfInfo() const { return {}; }
 };
 
 struct Modifiers {

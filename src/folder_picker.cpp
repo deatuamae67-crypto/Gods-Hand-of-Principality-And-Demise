@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // The system's "choose a folder" dialog on desktops. Kept apart from the rest
 // of the platform code: windows.h and raylib.h do not mix.

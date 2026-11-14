@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "psych_ui.hpp"
 
@@ -118,12 +117,14 @@ const char* kArrows[4] = {"arrowLEFT", "arrowDOWN", "arrowUP", "arrowRIGHT"};
 }  // namespace
 
 void PsychUi::setPalette(const uint32_t colors[4][3]) {
+    ++generation_;
     for (int d = 0; d < 4; ++d)
         for (int k = 0; k < 3; ++k) palette_[d][k] = colors[d][k] & 0xFFFFFFu;
 }
 
 void PsychUi::setSmooth(bool smooth) {
     smooth_ = smooth;
+    ++generation_;
     const int filter = smooth ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT;
     for (Texture2D* t : {&notes_, &bar_, &timeBar_, &alphabet_})
         if (t->id) SetTextureFilter(*t, filter);
@@ -312,6 +313,7 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
 }
 
 void PsychUi::unload() {
+    ++generation_;
     unloadTex(notes_);
     if (paletteShader_.id && paletteShader_.id != rlGetShaderIdDefault() && IsWindowReady()) UnloadShader(paletteShader_);
     paletteShader_ = Shader{};

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 1.6.3 LANGUAGES C CXX)
+project(GodsHand VERSION 1.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -103,8 +103,22 @@ add_library(gh_core STATIC
   src/replay.cpp
   src/mod_install.cpp
   src/autochart.cpp
+  src/note_raster.cpp
 )
 target_include_directories(gh_core PUBLIC src)
+# The note renderer's inner loop in x86-64 assembly (SSE2): GAS syntax for GCC
+# and Clang, MASM for MSVC. Other processors use the C++ version.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64|X64)$")
+  if(MSVC)
+    enable_language(ASM_MASM)
+    target_sources(gh_core PRIVATE src/asm/blend_x64.asm)
+  else()
+    enable_language(ASM)
+    target_sources(gh_core PRIVATE src/asm/blend_x64.S)
+  endif()
+  target_compile_definitions(gh_core PRIVATE GH_X86_ASM=1)
+  message(STATUS "Note renderer: x86-64 assembly")
+endif()
 target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz)
 if(MSVC)
   target_compile_options(gh_core PRIVATE /W3 /utf-8)
@@ -113,7 +127,7 @@ else()
 endif()
 
 if(GH_BUILD_TESTS)
-  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp)
+  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/raster_tests.cpp)
   target_link_libraries(gh_tests PRIVATE gh_core)
   enable_testing()
   add_test(NAME core COMMAND gh_tests)
@@ -219,6 +233,7 @@ if(GH_BUILD_GAME)
     src/platform.cpp
     src/folder_picker.cpp
     src/psych_ui.cpp
+    src/note_renderer.cpp
     src/sysinfo.cpp
     src/touch_ui.cpp
   )

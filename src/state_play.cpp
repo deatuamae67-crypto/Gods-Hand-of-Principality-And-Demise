@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
@@ -109,6 +108,10 @@ void PlayState::enter() {
 }
 
 void PlayState::update(double dt) {
+    // Note renderer: pictures of the notes for the processor, made here where
+    // no camera or render target is active.
+    noteRaster_.setMode(app().settings.noteRenderer);
+    noteRaster_.prepare();
     App& a = app();
     const double now = a.now;
     if (phase_ == Phase::Loading) {
@@ -1046,6 +1049,14 @@ void PlayState::drawMine(Vector2 c, float size, float alpha, float rot) {
     DrawLineEx({c.x - r, c.y + r}, {c.x + r, c.y - r}, 3, fade(Color{255, 90, 100, 255}, alpha));
 }
 
+std::string PlayState::perfInfo() const {
+    std::string s = std::string("notes ") + std::to_string(drawnNotes_) + " drawn, renderer " + noteRaster_.name();
+    if (noteRaster_.cpu())
+        s += TextFormat(" (%d on the CPU, %.2f Mpx, %.2f ms)", noteRaster_.lastNotes(), double(noteRaster_.lastPixels()) / 1e6,
+                        noteRaster_.lastMs());
+    return s;
+}
+
 void PlayState::adaptNoteGap() {
     App& a = app();
     if (a.settings.noteDetail != 0) {
@@ -1083,6 +1094,10 @@ void PlayState::drawLanes() {
     const double pxPerMs = 0.45 * scrollSpeed() / rate_;
     const double reach = (gfx::H * 1.5 + ns) / pxPerMs;
     drawnNotes_ = candidateNotes_ = 0;
+    // Note renderer: CPU modes collect the note heads into one picture,
+    // drawn over the lanes at the end.
+    const bool cpuNotes = noteRaster_.cpu();
+    if (cpuNotes) noteRaster_.beginFrame(gfx::canvasScale());
     for (int side = 0; side < 2; ++side) {
         if (side == 0 && !s.opponentNotes) continue;  // Options: opponent notes (Psych hides their receptors and notes)
         for (int lane = 0; lane < K; ++lane) {
@@ -1182,7 +1197,8 @@ void PlayState::drawLanes() {
                     if (al <= 0.002f) continue;
                     const Vector2 p{c.x + (nv ? nv->offsetX : 0.0f), y + (nv ? nv->offsetY : 0.0f)};
                     if (n.kind == kMine) drawMine(p, size, al, st.angle);
-                    else if (!ui.note(dir, p, size, al, st.angle)) gfx::drawNote(dir, p, size, al, 1.0f, st.angle);
+                    else if (cpuNotes && !rotated && st.angle == 0.0f && noteRaster_.note(dir, p, size, al, ui.active())) {
+                    } else if (!ui.note(dir, p, size, al, st.angle)) gfx::drawNote(dir, p, size, al, 1.0f, st.angle);
                 }
                 ui.endDir();
             }
@@ -1192,6 +1208,7 @@ void PlayState::drawLanes() {
             }
         }
     }
+    if (cpuNotes) noteRaster_.endFrame();
 }
 
 bool PlayState::hudShown(const char* name, float* alpha) const {
@@ -1844,6 +1861,10 @@ void PlayState::drawDebugOverlay() {
     rows.push_back({"AUDIO", (audio.empty() ? std::string("none") : audio) + (a.mixer.waitingForAudio() ? "  |  WAITING" : "")});
     rows.push_back({"NOTES", "drawn " + num(drawnNotes_) + " of " + num(candidateNotes_) +
                                  TextFormat("  |  gap %.0f px (%s)", noteGap_, a.settings.noteDetail ? "Full" : "Adaptive")});
+    rows.push_back({"", std::string("renderer ") + noteRaster_.name() +
+                            (noteRaster_.cpu() ? TextFormat("  |  %d notes, %.2f Mpx, %.2f ms", noteRaster_.lastNotes(),
+                                                            double(noteRaster_.lastPixels()) / 1e6, noteRaster_.lastMs())
+                                               : "")});
     rows.push_back({"", "judged " + num(double(session_.judged())) + "  combo " + num(double(session_.combo)) + "  misses " +
                             num(double(session_.misses)) + "  opponent " + num(double(session_.opponentHits)) + "  NPS " +
                             num(double(nps_))});

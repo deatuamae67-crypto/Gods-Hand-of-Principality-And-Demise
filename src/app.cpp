@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "app.hpp"
 #include "psych_ui.hpp"
@@ -521,9 +520,12 @@ void App::frame() {
     ++perfFrames_;
     if (now - perfSince_ >= 1.0) {
         worstFrameMs = perfWorst_;
-        if (perf && perfFrames_ > 0)
-            std::printf("[perf] %d fps, update %.2f ms, draw %.2f ms, worst frame %.1f ms\n", perfFrames_,
-                        perfUpd_ / perfFrames_, perfDraw_ / perfFrames_, perfWorst_);
+        if (perf && perfFrames_ > 0) {
+            const std::string more = state_ ? state_->perfInfo() : std::string();
+            std::printf("[perf] %d fps, update %.2f ms, draw %.2f ms, worst frame %.1f ms%s%s\n", perfFrames_,
+                        perfUpd_ / perfFrames_, perfDraw_ / perfFrames_, perfWorst_, more.empty() ? "" : ", ", more.c_str());
+            std::fflush(stdout);
+        }
         perfSince_ = now;
         perfFrames_ = 0;
         perfUpd_ = perfDraw_ = perfWorst_ = 0;

@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Persistent options, key bindings and best scores (plain text files).
 #pragma once
@@ -35,6 +34,7 @@ struct Settings {
     // once while the frame rate is under its target; all are still played),
     // 1 full (every pixel).
     int noteDetail = 0;
+    int noteRenderer = 3;  // 0 GPU, 1 CPU with x86-64 assembly, 2 CPU with C++, 3 Auto
     bool luaNoteCallbacks = true;  // goodNoteHit, opponentNoteHit, noteMiss... (OFF: faster spam charts)
     // Rendering mode (desktop): songs play by themselves and are recorded to a
     // video with ffmpeg, frame by frame (render_mode.hpp).

@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // The "Psych Engine" interface style: notes, receptors, holds, ratings,
 // combo numbers, countdown, health bar, font, sounds and menu music taken
@@ -30,9 +29,15 @@ public:
     void unload();
     // Before load(): Psych's "Note Skins" option (images/noteSkins/NOTE_assets-<skin>.png,
     // "" = NOTE_assets) and "Note Colors" (per direction: main, highlight, outline).
-    void setNoteSkin(const std::string& skin) { skin_ = skin; }
+    void setNoteSkin(const std::string& skin) {
+        skin_ = skin;
+        ++generation_;
+    }
     void setPalette(const uint32_t colors[4][3]);
     bool active() const { return active_; }
+    // Changes whenever the notes may look different (loaded, skin, colours,
+    // smoothing): pictures of notes made before are out of date.
+    uint32_t generation() const { return generation_; }
     // Psych's antialiasing option: smooth (bilinear) or sharp scaling of the pictures.
     void setSmooth(bool smooth);
     void setActive(bool on) { active_ = on; }
@@ -96,6 +101,7 @@ private:
     std::vector<Frame> frames(const std::string& prefix) const;
 
     bool active_ = false;
+    uint32_t generation_ = 0;
     std::string root_, skin_;
     uint32_t palette_[4][3] = {{0xC24B99, 0xFFFFFF, 0x3C1F56},
                                {0x00FFFF, 0xFFFFFF, 0x1542B7},
