@@ -43,6 +43,11 @@ public:
     void drawFiltered(scene::Scene& sc, const std::vector<scene::ShaderPtr>& filters, const RenderTexture2D& src,
                       Rectangle dest);
     std::vector<std::string> errors;  // shader problems, shown by the play state
+    // Sprites with more than one shader (addSpriteShader): each frame their
+    // current frame goes through the shaders in order, each on what the one
+    // before it drew, into a texture the cameras then draw in its place.
+    // Called once a frame before the cameras, outside any canvas or texture.
+    void prepareShaderLayers(scene::Scene& sc);
     // Psych's Anti-Aliasing option: OFF draws every picture with sharp pixels.
     static inline bool smoothScaling = true;
 
@@ -59,6 +64,13 @@ private:
     std::map<std::string, CompiledShader> shaders_;
     RenderTexture2D pingPong_[2]{};
     scene::Scene* sc_ = nullptr;
+    struct LayerTarget {
+        RenderTexture2D rt[2]{};
+        int result = -1;      // which of rt holds the finished picture
+        unsigned frame = 0;   // prepared in this frame (layerFrame_)
+    };
+    std::map<const scene::Sprite*, LayerTarget> layers_;
+    unsigned layerFrame_ = 0;
 
     void drawSprite(const scene::Sprite& s, const scene::Camera& c);
     Texture2D* store(const std::string& file, Image img);  // uploads img (and frees it)

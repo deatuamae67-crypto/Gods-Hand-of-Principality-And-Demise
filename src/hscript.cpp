@@ -383,6 +383,105 @@ private:
         fail("expected ';'");
     }
 
+    // for (i in a...b) / for (x in list) / for (k => v in map): the loop
+    // without its body.
+    NodeP forHeader() {
+        ++p_;
+        expect("(");
+        const std::string a = ident();
+        NodeP n;
+        if (accept("=>")) {
+            n = make(NK::ForKV);
+            n->names = {a, ident()};
+        } else {
+            n = make(NK::For);
+            n->names = {a};
+        }
+        if (!isId("in")) fail("expected 'in'");
+        ++p_;
+        NodeP it = expr();
+        if (accept("...")) {
+            auto r = make(NK::Range);
+            r->kids.push_back(std::move(it));
+            r->kids.push_back(expr());
+            it = std::move(r);
+        }
+        n->kids.push_back(std::move(it));
+        expect(")");
+        return n;
+    }
+
+    NodeP ident(const char* name) {
+        auto n = make(NK::Ident);
+        n->str = name;
+        return n;
+    }
+
+    // The loops of a comprehension: for / while / if around the value that
+    // goes into the result (`v`, or `k => v` for a map).
+    NodeP compLoop(bool& isMap) {
+        if (isId("for")) {
+            NodeP n = forHeader();
+            n->kids.push_back(compLoop(isMap));
+            return n;
+        }
+        if (isId("while") || isId("if")) {
+            const bool loop = isId("while");
+            ++p_;
+            auto n = make(loop ? NK::While : NK::If);
+            expect("(");
+            n->kids.push_back(expr());
+            expect(")");
+            n->kids.push_back(compLoop(isMap));
+            return n;
+        }
+        if (isOp("{")) {  // for (i in 0...3) { i * 2; }
+            ++p_;
+            NodeP v = compLoop(isMap);
+            accept(";");
+            expect("}");
+            return v;
+        }
+        NodeP v = expr();
+        auto add = make(NK::Field);
+        add->kids.push_back(ident("__gh_comp"));
+        auto call = make(NK::Call);
+        if (accept("=>")) {
+            isMap = true;
+            add->str = "set";
+            call->kids.push_back(std::move(add));
+            call->kids.push_back(std::move(v));
+            call->kids.push_back(expr());
+        } else {
+            add->str = "push";
+            call->kids.push_back(std::move(add));
+            call->kids.push_back(std::move(v));
+        }
+        return call;
+    }
+
+    // [for (i in 0...3) i * i], [for (x in a) if (x > 0) x], [for (k in m) k => f(k)]:
+    // a function, run at once, that fills an array (or a map) from the loop.
+    NodeP comprehension() {
+        bool isMap = false;
+        NodeP loop = compLoop(isMap);
+        expect("]");
+        auto body = make(NK::Block);
+        auto decl = make(NK::Var);
+        decl->names.push_back("__gh_comp");
+        decl->kids.push_back(make(isMap ? NK::MapLit : NK::ArrayLit));
+        body->kids.push_back(std::move(decl));
+        body->kids.push_back(std::move(loop));
+        auto ret = make(NK::Return);
+        ret->kids.push_back(ident("__gh_comp"));
+        body->kids.push_back(std::move(ret));
+        auto fn = make(NK::Func);
+        fn->kids.push_back(std::move(body));
+        auto call = make(NK::Call);
+        call->kids.push_back(std::move(fn));
+        return call;
+    }
+
     NodeP funcRest(const std::string& name) {
         auto f = make(NK::Func);
         f->str = name;
@@ -401,7 +500,8 @@ private:
         if (isOp("{")) {
             f->kids.push_back(block());
         } else {
-            f->kids.push_back(expr());  // function(x) return x; or expression body
+            if (isId("return")) ++p_;  // function(x) return x * 2
+            f->kids.push_back(expr());  // or an expression body
             f->flag = true;
         }
         for (auto& d : defaults) f->kids.push_back(std::move(d));
@@ -470,28 +570,7 @@ private:
                 return n;
             }
             if (w == "for") {
-                ++p_;
-                expect("(");
-                const std::string a = ident();
-                NodeP n;
-                if (accept("=>")) {
-                    n = make(NK::ForKV);
-                    n->names = {a, ident()};
-                } else {
-                    n = make(NK::For);
-                    n->names = {a};
-                }
-                if (!isId("in")) fail("expected 'in'");
-                ++p_;
-                NodeP it = expr();
-                if (accept("...")) {
-                    auto r = make(NK::Range);
-                    r->kids.push_back(std::move(it));
-                    r->kids.push_back(expr());
-                    it = std::move(r);
-                }
-                n->kids.push_back(std::move(it));
-                expect(")");
+                NodeP n = forHeader();
                 n->kids.push_back(statement());
                 return n;
             }
@@ -889,6 +968,7 @@ private:
             }
             if (tk.s == "[") {
                 ++p_;
+                if (isId("for") || isId("while")) return comprehension();
                 auto arr = make(NK::ArrayLit);
                 bool isMap = false;
                 while (!isOp("]")) {

@@ -489,6 +489,66 @@ int l_addLuaSprite(lua_State* L) {
     return 0;
 }
 
+void measureText(Sprite& s);
+std::string resolveFont(lua_State* L, const std::string& name);
+
+// Psych 0.7.3: createInstance(tag, className, {args}) makes an object as
+// `new className(args)` would, kept under `tag`; addInstance(tag, front)
+// puts it on screen. The extra character scripts make characters this way.
+int l_createInstance(lua_State* L) {
+    const std::string tag = str(L, 1);
+    std::string cls = str(L, 2);
+    if (const size_t d = cls.rfind('.'); d != std::string::npos) cls = cls.substr(d + 1);
+    std::vector<Value> args;
+    if (lua_istable(L, 3)) {
+        const lua_Integer n = luaL_len(L, 3);
+        for (lua_Integer k = 1; k <= n; ++k) {
+            lua_geti(L, 3, k);
+            args.push_back(toValue(L, -1));
+            lua_pop(L, 1);
+        }
+    }
+    auto argNum = [&](size_t i, double d = 0) { return i < args.size() ? scene::toNum(args[i], d) : d; };
+    auto argStr = [&](size_t i, const std::string& d = "") { return i < args.size() ? scene::toStr(args[i]) : d; };
+    if (tag.empty()) return retBool(L, false);
+    if (cls == "Character" || cls == "Boyfriend") {  // new Character(x, y, name, isPlayer)
+        const bool player = cls == "Boyfriend" || (args.size() > 3 && scene::toBool(args[3]));
+        return retBool(L, G(L).makeExtraCharacter(tag, argStr(2, "bf"), player, float(argNum(0)), float(argNum(1))));
+    }
+    if (cls == "FlxSprite" || cls == "ModchartSprite" || cls == "FlxSkewedSprite" || cls == "FlxBackdrop") {
+        SpritePtr sp = newSprite(L, tag);
+        sp->x = float(argNum(0));
+        sp->y = float(argNum(1));
+        if (args.size() > 2 && std::holds_alternative<std::string>(args[2]))
+            if (auto g = SC(L).gfx.image(argStr(2))) sp->setGraphic(g);
+        return retBool(L, true);
+    }
+    if (cls == "FlxText") {  // new FlxText(x, y, fieldWidth, text, size)
+        SpritePtr sp = newSprite(L, tag);
+        sp->kind = scene::Kind::Text;
+        sp->x = float(argNum(0));
+        sp->y = float(argNum(1));
+        sp->text.fieldWidth = float(argNum(2));
+        sp->text.text = argStr(3);
+        sp->text.size = float(argNum(4, 8));
+        sp->text.font = resolveFont(L, "vcr.ttf");
+        measureText(*sp);
+        return retBool(L, true);
+    }
+    warn(L, "createInstance: class " + str(L, 2) + " is not available here");
+    return retBool(L, false);
+}
+
+// addInstance(tag, front): in front of everything, or behind the characters.
+int l_addInstance(lua_State* L) {
+    scene::Scene& sc = SC(L);
+    auto it = sc.objects.find(str(L, 1));
+    if (it == sc.objects.end()) return retBool(L, false);
+    if (boolean(L, 2, false)) sc.addFront(it->second);
+    else sc.addBehindCharacters(it->second);
+    return retBool(L, true);
+}
+
 int l_removeLuaSprite(lua_State* L) {
     scene::Scene& sc = SC(L);
     auto it = sc.objects.find(str(L, 1));
@@ -684,7 +744,7 @@ int l_addLuaText(lua_State* L) {
 
 bool tweenTargetExists(lua_State* L, const std::string& target, const char* field) {
     Value v;
-    return SC(L).getProp(target + "." + field, v);
+    return getAny(L, target + "." + field, v);  // HUD objects too (iconP1, scoreTxt...)
 }
 
 void startFieldTween(lua_State* L, const std::string& tag, const std::string& target, const char* field, double to,
@@ -718,7 +778,7 @@ int l_doTweenScaleY(lua_State* L) { return tweenField(L, "scale.y"); }
 int l_doTweenColor(lua_State* L) {
     const std::string target = str(L, 2);
     Value cur;
-    if (!SC(L).getProp(target + ".color", cur)) { warn(L, "tween target not found: " + target); return 0; }
+    if (!getAny(L, target + ".color", cur)) { warn(L, "tween target not found: " + target); return 0; }
     scene::Tween tw;
     tw.tag = str(L, 1);
     tw.target = target;
@@ -765,7 +825,7 @@ int l_startTween(lua_State* L) {
                 const std::string key = lua_tostring(L, -2);
                 if (key == "color") {
                     Value cur;
-                    SC(L).getProp(tw.target + ".color", cur);
+                    getAny(L, tw.target + ".color", cur);
                     tw.isColor = true;
                     tw.c0 = uint32_t(int64_t(scene::toNum(cur))) & 0xFFFFFF;
                     tw.c1 = uint32_t(int64_t(lua_tonumber(L, -1))) & 0xFFFFFF;
@@ -1230,12 +1290,42 @@ bool loadShaderSource(lua_State* L, const std::string& name) {
 
 int l_initLuaShader(lua_State* L) { return retBool(L, loadShaderSource(L, str(L, 1))); }
 
-scene::ShaderInstance* shaderOf(lua_State* L, int i) {
+// A sprite's shader layers, first to last: `shader`, then `moreShaders`.
+std::vector<scene::ShaderPtr> layersOf(const Sprite& s) {
+    std::vector<scene::ShaderPtr> v;
+    if (s.shader) v.push_back(s.shader);
+    v.insert(v.end(), s.moreShaders.begin(), s.moreShaders.end());
+    return v;
+}
+void setLayers(Sprite& s, std::vector<scene::ShaderPtr> v) {
+    s.shader = v.empty() ? nullptr : v.front();
+    s.moreShaders.assign(v.empty() ? v.end() : v.begin() + 1, v.end());
+}
+
+// The shaders setShaderFloat and friends reach: every layer of a sprite, or
+// only the one the optional argument `layerArg` names (its number from 1, or
+// its shader's name); else a camera shader by its index (JS Engine).
+std::vector<scene::ShaderInstance*> shadersOf(lua_State* L, int i, int layerArg) {
+    std::vector<scene::ShaderInstance*> out;
     const std::string name = str(L, i);
-    Sprite* s = obj(L, name);
-    if (s && s->shader) return s->shader.get();
+    if (Sprite* s = obj(L, name)) {
+        const std::vector<scene::ShaderPtr> all = layersOf(*s);
+        const int t = lua_type(L, layerArg);
+        for (size_t k = 0; k < all.size(); ++k) {
+            const bool pick = t == LUA_TNONE || t == LUA_TNIL ? true
+                              : t == LUA_TNUMBER          ? lua_tointeger(L, layerArg) == lua_Integer(k + 1)
+                                                          : all[k]->name == str(L, layerArg);
+            if (pick) out.push_back(all[k].get());
+        }
+        if (!all.empty()) return out;
+    }
     auto it = SC(L).cameraShaders.find(name);  // JS Engine setCameraShader index
-    return it != SC(L).cameraShaders.end() ? it->second.get() : nullptr;
+    if (it != SC(L).cameraShaders.end()) out.push_back(it->second.get());
+    return out;
+}
+scene::ShaderInstance* shaderOf(lua_State* L, int i, int layerArg = 4) {
+    const std::vector<scene::ShaderInstance*> v = shadersOf(L, i, layerArg);
+    return v.empty() ? nullptr : v.front();
 }
 
 // JS Engine: a mod shader (shaders/<name>.frag) on a camera, addressed by
@@ -1276,19 +1366,101 @@ int l_removeCameraShader(lua_State* L) {
     return retBool(L, removed);
 }
 
-int l_setSpriteShader(lua_State* L) {
+int l_setSpriteShader(lua_State* L) {  // the sprite's only shader (Psych)
     Sprite* s = obj(L, str(L, 1));
     const std::string name = str(L, 2);
     if (!s || !loadShaderSource(L, name)) return retBool(L, false);
     s->shader = std::make_shared<scene::ShaderInstance>();
     s->shader->name = name;
+    s->moreShaders.clear();
     return retBool(L, true);
 }
 
+// Shader layers (issue #22): addSpriteShader(obj, shader[, position]) puts
+// one more shader on a sprite (last, or at `position` from 1) and returns its
+// position; each layer works on what the one before it drew.
+int l_addSpriteShader(lua_State* L) {
+    Sprite* s = obj(L, str(L, 1));
+    const std::string name = str(L, 2);
+    if (!s || !loadShaderSource(L, name)) return retNum(L, 0);
+    std::vector<scene::ShaderPtr> v = layersOf(*s);
+    auto inst = std::make_shared<scene::ShaderInstance>();
+    inst->name = name;
+    const int pos = lua_isnumber(L, 3) ? clampv(int(lua_tointeger(L, 3)), 1, int(v.size()) + 1) : int(v.size()) + 1;
+    v.insert(v.begin() + (pos - 1), inst);
+    setLayers(*s, std::move(v));
+    return retNum(L, pos);
+}
+
+// removeSpriteShader(obj): every shader, as in Psych; removeSpriteShader(obj,
+// layer): only that layer (its position, or every layer of that shader).
 int l_removeSpriteShader(lua_State* L) {
     Sprite* s = obj(L, str(L, 1));
     if (!s) return retBool(L, false);
-    s->shader.reset();
+    if (lua_isnoneornil(L, 2)) {
+        s->shader.reset();
+        s->moreShaders.clear();
+        return retBool(L, true);
+    }
+    std::vector<scene::ShaderPtr> v = layersOf(*s);
+    const size_t before = v.size();
+    if (lua_type(L, 2) == LUA_TNUMBER) {
+        const lua_Integer k = lua_tointeger(L, 2);
+        if (k >= 1 && k <= lua_Integer(v.size())) v.erase(v.begin() + std::ptrdiff_t(k - 1));
+    } else {
+        const std::string n = str(L, 2);
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const scene::ShaderPtr& p) { return p->name == n; }), v.end());
+    }
+    const bool removed = v.size() != before;
+    setLayers(*s, std::move(v));
+    return retBool(L, removed);
+}
+
+// getSpriteShaders(obj): the shader names, first layer first.
+int l_getSpriteShaders(lua_State* L) {
+    lua_newtable(L);
+    if (Sprite* s = obj(L, str(L, 1))) {
+        const std::vector<scene::ShaderPtr> v = layersOf(*s);
+        for (size_t k = 0; k < v.size(); ++k) {
+            lua_pushstring(L, v[k]->name.c_str());
+            lua_rawseti(L, -2, lua_Integer(k + 1));
+        }
+    }
+    return 1;
+}
+
+// moveSpriteShader(obj, from, to): a layer to another position (from 1).
+int l_moveSpriteShader(lua_State* L) {
+    Sprite* s = obj(L, str(L, 1));
+    if (!s) return retBool(L, false);
+    std::vector<scene::ShaderPtr> v = layersOf(*s);
+    const int n = int(v.size()), from = int(num(L, 2)), to = int(num(L, 3));
+    if (from < 1 || from > n || to < 1 || to > n) return retBool(L, false);
+    scene::ShaderPtr p = v[size_t(from - 1)];
+    v.erase(v.begin() + (from - 1));
+    v.insert(v.begin() + (to - 1), p);
+    setLayers(*s, std::move(v));
+    return retBool(L, true);
+}
+
+// setSpriteShaderOrder(obj, {'glow', 'wave'}): those layers first, in that
+// order (by shader name), the others after them as they were.
+int l_setSpriteShaderOrder(lua_State* L) {
+    Sprite* s = obj(L, str(L, 1));
+    if (!s || !lua_istable(L, 2)) return retBool(L, false);
+    std::vector<scene::ShaderPtr> rest = layersOf(*s), v;
+    const lua_Integer n = luaL_len(L, 2);
+    for (lua_Integer k = 1; k <= n; ++k) {
+        lua_geti(L, 2, k);
+        const std::string want = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        auto it = std::find_if(rest.begin(), rest.end(), [&](const scene::ShaderPtr& p) { return p->name == want; });
+        if (it == rest.end()) continue;
+        v.push_back(*it);
+        rest.erase(it);
+    }
+    v.insert(v.end(), rest.begin(), rest.end());
+    setLayers(*s, std::move(v));
     return retBool(L, true);
 }
 
@@ -1305,32 +1477,32 @@ std::vector<float> floatList(lua_State* L, int i) {
     return out;
 }
 
+// setShaderFloat(obj, uniform, value[, layer]) and friends: every shader
+// layer of the sprite, or the one `layer` names.
 int l_setShaderFloat(lua_State* L) {
-    if (auto* sh = shaderOf(L, 1)) sh->floats[str(L, 2)] = {float(num(L, 3))};
+    for (auto* sh : shadersOf(L, 1, 4)) sh->floats[str(L, 2)] = {float(num(L, 3))};
     return retBool(L, true);
 }
 int l_setShaderFloatArray(lua_State* L) {
-    if (auto* sh = shaderOf(L, 1)) sh->floats[str(L, 2)] = floatList(L, 3);
+    for (auto* sh : shadersOf(L, 1, 4)) sh->floats[str(L, 2)] = floatList(L, 3);
     return retBool(L, true);
 }
 int l_setShaderInt(lua_State* L) {
-    if (auto* sh = shaderOf(L, 1)) sh->ints[str(L, 2)] = {int(num(L, 3))};
+    for (auto* sh : shadersOf(L, 1, 4)) sh->ints[str(L, 2)] = {int(num(L, 3))};
     return retBool(L, true);
 }
 int l_setShaderIntArray(lua_State* L) {
-    if (auto* sh = shaderOf(L, 1)) {
-        std::vector<int> v;
-        for (float f : floatList(L, 3)) v.push_back(int(f));
-        sh->ints[str(L, 2)] = v;
-    }
+    std::vector<int> v;
+    for (float f : floatList(L, 3)) v.push_back(int(f));
+    for (auto* sh : shadersOf(L, 1, 4)) sh->ints[str(L, 2)] = v;
     return retBool(L, true);
 }
 int l_setShaderBool(lua_State* L) {
-    if (auto* sh = shaderOf(L, 1)) sh->ints[str(L, 2)] = {boolean(L, 3) ? 1 : 0};
+    for (auto* sh : shadersOf(L, 1, 4)) sh->ints[str(L, 2)] = {boolean(L, 3) ? 1 : 0};
     return retBool(L, true);
 }
 int l_setShaderSampler2D(lua_State* L) {
-    if (auto* sh = shaderOf(L, 1)) sh->samplers[str(L, 2)] = str(L, 3);
+    for (auto* sh : shadersOf(L, 1, 4)) sh->samplers[str(L, 2)] = str(L, 3);
     return retBool(L, true);
 }
 int pushNumList(lua_State* L, const std::vector<float>& v, bool asBool) {
@@ -1342,22 +1514,22 @@ int pushNumList(lua_State* L, const std::vector<float>& v, bool asBool) {
     }
     return 1;
 }
-int l_getShaderFloat(lua_State* L) {
-    auto* sh = shaderOf(L, 1);
+int l_getShaderFloat(lua_State* L) {  // getShaderFloat(obj, uniform[, layer])
+    auto* sh = shaderOf(L, 1, 3);
     if (!sh) { lua_pushnil(L); return 1; }
     auto it = sh->floats.find(str(L, 2));
     if (it == sh->floats.end() || it->second.empty()) { lua_pushnil(L); return 1; }
     return retNum(L, it->second[0]);
 }
 int l_getShaderFloatArray(lua_State* L) {
-    auto* sh = shaderOf(L, 1);
+    auto* sh = shaderOf(L, 1, 3);
     if (!sh) { lua_pushnil(L); return 1; }
     auto it = sh->floats.find(str(L, 2));
     if (it == sh->floats.end()) { lua_pushnil(L); return 1; }
     return pushNumList(L, it->second, false);
 }
 int intUniform(lua_State* L, bool asBool, bool array) {
-    auto* sh = shaderOf(L, 1);
+    auto* sh = shaderOf(L, 1, 3);
     if (!sh) { lua_pushnil(L); return 1; }
     auto it = sh->ints.find(str(L, 2));
     if (it == sh->ints.end() || it->second.empty()) { lua_pushnil(L); return 1; }
@@ -2064,6 +2236,9 @@ const Fn kFunctions[] = {
     {"getGlobalFromScript", l_getGlobalFromScript}, {"setGlobalFromScript", l_setGlobalFromScript},
     // Discord presence has no meaning here; shaders are drawn by the renderer.
     {"initLuaShader", l_initLuaShader}, {"setSpriteShader", l_setSpriteShader}, {"removeSpriteShader", l_removeSpriteShader},
+    {"createInstance", l_createInstance}, {"addInstance", l_addInstance},
+    {"addSpriteShader", l_addSpriteShader}, {"getSpriteShaders", l_getSpriteShaders}, {"moveSpriteShader", l_moveSpriteShader},
+    {"setSpriteShaderOrder", l_setSpriteShaderOrder},
     {"setShaderFloat", l_setShaderFloat}, {"setShaderFloatArray", l_setShaderFloatArray}, {"setShaderInt", l_setShaderInt},
     {"setShaderIntArray", l_setShaderIntArray}, {"setShaderBool", l_setShaderBool}, {"setShaderBoolArray", l_setShaderIntArray},
     {"setShaderSampler2D", l_setShaderSampler2D}, {"getShaderFloat", l_getShaderFloat}, {"getShaderInt", l_getShaderInt},
@@ -2271,10 +2446,15 @@ bool callOne(ScriptHost::Script& s, const char* fn, const std::vector<Value>& ar
 // ----------------------------------------------------------------- ScriptHost --
 
 ScriptHost::ScriptHost(scene::Scene& sc, ScriptGame& g) : scene(sc), game(g) {
+    // Tweens reach the game's objects (the HUD) as getProperty does.
+    sc.gameGet = [&g](std::string_view p, scene::Value& out) { return g.getGameProp(p, out); };
+    sc.gameSet = [&g](std::string_view p, const scene::Value& v) { return g.setGameProp(p, v); };
     hxShared = std::make_shared<hx::Shared>();
     hxShared->report = [this](const std::string& m) { reportError(m); };
 }
 ScriptHost::~ScriptHost() {
+    scene.gameGet = nullptr;
+    scene.gameSet = nullptr;
     hxCallbacks.clear();
     hxScripts_.clear();
     scripts_.clear();

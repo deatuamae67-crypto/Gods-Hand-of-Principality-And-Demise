@@ -7,6 +7,7 @@
 // scene_draw.cpp renders it with raylib.
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -129,6 +130,9 @@ public:
     int blend = 0;  // 0 normal, 1 add, 2 multiply, 3 screen, 4 subtract
     bool inScene = false;
     ShaderPtr shader;
+    // More shader layers after `shader` (addSpriteShader), each applied to
+    // what the one before it drew.
+    std::vector<ShaderPtr> moreShaders;
 
     std::vector<Anim> anims;
     int cur = -1, animFrame = 0;
@@ -147,6 +151,12 @@ public:
     bool play(const std::string& name, bool force = false, bool rev = false, int startFrame = 0);
     void finishAnim();
     void updateAnim(double dt);
+    // FlxObject motion: velocity, acceleration, drag and maxVelocity (and
+    // their angular forms), moved each frame as Flixel's updateMotion does.
+    float velX = 0, velY = 0, accX = 0, accY = 0, dragX = 0, dragY = 0, maxVelX = 10000, maxVelY = 10000;
+    float angVel = 0, angAcc = 0, angDrag = 0, maxAngular = 10000;
+    bool moves = true;
+    void updateMotion(double dt);
     const Anim* curAnim() const { return cur >= 0 && cur < int(anims.size()) ? &anims[size_t(cur)] : nullptr; }
     std::string curAnimName() const { const Anim* a = curAnim(); return a ? a->name : ""; }
     bool hasAnim(std::string_view n) const;
@@ -281,6 +291,15 @@ public:
     bool getProp(std::string_view path, Value& out) const;
     bool setProp(std::string_view path, const Value& v);
     Strum* strumByGroup(std::string_view group, int index);
+    // What the game keeps outside the scene (the HUD: iconP1, healthBar,
+    // scoreTxt...), set by the script host: tweens reach it as getProperty
+    // and setProperty do, the game's first, then the scene's.
+    std::function<bool(std::string_view, Value&)> gameGet;
+    std::function<bool(std::string_view, const Value&)> gameSet;
+    bool getAnyProp(std::string_view path, Value& out) const {
+        return (gameGet && gameGet(path, out)) || getProp(path, out);
+    }
+    bool setAnyProp(std::string_view path, const Value& v) { return (gameSet && gameSet(path, v)) || setProp(path, v); }
 
     // Tweens and timers
     void tween(Tween tw);

@@ -197,6 +197,10 @@ void SceneRenderer::clear() {
     shaders_.clear();
     for (RenderTexture2D& rt : pingPong_)
         if (rt.id) { UnloadRenderTexture(rt); rt = RenderTexture2D{}; }
+    for (auto& kv : layers_)
+        for (RenderTexture2D& rt : kv.second.rt)
+            if (rt.id) UnloadRenderTexture(rt);
+    layers_.clear();
     for (auto& kv : tex_)
         if (kv.second.id) UnloadTexture(kv.second);
     tex_.clear();
@@ -304,8 +308,22 @@ void SceneRenderer::drawSprite(const Sprite& s, const Camera& cam) {
         }
     }
 
+    // The frame's rectangle in the image, cut to the image as Flixel's
+    // FlxFramesCollection.checkFrame does: atlases whose last frames run past
+    // the image's edge would otherwise show the opposite side of the image.
+    float rx = f.x, ry = f.y, rw = f.w, rh = f.h;
+    if (tex) {
+        const float tw = float(tex->width), th = float(tex->height);
+        const float x0 = clampv(rx, 0.0f, tw), y0 = clampv(ry, 0.0f, th);
+        rw = clampv(rx + rw, 0.0f, tw) - x0;
+        rh = clampv(ry + rh, 0.0f, th) - y0;
+        rx = x0;
+        ry = y0;
+        if (rw <= 0 || rh <= 0) return;
+    }
+
     // Frame-local rectangle (inside the untrimmed source box), with flips.
-    const float dw = f.rotated ? f.h : f.w, dh = f.rotated ? f.w : f.h;
+    const float dw = f.rotated ? rh : rw, dh = f.rotated ? rw : rh;
     const float ox = -f.fx, oy = -f.fy;
     float lx[4] = {ox, ox + dw, ox + dw, ox};  // TL, TR, BR, BL
     float ly[4] = {oy, oy, oy + dh, oy + dh};
@@ -328,7 +346,7 @@ void SceneRenderer::drawSprite(const Sprite& s, const Camera& cam) {
     float u[4], v[4];
     if (tex) {
         const float tw = float(tex->width), th = float(tex->height);
-        const float x0 = f.x / tw, y0 = f.y / th, x1 = (f.x + f.w) / tw, y1 = (f.y + f.h) / th;
+        const float x0 = rx / tw, y0 = ry / th, x1 = (rx + rw) / tw, y1 = (ry + rh) / th;
         if (!f.rotated) {
             u[0] = x0; v[0] = y0; u[1] = x1; v[1] = y0; u[2] = x1; v[2] = y1; u[3] = x0; v[3] = y1;
         } else {  // stored rotated 90 degrees clockwise
@@ -339,6 +357,30 @@ void SceneRenderer::drawSprite(const Sprite& s, const Camera& cam) {
         // openfl_TextureCoordv run from 0 to 1 across the sprite (sampling the
         // 1x1 white texture anywhere gives the same colour).
         u[0] = 0; v[0] = 0; u[1] = 1; v[1] = 0; u[2] = 1; v[2] = 1; u[3] = 0; v[3] = 1;
+    }
+
+    // Shader layers: the picture prepareShaderLayers made this frame, drawn
+    // where the frame goes (premultiplied, the camera's alpha on top).
+    if (!s.moreShaders.empty()) {
+        auto it = layers_.find(&s);
+        if (it != layers_.end() && it->second.frame == layerFrame_ && it->second.result >= 0) {
+            const Texture2D& lt = it->second.rt[it->second.result].texture;
+            const unsigned char ca = (unsigned char)clampv(cam.alpha * 255.0f, 0.0f, 255.0f);
+            const float lu[4] = {0, 1, 1, 0}, lv[4] = {1, 1, 0, 0};  // a render texture is upside down
+            setBlend(blend_, 5);
+            rlSetTexture(lt.id);
+            rlBegin(RL_QUADS);
+            rlColor4ub(ca, ca, ca, ca);
+            rlNormal3f(0, 0, 1);
+            const int order[4] = {0, 3, 2, 1};
+            for (int k : order) {
+                rlTexCoord2f(lu[k], lv[k]);
+                rlVertex2f(pts[k].x, pts[k].y);
+            }
+            rlEnd();
+            rlSetTexture(0);
+            return;
+        }
     }
 
     uint32_t tint = s.color & 0xFFFFFF;
@@ -380,6 +422,131 @@ void SceneRenderer::drawSprite(const Sprite& s, const Camera& cam) {
     if (shp) {
         rlDrawRenderBatchActive();
         EndShaderMode();
+    }
+}
+
+void SceneRenderer::prepareShaderLayers(scene::Scene& sc) {
+    sc_ = &sc;
+    ++layerFrame_;
+    bool any = false;
+    for (const scene::SpritePtr& sp : sc.order) {
+        const Sprite& s = *sp;
+        if (s.moreShaders.empty() || !s.visible || s.kind == scene::Kind::Text || s.kind == scene::Kind::Marker) continue;
+        if (!s.graphic || s.graphic->frames.empty()) continue;
+        std::vector<std::pair<CompiledShader*, const scene::ShaderInstance*>> chain;
+        auto addLayer = [&](const scene::ShaderPtr& p) {
+            if (!p) return;
+            CompiledShader* cs = shaderFor(sc, p->name);
+            if (cs && cs->ok) chain.push_back({cs, p.get()});
+        };
+        addLayer(s.shader);
+        for (const scene::ShaderPtr& p : s.moreShaders) addLayer(p);
+        if (chain.empty()) continue;
+        const scene::Graphic& g = *s.graphic;
+        const psych::AtlasFrame& f = g.frames[size_t(clampv(s.frame, 0, int(g.frames.size()) - 1))];
+        Texture2D* tex = nullptr;
+        if (!g.solid) {
+            if (f.tex >= g.files.size()) continue;
+            tex = texture(g.files[f.tex]);
+            if (!tex) continue;
+        }
+        // The frame's part of the image (cut to it, as drawSprite does).
+        float rx = f.x, ry = f.y, rw = f.w, rh = f.h;
+        if (tex) {
+            const float tw = float(tex->width), th = float(tex->height);
+            const float x0 = clampv(rx, 0.0f, tw), y0 = clampv(ry, 0.0f, th);
+            rw = clampv(rx + rw, 0.0f, tw) - x0;
+            rh = clampv(ry + rh, 0.0f, th) - y0;
+            rx = x0;
+            ry = y0;
+        }
+        if (rw <= 0 || rh <= 0) continue;
+        const float dw = f.rotated ? rh : rw, dh = f.rotated ? rw : rh;
+        const int w = std::max(1, int(std::ceil(dw))), h = std::max(1, int(std::ceil(dh)));
+        if (!any) {
+            rlDrawRenderBatchActive();
+            any = true;
+        }
+        LayerTarget& lt = layers_[&s];
+        for (RenderTexture2D& rt : lt.rt)
+            if (!rt.id || rt.texture.width != w || rt.texture.height != h) {
+                if (rt.id) UnloadRenderTexture(rt);
+                rt = LoadRenderTexture(w, h);
+            }
+        const int filter = s.antialiasing && smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT;
+        for (RenderTexture2D& rt : lt.rt) SetTextureFilter(rt.texture, filter);
+        // The first layer: the frame from its image, with the sprite's colour.
+        float u[4], v[4];
+        if (tex) {
+            const float tw = float(tex->width), th = float(tex->height);
+            const float x0 = rx / tw, y0 = ry / th, x1 = (rx + rw) / tw, y1 = (ry + rh) / th;
+            if (!f.rotated) {
+                u[0] = x0; v[0] = y0; u[1] = x1; v[1] = y0; u[2] = x1; v[2] = y1; u[3] = x0; v[3] = y1;
+            } else {
+                u[0] = x1; v[0] = y0; u[1] = x1; v[1] = y1; u[2] = x0; v[2] = y1; u[3] = x0; v[3] = y0;
+            }
+        } else {
+            u[0] = 0; v[0] = 0; u[1] = 1; v[1] = 0; u[2] = 1; v[2] = 1; u[3] = 0; v[3] = 1;
+        }
+        Color col;
+        const uint32_t tint = s.color & 0xFFFFFF;
+        if (g.solid) {
+            const uint32_t c = g.solidColor;
+            auto mul = [&](int sh) { return (unsigned char)(((c >> sh) & 255) * ((tint >> sh) & 255) / 255); };
+            col = Color{mul(16), mul(8), mul(0), (unsigned char)clampv(float((c >> 24) & 255) * s.alpha, 0.0f, 255.0f)};
+        } else {
+            col = argbColor(0xFF000000u | tint, s.alpha);
+        }
+        gfx::beginTexture(lt.rt[0]);
+        ClearBackground(BLANK);
+        BeginShaderMode(chain[0].first->sh);
+        applyUniforms(*chain[0].first, *chain[0].second, tex ? float(tex->width) : std::max(1.0f, f.w),
+                      tex ? float(tex->height) : std::max(1.0f, f.h), false, sc);
+        rlSetBlendMode(BLEND_ALPHA_PREMULTIPLY);
+        rlSetTexture(tex ? tex->id : rlGetTextureIdDefault());
+        rlBegin(RL_QUADS);
+        rlColor4ub(col.r, col.g, col.b, col.a);
+        rlNormal3f(0, 0, 1);
+        const float qx[4] = {0, float(w), float(w), 0}, qy[4] = {0, 0, float(h), float(h)};
+        const int order[4] = {0, 3, 2, 1};
+        for (int k : order) {
+            rlTexCoord2f(u[k], v[k]);
+            rlVertex2f(qx[k], qy[k]);
+        }
+        rlEnd();
+        rlSetTexture(0);
+        rlDrawRenderBatchActive();
+        EndShaderMode();
+        rlSetBlendMode(BLEND_ALPHA);
+        gfx::endTexture();
+        // The next layers, each on the picture before it.
+        int cur = 0;
+        for (size_t i = 1; i < chain.size(); ++i) {
+            const int nxt = cur ^ 1;
+            gfx::beginTexture(lt.rt[nxt]);
+            ClearBackground(BLANK);
+            BeginShaderMode(chain[i].first->sh);
+            applyUniforms(*chain[i].first, *chain[i].second, float(w), float(h), true, sc);
+            rlSetBlendMode(BLEND_ALPHA_PREMULTIPLY);
+            DrawTexturePro(lt.rt[cur].texture, {0, 0, float(w), -float(h)}, {0, 0, float(w), float(h)}, {0, 0}, 0, WHITE);
+            rlDrawRenderBatchActive();
+            EndShaderMode();
+            rlSetBlendMode(BLEND_ALPHA);
+            gfx::endTexture();
+            cur = nxt;
+        }
+        lt.result = cur;
+        lt.frame = layerFrame_;
+    }
+    // Pictures of sprites gone or without layers for a while.
+    for (auto it = layers_.begin(); it != layers_.end();) {
+        if (layerFrame_ - it->second.frame > 120) {
+            for (RenderTexture2D& rt : it->second.rt)
+                if (rt.id) UnloadRenderTexture(rt);
+            it = layers_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 

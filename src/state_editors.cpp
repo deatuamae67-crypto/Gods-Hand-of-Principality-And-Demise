@@ -428,13 +428,15 @@ bool overPanel(const Ui& ui) { return ui.mouse.x >= kPanelX - 8 || !ui.dropId.em
 
 // Scripts in the editors: a stage's Lua builds its sprites; nothing else happens.
 struct EditorGame : ScriptGame {
-    double songPosition() const override { return 0; }
+    double clockMs = 0;     // the stage editor runs a clock so scripts and shaders move
+    bool shaders = false;   // the stage editor shows shaders (as the Shaders option says)
+    double songPosition() const override { return clockMs; }
     bool getGameProp(std::string_view, scene::Value&) override { return false; }
     bool setGameProp(std::string_view, const scene::Value&) override { return false; }
     void triggerEvent(const std::string&, const std::string&, const std::string&) override {}
     void debugPrint(const std::string&, uint32_t) override {}
     void debugNotice(const std::string&, bool, bool) override {}
-    bool shadersEnabled() override { return false; }
+    bool shadersEnabled() override { return shaders; }
 };
 
 // A line of news at the bottom of an editor.
@@ -1041,11 +1043,7 @@ public:
         App& a = app();
         Input& in = a.input;
         feedUi(ui_);
-        if (sc_) {
-            for (auto& kv : sc_->objects) kv.second->updateAnim(dt);
-            for (const scene::CharacterPtr& c : chars_)
-                if (c) c->updateAnim(dt);
-        }
+        if (sc_) runStage(dt);
         view_.handle(in, ui_, overPanel(ui_));
         dragCharacters(in);
         if (!ui_.focus.empty()) return;
@@ -1065,11 +1063,35 @@ public:
     }
 
     void draw() override {
+        if (sc_) rend_.prepareShaderLayers(*sc_);
         gfx::beginCanvas();
         drawGrid(view_);
         if (sc_) {
             view_.apply(sc_->camGame);
-            rend_.drawCamera(*sc_, scene::Cam::Game, nullptr, nullptr);
+            if (sc_->camGame.filters.empty()) {
+                rend_.drawCamera(*sc_, scene::Cam::Game, nullptr, nullptr);
+            } else {
+                // The stage's camera shaders, as in a song: the camera to a
+                // texture, then through them.
+                gfx::endCanvas();
+                const float cs = gfx::canvasScale();
+                const Vector2 origin = gfx::canvasOrigin();
+                const int rw = std::max(1, int(gfx::W * cs)), rh = std::max(1, int(gfx::H * cs));
+                if (!camRt_.id || camRt_.texture.width != rw || camRt_.texture.height != rh) {
+                    if (camRt_.id) UnloadRenderTexture(camRt_);
+                    camRt_ = LoadRenderTexture(rw, rh);
+                }
+                gfx::beginTexture(camRt_);
+                ClearBackground(BLANK);
+                gfx::setRenderTargetSize(rw, rh);
+                gfx::beginCanvas();
+                rend_.drawCamera(*sc_, scene::Cam::Game, nullptr, nullptr);
+                gfx::endCanvas();
+                gfx::setRenderTargetSize(0, 0);
+                gfx::endTexture();
+                rend_.drawFiltered(*sc_, sc_->camGame.filters, camRt_, Rectangle{origin.x, origin.y, float(rw), float(rh)});
+                gfx::beginCanvas();
+            }
             static const Color cols[3] = {Color{120, 200, 255, 255}, Color{255, 140, 200, 255}, Color{200, 140, 255, 255}};
             for (int i = 0; i < 3; ++i) {
                 if (i == 1 && def_.hideGf) continue;
@@ -1092,11 +1114,48 @@ public:
         gfx::endCanvas();
     }
 
+    ~StageEditorState() override {
+        if (camRt_.id && IsWindowReady()) UnloadRenderTexture(camRt_);
+    }
+
 private:
+    // The stage runs as in a song (at 100 BPM): tweens, timers, animations,
+    // shaders, and its script's onUpdate, onStepHit and onBeatHit; the
+    // characters dance on the beat.
+    void runStage(double dt) {
+        scene::Scene& sc = *sc_;
+        const double stepMs = 60000.0 / kPreviewBpm / 4.0;
+        const int stepBefore = int(std::floor(game_.clockMs / stepMs));
+        game_.clockMs += dt * 1000.0;
+        const float sx = sc.camGame.scrollX, sy = sc.camGame.scrollY, z = sc.camGame.zoom;
+        sc.update(dt, stepMs, false);
+        sc.camGame.scrollX = sx;  // the view is the editor's
+        sc.camGame.scrollY = sy;
+        sc.camGame.zoom = z;
+        if (!host_) return;
+        host_->setGlobal("songPosition", game_.clockMs);
+        host_->call("onUpdate", {scene::Value(dt)});
+        const int stepNow = int(std::floor(game_.clockMs / stepMs));
+        for (int st = stepBefore + 1; st <= stepNow && st <= stepBefore + 4; ++st) {
+            host_->setGlobal("curStep", double(st));
+            host_->setGlobal("curBeat", double(st / 4));
+            host_->call("onStepHit");
+            if (st % 4 == 0) {
+                for (const scene::CharacterPtr& c : chars_)
+                    if (c) c->dance();
+                host_->call("onBeatHit");
+            }
+        }
+        host_->call("onUpdatePost", {scene::Value(dt)});
+        host_->dispatchCompletions();
+    }
+
+    static constexpr double kPreviewBpm = 100;
     static constexpr const char* kWho[3] = {"Boyfriend", "Girlfriend", "Opponent"};
     std::unique_ptr<scene::Scene> sc_;
     std::unique_ptr<ScriptHost> host_;
     EditorGame game_;
+    RenderTexture2D camRt_{};
     SceneRenderer rend_;
     Ui ui_;
     View view_;
@@ -1204,6 +1263,8 @@ private:
         }
         // The stage's script builds its sprites (Psych 0.6 / 0.7 stages are Lua).
         const std::string lua = sc.files.find("stages/" + name + ".lua");
+        game_.shaders = app().settings.shaders;
+        game_.clockMs = 0;
         if (!lua.empty()) {
             host_ = std::make_unique<ScriptHost>(sc, game_);
             host_->load(lua);
@@ -1214,12 +1275,15 @@ private:
 
     void makeChar(int i) {
         chars_[i].reset();
-        if (i == 1 && def_.hideGf) return;
         scene::Scene& sc = *sc_;
+        // Scripts reach them as boyfriend, gf and dad; the scene animates them.
+        (i == 0 ? sc.bf : i == 1 ? sc.gf : sc.dad) = nullptr;
+        if (i == 1 && def_.hideGf) return;
         psych::CharacterDef cd;
         std::string path, text, err;
         if (loadCharacterDef(sc, who_[i], cd, path, text, err)) chars_[i] = buildCharacter(sc, cd, i == 0, err);
         if (!chars_[i]) return;
+        (i == 0 ? sc.bf : i == 1 ? sc.gf : sc.dad) = chars_[i];
         chars_[i]->scrollX = chars_[i]->scrollY = i == 1 ? 0.95f : 1.0f;
         place(i);
     }

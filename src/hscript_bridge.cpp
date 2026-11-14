@@ -5,12 +5,16 @@
 // engine. Objects are handles (Host) on scene paths, so `game.boyfriend.x`
 // reads the same property Lua's getProperty('boyfriend.x') does.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
 #include <random>
 
 #include "common.hpp"
 #include "hscript.hpp"
 #include "lua_host.hpp"
+#include "platform.hpp"
 #include "psych.hpp"
 
 namespace gh::hx {
@@ -39,6 +43,11 @@ scene::Sprite* spriteOf(Interp& ip, const Host& h) {
     if (h.sprite) return h.sprite.get();
     return ip.sc.find(h.path);
 }
+
+Value& groupField(const Host& h, const char* f);
+std::vector<Value>& groupMembers(const Host& h);
+bool isGroup(const Value& v);
+void addToScene(Interp& ip, const Value& obj, int where, int pos = 0);
 
 // Path of an object in scene property terms ("boyfriend", "camGame", "tag.scale").
 std::string pathOf(const Value& v) {
@@ -84,7 +93,14 @@ scene::Cam camOf(const Value& v) {
     return scene::Scene::camFromName(pathOf(v).empty() ? "game" : pathOf(v));
 }
 
-void addToScene(Interp& ip, const Value& obj, int where, int pos = 0) {
+void addToScene(Interp& ip, const Value& obj, int where, int pos) {
+    if (isGroup(obj)) {  // game.add(group): its members, in order, and later ones too
+        const Host& g = *obj.host;
+        groupField(g, "inScene") = Value(true);
+        const std::vector<Value> m = groupMembers(g);
+        for (size_t i = 0; i < m.size(); ++i) addToScene(ip, m[i], where == 1 ? 1 : where, pos + int(i));
+        return;
+    }
     scene::Sprite* s = obj.t == T::Host && obj.host ? spriteOf(ip, *obj.host) : nullptr;
     if (!s) return;
     scene::SpritePtr sp;
@@ -109,6 +125,11 @@ void addToScene(Interp& ip, const Value& obj, int where, int pos = 0) {
 }
 
 void removeFromScene(Interp& ip, const Value& obj) {
+    if (isGroup(obj)) {
+        groupField(*obj.host, "inScene") = Value(false);
+        for (const Value& e : groupMembers(*obj.host)) removeFromScene(ip, e);
+        return;
+    }
     scene::Sprite* s = obj.t == T::Host && obj.host ? spriteOf(ip, *obj.host) : nullptr;
     if (!s) return;
     for (auto& kv : ip.sc.objects)
@@ -290,10 +311,150 @@ Value globalLookup(Interp& ip, const std::string& name, bool& found) {
     return Value();
 }
 
+namespace {
+
+// ------------------------------------------------- script-made groups ----
+// new FlxTypedGroup() / FlxSpriteGroup(): a handle whose `extra` holds the
+// members and the group's own x, y, alpha and visibility, shared by every copy.
+Value& groupField(const Host& h, const char* f) { return (*h.extra.map)[f]; }
+std::vector<Value>& groupMembers(const Host& h) {
+    Value& m = groupField(h, "members");
+    if (m.t != T::Array) m = Value::array();
+    return *m.arr;
+}
+bool isGroup(const Value& v) { return v.t == T::Host && v.host && v.host->kind == "hxgroup" && v.host->extra.t == T::Object; }
+bool isCharGroup(const std::string& p) { return p == "boyfriendGroup" || p == "dadGroup" || p == "gfGroup"; }
+
+// The scene object a handle stands for, for game.members.indexOf: the
+// character groups are their characters (gfGroup the girlfriend's place).
+const scene::Sprite* orderTarget(Interp& ip, const Value& v) {
+    if (v.t != T::Host || !v.host) return nullptr;
+    const Host& h = *v.host;
+    if (h.kind == "hxgroup") {
+        const std::vector<Value>& m = groupMembers(h);
+        return m.empty() ? nullptr : orderTarget(ip, m.front());
+    }
+    if (h.path == "gfGroup") return ip.sc.gfMarker.get();
+    return spriteOf(ip, h);
+}
+
+// A scene object as a handle (game.members[i]).
+Value orderHandle(Interp& ip, const scene::SpritePtr& s) {
+    scene::Scene& sc = ip.sc;
+    if (!s) return Value();
+    if (s == sc.gfMarker) return hv("sprite", "gfGroup");
+    if (s.get() == sc.bf.get()) return hv("sprite", "boyfriendGroup");
+    if (s.get() == sc.dad.get()) return hv("sprite", "dadGroup");
+    if (s.get() == sc.gf.get()) return hv("sprite", "gf");
+    for (auto& kv : sc.objects)
+        if (kv.second == s) return hv("sprite", kv.first);
+    auto h = mk("sprite", s->tag);
+    h->sprite = s;
+    return Value::hostOf(h);
+}
+
+// Psych's FlxSpriteGroup.add: the sprite moves with the group (its x, y,
+// alpha); a group already in the game puts it on screen.
+void groupAdd(Interp& ip, const Host& g, const Value& x, int pos = -1) {
+    std::vector<Value>& m = groupMembers(g);
+    for (const Value& e : m)
+        if (e.t == T::Host && x.t == T::Host && e.host && x.host && e.host->path == x.host->path && e.host->kind == x.host->kind) return;
+    if (groupField(g, "sprites").truthy() && x.t == T::Host && x.host) {
+        if (scene::Sprite* s = spriteOf(ip, *x.host)) {
+            s->x += float(groupField(g, "x").num());
+            s->y += float(groupField(g, "y").num());
+            s->alpha *= float(groupField(g, "alpha").num());
+        }
+    }
+    if (pos < 0 || pos >= int(m.size())) m.push_back(x);
+    else m.insert(m.begin() + pos, x);
+    if (groupField(g, "inScene").truthy()) {
+        // Next to the members already shown (after the last one).
+        int at = -1;
+        for (const Value& e : m) {
+            const scene::Sprite* t = orderTarget(ip, e);
+            for (size_t i = 0; t && i < ip.sc.order.size(); ++i)
+                if (ip.sc.order[i].get() == t && &e != &m.back()) at = std::max(at, int(i));
+        }
+        if (at >= 0) addToScene(ip, x, 1, at + 1);
+        else addToScene(ip, x, 0, 0);
+    }
+}
+
+// Psych's dadGroup.add(character): the character stands where the group is.
+void charGroupAdd(Interp& ip, const std::string& group, const Value& x) {
+    if (x.t != T::Host || !x.host) return;
+    scene::Sprite* s = spriteOf(ip, *x.host);
+    scene::Character* lead = ip.sc.character(group);
+    if (!s || !lead) return;
+    s->x += lead->groupX;
+    s->y += lead->groupY;
+    s->scrollX = lead->scrollX;
+    s->scrollY = lead->scrollY;
+    auto& list = ip.shared->groupChars[group];
+    if (std::find(list.begin(), list.end(), x.host->path) == list.end()) list.push_back(x.host->path);
+    // Drawn with the group: just after its character (and those added before).
+    size_t at = ip.sc.order.size();
+    for (size_t i = 0; i < ip.sc.order.size(); ++i)
+        if (ip.sc.order[i].get() == lead) at = i + 1;
+    for (const std::string& t : list)
+        for (size_t i = 0; i < ip.sc.order.size(); ++i)
+            if (ip.sc.order[i].get() == ip.sc.find(t) && t != x.host->path) at = std::max(at, i + 1);
+    addToScene(ip, x, 1, int(at));
+}
+
+// A character's array (cameraPosition, positionArray, healthColorArray).
+bool charArray(Interp& ip, const std::string& path, scene::Character*& c, std::string& field) {
+    const size_t dot = path.rfind('.');
+    if (dot == std::string::npos) return false;
+    c = ip.sc.character(path.substr(0, dot));
+    if (!c) c = dynamic_cast<scene::Character*>(ip.sc.find(path.substr(0, dot)));
+    field = path.substr(dot + 1);
+    return c != nullptr;
+}
+
+double localTimeField(double ms, const std::string& f) {
+    const std::time_t t = std::time_t(ms / 1000.0);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    if (f == "getHours") return tm.tm_hour;
+    if (f == "getMinutes") return tm.tm_min;
+    if (f == "getSeconds") return tm.tm_sec;
+    if (f == "getFullYear") return tm.tm_year + 1900;
+    if (f == "getMonth") return tm.tm_mon;
+    if (f == "getDate") return tm.tm_mday;
+    if (f == "getDay") return tm.tm_wday;
+    return ms;
+}
+
+}  // namespace
+
 // ------------------------------------------------------------ fields -----
 
 Value hostGet(Interp& ip, const Host& h, const std::string& f) {
     const std::string& k = h.kind;
+    if (k == "hxgroup") {
+        if (h.extra.t != T::Object) return Value();
+        if (f == "members") return groupField(h, "members");
+        if (f == "length") return Value(double(groupMembers(h).size()));
+        if (f == "alive" || f == "exists" || f == "active") return Value(true);
+        if (auto it = h.extra.map->find(f); it != h.extra.map->end()) return it->second;
+        return Value();
+    }
+    if (k == "scenemembers") {
+        if (f == "length") return Value(double(ip.sc.order.size()));
+        return Value();
+    }
+    if (k == "charray") {
+        scene::Character* c = nullptr;
+        std::string fld;
+        if (f == "length" && charArray(ip, h.path, c, fld)) return Value(fld == "healthColorArray" ? 3.0 : 2.0);
+        return Value();
+    }
     if (k == "package") {  // a.b.C: lower-case parts are packages, the first capitalised one the class
         if (!f.empty() && std::isupper((unsigned char)f[0])) return hv("class", f);
         return hv("package", h.path + "." + f);
@@ -339,6 +500,7 @@ Value hostGet(Interp& ip, const Host& h, const std::string& f) {
         if (f == "strumLineNotes" || f == "playerStrums" || f == "opponentStrums") return hv("group", f);
         if (f == "notes" || f == "unspawnNotes") return hv("notegroup", f);
         if (f == "camFollow" || f == "camFollowPos") return hv("point", "camFollow");
+        if (f == "members") return hv("scenemembers");  // game.members.indexOf(game.dadGroup)
         scene::Value out;
         if (ip.game.getGameProp(f, out)) return Interp::fromScene(out);
         if (ip.sc.find(f)) return hv("sprite", f);
@@ -349,7 +511,17 @@ Value hostGet(Interp& ip, const Host& h, const std::string& f) {
     if (k == "sprite") {
         scene::Sprite* s = spriteOf(ip, h);
         if (f == "animation") { auto a = mk("anim", h.path); a->sprite = h.sprite; return Value::hostOf(a); }
-        if (f == "scale" || f == "scrollFactor" || f == "offset" || f == "origin") return hv("point", h.path + "." + f);
+        if (f == "scale" || f == "scrollFactor" || f == "offset" || f == "origin" || f == "velocity" || f == "acceleration" ||
+            f == "maxVelocity" || f == "drag")
+            return hv("point", h.path + "." + f);
+        if (f == "cameraPosition" || f == "positionArray" || f == "healthColorArray") return hv("charray", h.path + "." + f);
+        if (f == "members" && isCharGroup(h.path)) {  // the character and those scripts added
+            std::vector<Value> list;
+            if (ip.sc.character(h.path)) list.push_back(hv("sprite", h.path == "dadGroup" ? "dad" : h.path == "gfGroup" ? "gf" : "boyfriend"));
+            for (const std::string& t : ip.shared->groupChars[h.path]) list.push_back(hv("sprite", t));
+            return Value::array(list);
+        }
+        if (f == "length" && isCharGroup(h.path)) return Value(double((ip.sc.character(h.path) ? 1 : 0) + ip.shared->groupChars[h.path].size()));
         if (f == "shader") return s && s->shader ? shaderHost(s->shader) : Value();
         if (f == "camera") return s ? hv("camera", s->cam == scene::Cam::Hud ? "camHUD" : s->cam == scene::Cam::Other ? "camOther" : "camGame") : Value();
         if (f == "cameras") return s ? Value::array({hostGet(ip, h, "camera")}) : Value();
@@ -512,6 +684,40 @@ Value hostGet(Interp& ip, const Host& h, const std::string& f) {
 }
 
 void hostSet(Interp& ip, const Host& h, const std::string& f, const Value& v) {
+    if (h.kind == "hxgroup" && h.extra.t == T::Object) {
+        const bool sprites = groupField(h, "sprites").truthy();
+        if (sprites && (f == "x" || f == "y" || f == "angle")) {  // members move with the group
+            const float d = float(v.num() - groupField(h, f.c_str()).num());
+            for (const Value& e : groupMembers(h))
+                if (e.t == T::Host && e.host)
+                    if (scene::Sprite* s = spriteOf(ip, *e.host)) (f == "x" ? s->x : f == "y" ? s->y : s->angle) += d;
+        } else if (sprites && f == "alpha") {
+            const double old = groupField(h, "alpha").num();
+            for (const Value& e : groupMembers(h))
+                if (e.t == T::Host && e.host)
+                    if (scene::Sprite* s = spriteOf(ip, *e.host))
+                        s->alpha = old > 0 ? clampv(float(s->alpha / old * v.num()), 0.0f, 1.0f) : float(v.num());
+        } else if (f == "visible" || f == "cameras" || f == "camera" || f == "antialiasing") {
+            for (const Value& e : groupMembers(h))
+                if (e.t == T::Host && e.host) hostSet(ip, *e.host, f, v);
+        }
+        (*h.extra.map)[f] = v;
+        return;
+    }
+    if (h.kind == "charray") {
+        scene::Character* c = nullptr;
+        std::string fld;
+        if (!charArray(ip, h.path, c, fld)) return;
+        const int i = std::atoi(f.c_str());
+        const float x = float(v.num());
+        if (fld == "cameraPosition") (i == 0 ? c->camX : c->camY) = x;
+        else if (fld == "positionArray") (i == 0 ? c->posX : c->posY) = x;
+        else if (fld == "healthColorArray" && i >= 0 && i < 3) {
+            const int sh = 16 - 8 * i;
+            c->barColor = (c->barColor & ~(0xFFu << sh)) | (uint32_t(clampv(int(x), 0, 255)) << sh);
+        }
+        return;
+    }
     const std::string& k = h.kind;
     if (k == "game") {
         setSceneProp(ip, f, v);
@@ -605,6 +811,20 @@ void hostSet(Interp& ip, const Host& h, const std::string& f, const Value& v) {
 
 Value hostIndex(Interp& ip, const Host& h, const Value& index) {
     const int i = int(index.num());
+    if (h.kind == "scenemembers") return i >= 0 && i < int(ip.sc.order.size()) ? orderHandle(ip, ip.sc.order[size_t(i)]) : Value();
+    if (h.kind == "hxgroup" && h.extra.t == T::Object) {
+        const std::vector<Value>& m = groupMembers(h);
+        return i >= 0 && i < int(m.size()) ? m[size_t(i)] : Value();
+    }
+    if (h.kind == "charray") {
+        scene::Character* c = nullptr;
+        std::string fld;
+        if (!charArray(ip, h.path, c, fld)) return Value();
+        if (fld == "cameraPosition") return Value(double(i == 0 ? c->camX : c->camY));
+        if (fld == "positionArray") return Value(double(i == 0 ? c->posX : c->posY));
+        if (i >= 0 && i < 3) return Value(double((c->barColor >> (16 - 8 * i)) & 255));
+        return Value();
+    }
     if (h.kind == "members" || h.kind == "group") return hv("path", h.path + ".members[" + std::to_string(i) + "]");
     if (h.kind == "notegroup" || h.kind == "notemembers") return hv("note", h.path, i);
     if (h.kind == "vars") {
@@ -624,6 +844,75 @@ Value hostIndex(Interp& ip, const Host& h, const Value& index) {
 Value hostCall(Interp& ip, const Host& h, const std::string& m, std::vector<Value>& a) {
     const std::string& k = h.kind;
     scene::Scene& sc = ip.sc;
+    if (k == "scenemembers") {  // game.members
+        if (m == "indexOf" || m == "contains") {
+            const scene::Sprite* t = orderTarget(ip, arg(a, 0));
+            int at = -1;
+            for (size_t i = 0; t && i < sc.order.size(); ++i)
+                if (sc.order[i].get() == t) { at = int(i); break; }
+            return m == "indexOf" ? Value(double(at)) : Value(at >= 0);
+        }
+        return Value();
+    }
+    if (k == "hxgroup" && h.extra.t == T::Object) {
+        std::vector<Value>& mem = groupMembers(h);
+        if (m == "add" || m == "push") { groupAdd(ip, h, arg(a, 0)); return arg(a, 0); }
+        if (m == "insert") { groupAdd(ip, h, arg(a, 1), int(arg(a, 0).num())); return arg(a, 1); }
+        if (m == "remove") {
+            const Value x = arg(a, 0);
+            for (size_t i = 0; i < mem.size(); ++i)
+                if (mem[i].t == T::Host && x.t == T::Host && mem[i].host && x.host && mem[i].host->path == x.host->path) {
+                    mem.erase(mem.begin() + std::ptrdiff_t(i));
+                    break;
+                }
+            if (groupField(h, "inScene").truthy()) removeFromScene(ip, x);
+            return x;
+        }
+        if (m == "forEach" || m == "forEachAlive" || m == "forEachExists" || m == "forEachOfType") {
+            const std::vector<Value> copy = mem;  // the callback may change the group
+            for (const Value& e : copy) {
+                std::vector<Value> ca{e};
+                ip.callValue(arg(a, m == "forEachOfType" ? 1 : 0), ca);
+            }
+            return Value();
+        }
+        if (m == "clear") {
+            if (groupField(h, "inScene").truthy())
+                for (const Value& e : mem) removeFromScene(ip, e);
+            mem.clear();
+            return Value();
+        }
+        if (m == "kill" || m == "revive" || m == "destroy") {
+            for (const Value& e : mem)
+                if (e.t == T::Host && e.host) {
+                    std::vector<Value> none;
+                    hostCall(ip, *e.host, m, none);
+                }
+            if (m == "destroy") mem.clear();
+            return Value();
+        }
+        if (m == "countLiving" || m == "countDead") return Value(double(m == "countLiving" ? mem.size() : 0));
+        if (m == "getFirstAlive" || m == "getFirstExisting" || m == "getFirstAvailable") return mem.empty() ? Value() : mem.front();
+        if (m == "getRandom") return mem.empty() ? Value() : mem[size_t(std::rand()) % mem.size()];
+        if (m == "setPosition") {
+            hostSet(ip, h, "x", arg(a, 0));
+            hostSet(ip, h, "y", arg(a, 1));
+            return Value();
+        }
+        if (m == "indexOf") {
+            for (size_t i = 0; i < mem.size(); ++i)
+                if (mem[i].t == T::Host && arg(a, 0).t == T::Host && mem[i].host && arg(a, 0).host && mem[i].host->path == arg(a, 0).host->path)
+                    return Value(double(i));
+            return Value(-1.0);
+        }
+        return Value();
+    }
+    if (k == "date") {
+        const double ms = h.extra.num();
+        if (m == "getTime") return Value(ms);
+        if (m == "toString") return Value(std::to_string(static_cast<long long>(ms)));
+        return Value(localTimeField(ms, m));
+    }
     if (k == "game") {
         if (m == "add" || m == "insert" || m == "remove" || m == "addBehindGF" || m == "addBehindBF" || m == "addBehindDad" ||
             m == "getLuaObject" || m == "initLuaShader" || m == "createRuntimeShader") {
@@ -650,11 +939,30 @@ Value hostCall(Interp& ip, const Host& h, const std::string& m, std::vector<Valu
             ip.game.debugPrint(arg(a, 0).str(), a.size() > 1 ? colorOf(arg(a, 1)) : 0xFFFFFFFF);
             return Value();
         }
+        if (m == "startCharacterPos") {  // Psych: a character to its JSON position (gf: no offset)
+            if (arg(a, 0).t == T::Host && arg(a, 0).host)
+                if (auto* c = dynamic_cast<scene::Character*>(spriteOf(ip, *arg(a, 0).host))) {
+                    c->x += c->posX;
+                    c->y += c->posY;
+                }
+            return Value();
+        }
         if (m == "startCountdown") { ip.game.startCountdown(); return Value(true); }
         if (m == "endSong") { ip.game.endSong(); return Value(true); }
         if (m == "moveCamera") { sc.focusOn(arg(a, 0).truthy() ? 1 : 0); return Value(); }
         if (m == "getProperty") return sceneProp(ip, arg(a, 0).str());
         return Value();
+    }
+    if (k == "sprite" && isCharGroup(h.path) && (m == "add" || m == "insert" || m == "remove")) {
+        const Value x = arg(a, m == "insert" ? 1 : 0);
+        if (m == "remove") {
+            auto& list = ip.shared->groupChars[h.path];
+            if (x.t == T::Host && x.host) list.erase(std::remove(list.begin(), list.end(), x.host->path), list.end());
+            removeFromScene(ip, x);
+        } else {
+            charGroupAdd(ip, h.path, x);
+        }
+        return x;
     }
     if (k == "sprite") {
         scene::Sprite* s = spriteOf(ip, h);
@@ -864,6 +1172,58 @@ Value hostCall(Interp& ip, const Host& h, const std::string& m, std::vector<Valu
     }
     if (k == "class") {
         const std::string& c = h.path;
+        if (c == "FlxEase") return Value(psych::ease(m, arg(a, 0).num()));  // FlxEase.circOut(t)
+        if (c == "Type") {
+            auto lastPart = [](const std::string& n) {
+                const size_t d = n.rfind('.');
+                return d == std::string::npos ? n : n.substr(d + 1);
+            };
+            if (m == "resolveClass") {
+                const std::string n = lastPart(arg(a, 0).str());
+                return n.empty() ? Value() : hv("class", n);
+            }
+            if (m == "getClassName" || m == "getEnumName") {
+                const Value x = arg(a, 0);
+                return x.t == T::Host && x.host ? Value(x.host->kind == "class" ? x.host->path : x.host->kind) : Value();
+            }
+            if (m == "getClass") return arg(a, 0).t == T::Host && arg(a, 0).host ? hv("class", arg(a, 0).host->kind) : Value();
+            if (m == "createInstance") {
+                const Value cls = arg(a, 0);
+                std::vector<Value> args;
+                if (arg(a, 1).t == T::Array) args = *arg(a, 1).arr;
+                return cls.t == T::Host && cls.host ? construct(ip, cls.host->path, args) : Value();
+            }
+            if (m == "typeof") {
+                const Value x = arg(a, 0);
+                return Value(std::string(x.t == T::Num ? "TFloat" : x.t == T::Bool ? "TBool" : x.t == T::Str ? "TClass(String)"
+                                         : x.t == T::Func                ? "TFunction"
+                                         : x.isNull()                    ? "TNull"
+                                                                         : "TObject"));
+            }
+            return Value();
+        }
+        if (c == "Sys") {
+            const double now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+            if (m == "time") return Value(now);
+            if (m == "cpuTime") return Value(double(std::clock()) / CLOCKS_PER_SEC);
+            if (m == "systemName") return Value(std::string(platform::kAndroid ? "Android" : "Linux"));
+            if (m == "getEnv") return Value();
+            if (m == "sleep") return Value();
+            return Value();
+        }
+        if (c == "Date") {
+            if (m == "now") {
+                auto d = mk("date");
+                d->extra = Value(std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count());
+                return Value::hostOf(d);
+            }
+            if (m == "fromTime") {
+                auto d = mk("date");
+                d->extra = Value(arg(a, 0).num());
+                return Value::hostOf(d);
+            }
+            return Value();
+        }
         if (c == "Math") {
             bool ok = false;
             Value r = mathCall(m, a, ok);
@@ -1312,7 +1672,28 @@ Value construct(Interp& ip, const std::string& cls, std::vector<Value>& a) {
         return Value::object({{"x", Value(arg(a, 0).num())}, {"y", Value(arg(a, 1).num())}});
     if (cls == "Map" || cls == "StringMap" || cls == "IntMap" || cls == "ObjectMap" || cls == "EnumValueMap") return Value::mapOf();
     if (cls == "Array") return Value::array();
-    if (cls == "FlxTypedGroup" || cls == "FlxGroup" || cls == "FlxSpriteGroup") return Value::array();
+    if (cls == "FlxTypedGroup" || cls == "FlxGroup" || cls == "FlxSpriteGroup" || cls == "FlxTypedSpriteGroup" ||
+        cls == "FlxTypedContainer" || cls == "FlxContainer" || cls == "FlxSpriteContainer") {
+        auto g = mk("hxgroup", newTag(ip, "__hxgroup"));
+        const bool sprites = cls.find("Sprite") != std::string::npos;
+        g->extra = Value::object({{"members", Value::array()}, {"x", Value(arg(a, 0).num())}, {"y", Value(arg(a, 1).num())},
+                                  {"alpha", Value(1.0)}, {"visible", Value(true)}, {"angle", Value(0.0)},
+                                  {"inScene", Value(false)}, {"sprites", Value(sprites)}});
+        return Value::hostOf(g);
+    }
+    if (cls == "Date") {
+        auto d = mk("date");
+        std::tm tm{};
+        tm.tm_year = int(arg(a, 0).num()) - 1900;
+        tm.tm_mon = int(arg(a, 1).num());
+        tm.tm_mday = std::max(1, int(arg(a, 2).num()));
+        tm.tm_hour = int(arg(a, 3).num());
+        tm.tm_min = int(arg(a, 4).num());
+        tm.tm_sec = int(arg(a, 5).num());
+        tm.tm_isdst = -1;
+        d->extra = Value(double(std::mktime(&tm)) * 1000.0);
+        return Value::hostOf(d);
+    }
     ip.game.debugNotice("HScript: class " + cls + " is not available here", false, false);
     return Value();
 }

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <unordered_set>
 
 #include "common.hpp"
 #include "json.hpp"
@@ -258,6 +259,7 @@ bool Atlas::parseSparrow(std::string_view xml, std::string* err) {
     if (xml.size() >= 3 && (unsigned char)xml[0] == 0xEF && (unsigned char)xml[1] == 0xBB && (unsigned char)xml[2] == 0xBF)
         xml.remove_prefix(3);
     bool sawAtlas = false;
+    std::unordered_set<std::string> seen;  // Flixel keeps the first frame of a name, drops the rest
     forEachElement(xml, [&](std::string_view name, const Attrs& a) {
         if (name == "TextureAtlas") {
             sawAtlas = true;
@@ -280,6 +282,7 @@ bool Atlas::parseSparrow(std::string_view xml, std::string* err) {
         f.fh = attrNum(a, "frameHeight", srcH);
         if (f.fw <= 0) f.fw = srcW;
         if (f.fh <= 0) f.fh = srcH;
+        if (!f.name.empty() && !seen.insert(f.name).second) return;
         frames.push_back(std::move(f));
     });
     if (frames.empty()) {

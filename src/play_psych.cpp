@@ -1299,6 +1299,13 @@ void PlayState::psychDraw() {
     auto marker = [&](const scene::Sprite& m) {
         if (hudPass && &m == sc.hudMarker.get()) drawHudLayer();
     };
+    // Sprites with several shaders (addSpriteShader) go through them first,
+    // outside the canvas.
+    if (std::any_of(sc.order.begin(), sc.order.end(), [](const scene::SpritePtr& p) { return !p->moreShaders.empty(); })) {
+        gfx::endCanvas();
+        renderer_.prepareShaderLayers(sc);
+        gfx::beginCanvas();
+    }
     // One camera; with shaders (ShaderFilter) it is drawn to a texture first.
     auto pass = [&](scene::Cam which, scene::Camera& cam, bool isHud) {
         if (cam.filters.empty() || !cam.visible) {
@@ -1632,6 +1639,8 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     if (path == "cpuControlled" || path == "botPlay") return flag(session_.botplay());
     if (path == "practiceMode") return flag(cfg_.practice);
     if (path == "inCutscene") return flag(inCutscene_);
+    if (path == "paused") return flag(phase_ == Phase::Paused);
+    if (path == "canPause") return flag(phase_ == Phase::Playing || phase_ == Phase::Waiting);
     if (path == "startedCountdown") return flag(countdownStarted_);
     if (path == "startingSong") return flag(songMs_ < 0);
     if (path == "endingSong") return flag(phase_ == Phase::Ending);

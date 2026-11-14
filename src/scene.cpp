@@ -375,6 +375,38 @@ void Sprite::addAnim(Anim a) {
     anims.push_back(std::move(a));
 }
 
+namespace {
+// Flixel's FlxVelocity.computeVelocity.
+float computeVelocity(float v, float a, float drag, float max, float dt) {
+    if (a != 0) {
+        v += a * dt;
+    } else if (drag != 0) {
+        const float d = drag * dt;
+        v = v - d > 0 ? v - d : v + d < 0 ? v + d : 0;
+    }
+    if (v != 0 && max != 0) v = clampv(v, -max, max);
+    return v;
+}
+}  // namespace
+
+void Sprite::updateMotion(double dtd) {
+    if (velX == 0 && velY == 0 && accX == 0 && accY == 0 && angVel == 0 && angAcc == 0) return;
+    const float dt = float(dtd);
+    // Half the change before moving and half after, as FlxObject.updateMotion.
+    float half = 0.5f * (computeVelocity(angVel, angAcc, angDrag, maxAngular, dt) - angVel);
+    angVel += half;
+    angle += angVel * dt;
+    angVel += half;
+    half = 0.5f * (computeVelocity(velX, accX, dragX, maxVelX, dt) - velX);
+    velX += half;
+    x += velX * dt;
+    velX += half;
+    half = 0.5f * (computeVelocity(velY, accY, dragY, maxVelY, dt) - velY);
+    velY += half;
+    y += velY * dt;
+    velY += half;
+}
+
 bool Sprite::play(const std::string& name, bool force, bool rev, int startFrame) {
     int idx = -1;
     for (size_t i = 0; i < anims.size(); ++i)
@@ -450,6 +482,19 @@ bool Sprite::get(std::string_view f, Value& out) const {
     if (f == "height") return num(height);
     if (f == "frameWidth") return num(frameW);
     if (f == "frameHeight") return num(frameH);
+    if (f == "velocity.x") return num(velX);
+    if (f == "velocity.y") return num(velY);
+    if (f == "acceleration.x") return num(accX);
+    if (f == "acceleration.y") return num(accY);
+    if (f == "drag.x") return num(dragX);
+    if (f == "drag.y") return num(dragY);
+    if (f == "maxVelocity.x") return num(maxVelX);
+    if (f == "maxVelocity.y") return num(maxVelY);
+    if (f == "angularVelocity") return num(angVel);
+    if (f == "angularAcceleration") return num(angAcc);
+    if (f == "angularDrag") return num(angDrag);
+    if (f == "maxAngular") return num(maxAngular);
+    if (f == "moves") { out = moves; return true; }
     if (f == "scale.x") return num(scaleX);
     if (f == "scale.y") return num(scaleY);
     if (f == "scrollFactor.x") return num(scrollX);
@@ -491,6 +536,19 @@ bool Sprite::set(std::string_view f, const Value& v) {
     if (f == "antialiasing") { antialiasing = toBool(v, true); return true; }
     if (f == "width") { width = float(d); return true; }
     if (f == "height") { height = float(d); return true; }
+    if (f == "velocity.x") { velX = float(d); return true; }
+    if (f == "velocity.y") { velY = float(d); return true; }
+    if (f == "acceleration.x") { accX = float(d); return true; }
+    if (f == "acceleration.y") { accY = float(d); return true; }
+    if (f == "drag.x") { dragX = float(d); return true; }
+    if (f == "drag.y") { dragY = float(d); return true; }
+    if (f == "maxVelocity.x") { maxVelX = float(d); return true; }
+    if (f == "maxVelocity.y") { maxVelY = float(d); return true; }
+    if (f == "angularVelocity") { angVel = float(d); return true; }
+    if (f == "angularAcceleration") { angAcc = float(d); return true; }
+    if (f == "angularDrag") { angDrag = float(d); return true; }
+    if (f == "maxAngular") { maxAngular = float(d); return true; }
+    if (f == "moves") { moves = toBool(v, true); return true; }
     if (f == "scale.x") { scaleX = float(d); return true; }
     if (f == "scale.y") { scaleY = float(d); return true; }
     if (f == "scrollFactor.x") { scrollX = float(d); return true; }
@@ -770,12 +828,21 @@ int Scene::indexOf(std::string_view name) const {
 }
 
 void Scene::setOrder(std::string_view name, int pos) {
-    const int i = indexOf(name);
-    if (i < 0) return;
-    SpritePtr s = order[size_t(i)];
-    order.erase(order.begin() + i);
+    // Psych: remove(obj) then insert(position, obj), so a sprite made but
+    // never added (makeAnimatedLuaSprite without addLuaSprite, as extra
+    // character scripts do) joins the scene there.
+    SpritePtr s;
+    if (const int i = indexOf(name); i >= 0) {
+        s = order[size_t(i)];
+        order.erase(order.begin() + i);
+    } else {
+        const auto it = objects.find(name);
+        if (it == objects.end() || !it->second) return;
+        s = it->second;
+    }
     pos = clampv(pos, 0, int(order.size()));
     order.insert(order.begin() + pos, s);
+    s->inScene = true;
 }
 
 Strum* Scene::strumByGroup(std::string_view group, int index) {
@@ -956,15 +1023,15 @@ void Scene::update(double dt, double stepMs, bool playerHolding) {
             for (Tween::Field& f : tw.fields)
                 if (!f.init) {
                     Value cur;
-                    f.from = getProp(pathOf(f.name), cur) ? toNum(cur, f.to) : f.to;
+                    f.from = getAnyProp(pathOf(f.name), cur) ? toNum(cur, f.to) : f.to;
                     f.init = true;
                 }
         tw.t += dt;
         const double k = psych::ease(tw.ease, tw.t / tw.dur);
         if (tw.isColor) {
-            setProp(pathOf("color"), double(lerpRgb(tw.c0, tw.c1, k)));
+            setAnyProp(pathOf("color"), double(lerpRgb(tw.c0, tw.c1, k)));
         } else {
-            for (const Tween::Field& f : tw.fields) setProp(pathOf(f.name), f.from + (f.to - f.from) * k);
+            for (const Tween::Field& f : tw.fields) setAnyProp(pathOf(f.name), f.from + (f.to - f.from) * k);
         }
         if (tw.t >= tw.dur) {
             Completion c;
@@ -1003,6 +1070,7 @@ void Scene::update(double dt, double stepMs, bool playerHolding) {
         Sprite& s = *kv.second;
         if (!s.active) continue;
         s.updateAnim(dt);
+        if (s.moves) s.updateMotion(dt);
         // Extra characters made by scripts behave like the main three.
         if (s.kind == Kind::Character && &s != bf.get() && &s != dad.get() && &s != gf.get())
             static_cast<Character&>(s).updateChar(dt, stepMs, false);
@@ -1024,7 +1092,10 @@ void Scene::update(double dt, double stepMs, bool playerHolding) {
     };
     for (Camera* c : {&camGame, &camHud, &camOther})
         for (const ShaderPtr& sh : c->filters) tick(sh);
-    for (auto& kv : objects) tick(kv.second->shader);
+    for (auto& kv : objects) {
+        tick(kv.second->shader);
+        for (ShaderPtr& sh : kv.second->moreShaders) tick(sh);
+    }
     for (Character* c : {bf.get(), dad.get(), gf.get()})
         if (c) tick(c->shader);
     // Camera follow and zoom decay (Psych PlayState.update).

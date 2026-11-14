@@ -143,6 +143,7 @@ struct Shared {
     std::vector<NumTween> numTweens;
     int nextId = 0;
     std::vector<Interp*> interps;  // live interpreters (for callbacks)
+    std::map<std::string, std::vector<std::string>> groupChars;  // dadGroup... -> characters scripts added to it
     std::function<void(const std::string&)> report;  // errors raised inside callbacks
     void forget(Interp* ip);
     void update(double dt);                         // advances FlxTween.num tweens
