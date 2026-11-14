@@ -152,7 +152,8 @@ public:
             {Row::Number, "Master volume", "", nullptr, &s.masterVol, 0, 1, 0.05f},
             {Row::Number, "Music volume", "", nullptr, &s.musicVol, 0, 1, 0.05f},
             {Row::Number, "Sound effects", "", nullptr, &s.sfxVol, 0, 1, 0.05f},
-            {Row::Number, "Hit sounds", "A tick on every note you hit.", nullptr, &s.hitsoundVol, 0, 1, 0.05f},
+            {Row::Number, "Hit sounds", "A tick on every note you hit, on the note's own sample of the song: a fast spam becomes a "
+             "tone at the rate of its notes instead of a louder, crackling pile.", nullptr, &s.hitsoundVol, 0, 1, 0.05f},
             {Row::Header, "DEBUG", ""},
             {Row::Choice, "Lua errors", "Errors of mod scripts on screen. Psych shows them only for scripts that set luaDebugMode.",
              nullptr, nullptr, 0, 0, 0, &s.luaErrors, {0, 1, 2}, {"Always", "luaDebugMode", "Off"}},

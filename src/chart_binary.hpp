@@ -7,8 +7,8 @@
 // What the JSON holds besides the notes (song data, sections, events...) is
 // kept as it is, as JSON (compressed); the notes are columns (times, lengths,
 // lanes, stacks, types) of small numbers - each time as the change of the
-// gap between notes, in nanoseconds - packed with deflate in blocks of a
-// million notes, which load on every core at once. Deflate and not a
+// gap between notes, in nanoseconds - packed with deflate in blocks of
+// 262144 notes, which load on every core at once. Deflate and not a
 // stronger packer: past this point a smaller file costs more time to unpack
 // than it saves to read.
 #pragma once
