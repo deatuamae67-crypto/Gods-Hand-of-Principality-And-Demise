@@ -1,20 +1,25 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 package com.godshand.game;
 
 import android.app.NativeActivity;
 import android.content.ClipData;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.view.View;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -52,11 +57,53 @@ public class GameActivity extends NativeActivity {
     public static volatile int importState = 0;
     /** Zips copied into mods/ by the last import. */
     public static volatile int importCount = 0;
+    /**
+     * Command-line options for the game, from the intent that started it
+     * (am start ... --es args "--autoplay builtin:x --render"): the emulator test.
+     */
+    public static volatile String launchArgs = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        Intent intent = getIntent();
+        String args = intent != null ? intent.getStringExtra("args") : null;
+        launchArgs = args != null ? args : "";
         super.onCreate(savedInstanceState);
         hideSystemBars();
+    }
+
+    /**
+     * Rendering mode: copies a finished video into Movies/GodsHand (Android 10
+     * and later), where the gallery shows it. Returns where it went, or "" (the
+     * video then stays in the game's own folder). Called from the game thread.
+     */
+    public String publishVideo(String path, String name) {
+        if (Build.VERSION.SDK_INT < 29) return "";
+        ContentResolver resolver = getContentResolver();
+        Uri uri = null;
+        try {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.Video.Media.DISPLAY_NAME, name);
+            v.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
+            v.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/GodsHand");
+            v.put(MediaStore.Video.Media.IS_PENDING, 1);
+            uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, v);
+            if (uri == null) return "";
+            try (InputStream in = new FileInputStream(path); OutputStream out = resolver.openOutputStream(uri)) {
+                if (out == null) throw new java.io.IOException("no output");
+                byte[] buf = new byte[1 << 16];
+                for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+            }
+            v.clear();
+            v.put(MediaStore.Video.Media.IS_PENDING, 0);
+            resolver.update(uri, v, null, null);
+            return Environment.DIRECTORY_MOVIES + "/GodsHand/" + name;
+        } catch (Exception e) {
+            if (uri != null) {
+                try { resolver.delete(uri, null, null); } catch (Exception ignored) { }
+            }
+            return "";
+        }
     }
 
     @Override

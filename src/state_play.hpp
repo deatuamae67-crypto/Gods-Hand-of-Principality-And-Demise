@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // The duel. Built-in songs use the game's own stages and figures; mod songs
 // that ship Psych Engine content (characters, stages, Lua scripts) run in
@@ -15,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "note_renderer.hpp"
 #include "app.hpp"
 #include "characters.hpp"
 #include "gfx.hpp"
@@ -33,6 +33,7 @@ public:
     explicit PlayState(PlayRequest r);
     ~PlayState() override;
     bool wantsMenuMusic() const override { return false; }
+    std::string perfInfo() const override;
     TouchLayout touchLayout() const override;
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
@@ -256,6 +257,7 @@ private:
     // rate stays under its target with thousands of notes on screen, halved
     // again once the screen holds clearly fewer than when it had to grow.
     float noteGap_ = 1.0f;
+    NoteRenderer noteRaster_;  // Options > Note renderer
     bool debugOverlay_ = false;
     bool rendering_ = false;  // the rendering mode records this song (App::renderer)
     bool uiFromMod_ = false;  // the Psych interface took pieces from this song's mod
@@ -270,6 +272,7 @@ private:
     double pausedAt_ = 0;
     Music pauseMusic_{};     // Psych's breakfast, fading in while paused
     float pauseMusicVol_ = 0;
+    double loadStartReal_ = 0;  // nowSec() when loading started (--perf)
     double deadAt_ = 0, loadStart_ = 0, lastHitsound_ = 0, lastMissSfx_ = 0, waitStart_ = 0, endWaitStart_ = 0;
     double lastSplash_[9] = {};
     bool finished_ = false, songStarted_ = false, countdownStarted_ = false, endRequested_ = false;

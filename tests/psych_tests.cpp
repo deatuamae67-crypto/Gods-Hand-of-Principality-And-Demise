@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Headless tests for the Psych compatibility layer: atlases, character and
 // stage JSON, events, the scene model and the Lua API. Also a corpus runner:
@@ -719,6 +718,50 @@ void testChartStreaming() {
     PCHECK(dom.playerNotes + dom.opponentNotes == streamed.rawNoteCount);
     const ChartPeek pk = peekChart(path);
     PCHECK(pk.song == "Blocked" && pk.player2 == "bambi" && pk.stage == "farm" && pk.isChart);
+
+    // The chart cache: the first load keeps the notes, the second reads them
+    // back (the cache file is not written again) and gives the same chart.
+    namespace fs = std::filesystem;
+    const fs::path cacheDir = fs::temp_directory_path() / "gh_chart_cache_test";
+    fs::remove_all(cacheDir);
+    setChartCacheDir(cacheDir.string());
+    auto cacheFiles = [&] {
+        std::vector<fs::path> v;
+        std::error_code ec;
+        for (fs::directory_iterator it(cacheDir, ec), end; !ec && it != end; it.increment(ec))
+            if (it->path().extension() == ".ghcc") v.push_back(it->path());
+        return v;
+    };
+    Chart first, second;
+    PCHECK(loadChartFile(path, "Hard", first, err, {}, 1));
+    const std::vector<fs::path> files = cacheFiles();
+    PCHECK(files.size() == 1);
+    const auto written = files.empty() ? fs::file_time_type() : fs::last_write_time(files[0]);
+    PCHECK(loadChartFile(path, "Hard", second, err, {}, 1));
+    PCHECK(!files.empty() && fs::last_write_time(files[0]) == written);
+    bool sameCached = first.notes.size() == second.notes.size() && second.notes.size() == streamed.notes.size();
+    for (size_t i = 0; sameCached && i < first.notes.size(); ++i) {
+        const Note& a = first.notes[i];
+        const Note& b = second.notes[i];
+        sameCached = a.time == b.time && a.length == b.length && a.lane == b.lane && a.side == b.side && a.kind == b.kind &&
+                     a.flags == b.flags && a.stack == b.stack;
+    }
+    PCHECK(sameCached);
+    PCHECK(second.title == "Blocked" && second.events.size() == 40 && second.rawNoteCount == streamed.rawNoteCount &&
+           second.keys == 9);
+    // A changed chart file is read again.
+    std::string changed = j;
+    changed.replace(changed.find("\"song\": \"Blocked\""), 17, "\"song\": \"Changed!\"");
+    std::ofstream(path, std::ios::binary | std::ios::trunc) << changed;
+    Chart third;
+    PCHECK(loadChartFile(path, "Hard", third, err, {}, 1) && third.title == "Changed!");
+    // A damaged cache file is not used.
+    for (const fs::path& f : cacheFiles()) fs::resize_file(f, 40);
+    Chart fourth;
+    PCHECK(loadChartFile(path, "Hard", fourth, err, {}, 1) && fourth.title == "Changed!" &&
+           fourth.notes.size() == streamed.notes.size());
+    setChartCacheDir("");
+    fs::remove_all(cacheDir);
     std::filesystem::remove(path);
 }
 

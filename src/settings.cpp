@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "settings.hpp"
 
@@ -46,8 +45,11 @@ bool Settings::load(const std::string& path) {
         else if (k == "fpsHardware") fpsHardware = b;
         else if (k == "lowDetail") lowDetail = b;
         else if (k == "vsync") vsync = b;
+        else if (k == "lowLatency") lowLatency = b;
+        else if (k == "audioLatency") audioLatency = clampv(int(d), 0, 3);
         else if (k == "shaders") shaders = b;
         else if (k == "noteDetail") noteDetail = clampv(int(d), 0, 1);
+        else if (k == "noteRenderer") noteRenderer = clampv(int(d), 0, 3);
         else if (k == "luaNoteCallbacks") luaNoteCallbacks = b;
         else if (k == "renderMode") renderMode = b;
         else if (k == "renderSize") renderSize = clampv(int(d), 0, 3);
@@ -121,8 +123,8 @@ bool Settings::save(const std::string& path) const {
     f << "downscroll=" << downscroll << "\nmiddlescroll=" << middlescroll << "\nghostTapping=" << ghostTapping
       << "\nnoteSplashes=" << noteSplashes << "\nflashing=" << flashing << "\ncamZoom=" << camZoom
       << "\nshowFps=" << showFps << "\nfpsMemory=" << fpsMemory << "\nfpsFrameTimes=" << fpsFrameTimes << "\nfpsUsage=" << fpsUsage
-      << "\nfpsHardware=" << fpsHardware << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
-      << "\nnoteDetail=" << noteDetail << "\nluaNoteCallbacks=" << luaNoteCallbacks
+      << "\nfpsHardware=" << fpsHardware << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nlowLatency=" << lowLatency << "\naudioLatency=" << audioLatency << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
+      << "\nnoteDetail=" << noteDetail << "\nnoteRenderer=" << noteRenderer << "\nluaNoteCallbacks=" << luaNoteCallbacks
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups

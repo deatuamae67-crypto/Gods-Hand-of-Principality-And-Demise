@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Headless tests for the engine core: JSON, chart import, gameplay rules and
 // the procedural composer. Run: gh_tests [--audio] [--wav <dir>]
@@ -28,6 +27,8 @@ void runAudioTests();
 #endif
 int printFlp(int argc, char** argv, int first);
 void runExtraTests(bool audio);
+void runRasterTests(bool timings);
+void runPacerTests();
 int runPsychCorpus(const char* dir);
 #define CHECK(cond)                                                              \
     do {                                                                         \
@@ -437,6 +438,8 @@ static int benchCharts(int argc, char** argv, int first) {
 int main(int argc, char** argv) {
     bool audio = false;
     const char* wav = nullptr;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--cache")) setChartCacheDir(argv[i + 1]);  // gh_tests --cache dir --chart files
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--chart")) return benchCharts(argc, argv, i + 1);
     for (int i = 1; i < argc; ++i)
@@ -445,6 +448,12 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--psych-corpus")) return runPsychCorpus(argv[i + 1]);
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--flp")) return printFlp(argc, argv, i + 1);
+    for (int i = 1; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--raster")) {  // only the note renderer (the Windows CI runs this)
+            runRasterTests(true);
+            std::printf("%d passed, %d failed\n", g_pass, g_fail);
+            return g_fail == 0 ? 0 : 1;
+        }
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--audio")) audio = true;
         if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) { wav = argv[++i]; audio = true; }
@@ -460,6 +469,8 @@ int main(int argc, char** argv) {
     runAudioTests();
 #endif
     runExtraTests(audio);
+    runRasterTests(false);
+    runPacerTests();
     testComposer(audio, wav);
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

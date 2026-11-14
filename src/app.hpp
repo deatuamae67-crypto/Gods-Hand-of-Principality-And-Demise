@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Application shell: main loop, global services and the game-state machine.
 #pragma once
@@ -12,6 +11,7 @@
 #include <vector>
 
 #include "audio.hpp"
+#include "frame_pacer.hpp"
 #include "input.hpp"
 #include "library.hpp"
 #include "render_mode.hpp"
@@ -35,6 +35,8 @@ public:
     // This screen uses the key itself (a lane, typing, rebinding), so the
     // game-wide volume keys leave it alone.
     virtual bool keyReserved(int key) const { return false; }
+    // More for godshand --perf (a song: how its notes were drawn).
+    virtual std::string perfInfo() const { return {}; }
 };
 
 struct Modifiers {
@@ -159,6 +161,10 @@ private:
     double volumeShownAt_ = -10;
     double perfSince_ = 0;
     double renderClock_ = 0, clockShift_ = 0, renderStartReal_ = 0, lastSwap_ = 0;
+    FramePacer pacer_;           // Options > GRAPHICS > Low latency
+    double frameStart_ = 0;      // when this frame started (real time)
+    int pacerMonitor_ = -1;      // the monitor the pacer measured
+    double pacerCheckAt_ = 0;
     std::vector<float> renderAudio_;
     std::string ffmpegPath_;
     bool ffmpegProbed_ = false;

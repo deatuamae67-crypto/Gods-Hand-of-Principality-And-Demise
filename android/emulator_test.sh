@@ -142,6 +142,33 @@ tap_wait $pause_x $pause_y "paused at" 10
 adb logcat -d -s GodsHand:I | grep "paused at" | tail -n1 | grep -qE ": [1-9][0-9]* presses" || fail "the taps on the lanes did not press them"
 shot 7-lanes
 
+# Rendering mode with the phone's own H.264 and AAC encoders: a few seconds
+# of a song, recorded by itself and put in Movies/GodsHand (Android 10+).
+adb shell am force-stop "$pkg"; sleep 1
+adb logcat -c
+adb shell "am start -W -n $pkg/.GameActivity --es args '--autoplay vigil Easy --render --quit-after 9'" || fail "start (rendering mode)"
+wait_log "rendering mode: [0-9]*x[0-9]*" 90
+wait_log "video in Movies/GodsHand" 300
+video=$(adb shell ls -1 /sdcard/Movies/GodsHand/ | tr -d '\r' | grep '\.mp4$' | tail -n1)
+[ -n "$video" ] || fail "no video in Movies/GodsHand"
+adb pull "/sdcard/Movies/GodsHand/$video" "$out/render.mp4" > /dev/null || fail "could not copy the video"
+python3 - "$out/render.mp4" <<'PY' || fail "the video is not an MP4 with H.264 pictures and AAC sound"
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+# The top-level boxes, then the sample entries of its tracks.
+boxes, pos = [], 0
+while pos + 8 <= len(data):
+    size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+    if size == 1: size = struct.unpack(">Q", data[pos + 8:pos + 16])[0]
+    if size < 8: break
+    boxes.append(kind); pos += size
+print("boxes", boxes, "bytes", len(data))
+sys.exit(0 if b"ftyp" in boxes and b"moov" in boxes and b"mdat" in boxes and b"avc1" in data and b"mp4a" in data
+         and len(data) > 50000 else 1)
+PY
+echo "rendering mode made $video"
+adb logcat -d -s GodsHand:I | grep -E "rendering mode|video in" | tail -n3
+
 adb logcat -d > "$out/logcat.txt"
 # Only the game's own lines count: other apps on the emulator log their own errors.
 if grep -A2 -E "FATAL EXCEPTION|Fatal signal" "$out/logcat.txt" | grep -q "godshand"; then fail "the game crashed"; fi

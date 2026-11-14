@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Chart files of any size (see chart_stream.cpp).
 #pragma once
@@ -40,6 +39,13 @@ struct StreamedNotes {
 // PulseForge chart the top-level "notes" list is streamed the same way, each
 // note stored as lane + 20 * owner (0 player, 1 opponent, 2 girlfriend).
 bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err);
+
+// Big charts read once are kept in this folder (their notes, compact), and
+// the next load reads them back instead of the JSON: a fraction of a second
+// for any size. Empty (the default): no cache. The folder is created when
+// needed and kept under 4 GB, the oldest files going first.
+void setChartCacheDir(const std::string& dir);
+std::string chartCacheDir();
 
 // Loads any chart file: small ones are parsed whole, big ones are streamed.
 bool loadChartFile(const std::string& path, const std::string& difficulty, Chart& out, std::string& err,

@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "app.hpp"
 #include "psych_ui.hpp"
@@ -21,6 +20,12 @@
 #include "process.hpp"
 #include "sysinfo.hpp"
 #include "raylib.h"
+
+// The audio buffer raylib opens the device with (CMakeLists.txt adds them
+// to raylib's raudio.c; 0: miniaudio's default).
+extern "C" {
+extern unsigned int GhAudioPeriodMs, GhAudioPeriods;
+}
 
 namespace gh {
 
@@ -204,6 +209,14 @@ void App::toggleFullscreen() {
 }
 
 int App::run(int argc, char** argv) {
+    // The command line; on Android, the options given to the intent instead.
+    std::vector<std::string> argStore;
+    for (int i = 0; i < argc; ++i) argStore.push_back(argv[i]);
+    for (std::string& s : platform::launchArgs()) argStore.push_back(std::move(s));
+    std::vector<char*> argPtrs;
+    for (std::string& s : argStore) argPtrs.push_back(s.data());
+    argc = int(argPtrs.size());
+    argv = argPtrs.data();
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
@@ -267,6 +280,7 @@ int App::run(int argc, char** argv) {
     }
 
     const bool baseGiven = !base.empty();
+    if (baseGiven && base.back() != '/' && base.back() != '\\') base += '/';  // --base dir works without the slash too
     if (platform::kAndroid) {
         base = platform::dataDir();
         platform::prepareDataDir(base);
@@ -289,6 +303,8 @@ int App::run(int argc, char** argv) {
     }
     settings.load(userDir + "settings.cfg");
     scores.load(userDir + "scores.cfg");
+    // Big charts read once load from here afterwards (chart_stream.hpp).
+    setChartCacheDir(userDir + "cache/charts/");
 
     unsigned flags = platform::kAndroid ? 0u : (FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     if (settings.vsync) flags |= FLAG_VSYNC_HINT;
@@ -305,6 +321,14 @@ int App::run(int argc, char** argv) {
         if (settings.fullscreen && !autoRun.enabled) ToggleBorderlessWindowed();
     }
 
+    {
+        // Options > Audio latency: the sound card's buffer, set in raylib's
+        // raudio.c (patched by CMakeLists.txt) before the device opens.
+        static const unsigned kPeriodMs[4] = {3, 5, 10, 20}, kPeriods[4] = {2, 3, 3, 3};
+        const int l = clampv(settings.audioLatency, 0, 3);
+        GhAudioPeriodMs = kPeriodMs[l];
+        GhAudioPeriods = kPeriods[l];
+    }
     InitAudioDevice();
     mixer.init();
     sfxInit();
@@ -379,6 +403,26 @@ int App::run(int argc, char** argv) {
             else std::this_thread::yield();
             continue;
         }
+        // Low latency with V-sync: the frame starts as late as it can and
+        // still be ready for the next refresh; the keys are read meanwhile.
+        if (settings.vsync && settings.lowLatency) {
+            if (pacerMonitor_ < 0 || now - pacerCheckAt_ > 1.0) {  // the screen, once a second
+                pacerCheckAt_ = now;
+                const int monitor = platform::kAndroid ? 0 : GetCurrentMonitor();
+                if (monitor != pacerMonitor_) {  // a new screen (or the first): its refresh rate
+                    pacerMonitor_ = monitor;
+                    pacer_.reset(platform::kAndroid ? 0.0 : double(GetMonitorRefreshRate(monitor)));
+                }
+            }
+            const double wait = pacer_.startAt() - nowSec();
+            if (wait > 0.0) {
+                if (wait > 0.0012) std::this_thread::sleep_for(std::chrono::microseconds(500));
+                else std::this_thread::yield();
+                continue;
+            }
+        } else if (pacerMonitor_ >= 0) {
+            pacerMonitor_ = -1;  // measured again when it is turned back on
+        }
         if (cap > 0) {
             nextFrame += 1.0 / cap;
             if (now - nextFrame > 0.1) nextFrame = now;
@@ -405,6 +449,7 @@ int App::run(int argc, char** argv) {
 }
 
 void App::frame() {
+    frameStart_ = nowSec();
     input.beginFrame(dt);
     if (GetScreenWidth() != shownW_ || GetScreenHeight() != shownH_) {
         shownW_ = GetScreenWidth();
@@ -505,7 +550,17 @@ void App::frame() {
     // second leaves the rest of the time to drawing and encoding.
     const double realNow = nowSec();
     if (!rendering || realNow - lastSwap_ >= 1.0 / 30.0) {
+        // Low latency with V-sync: the graphics card finishes the frame (its
+        // time is measured), then the game waits until the screen shows it,
+        // so no frame waits in the driver's queue.
+        const bool pace = settings.vsync && settings.lowLatency && !rendering && pacerMonitor_ >= 0;
+        if (pace) platform::gpuFinish();
+        const double work = nowSec() - frameStart_;
         SwapScreenBuffer();
+        if (pace) {
+            platform::gpuFinish();
+            pacer_.shown(nowSec(), work);
+        }
         lastSwap_ = realNow;
     }
 
@@ -521,9 +576,12 @@ void App::frame() {
     ++perfFrames_;
     if (now - perfSince_ >= 1.0) {
         worstFrameMs = perfWorst_;
-        if (perf && perfFrames_ > 0)
-            std::printf("[perf] %d fps, update %.2f ms, draw %.2f ms, worst frame %.1f ms\n", perfFrames_,
-                        perfUpd_ / perfFrames_, perfDraw_ / perfFrames_, perfWorst_);
+        if (perf && perfFrames_ > 0) {
+            const std::string more = state_ ? state_->perfInfo() : std::string();
+            std::printf("[perf] %d fps, update %.2f ms, draw %.2f ms, worst frame %.1f ms%s%s\n", perfFrames_,
+                        perfUpd_ / perfFrames_, perfDraw_ / perfFrames_, perfWorst_, more.empty() ? "" : ", ", more.c_str());
+            std::fflush(stdout);
+        }
         perfSince_ = now;
         perfFrames_ = 0;
         perfUpd_ = perfDraw_ = perfWorst_ = 0;
@@ -626,15 +684,15 @@ void App::drawFpsPanel() {
 
 // -------------------------------------------------------- rendering mode --
 
-bool App::wantsRender() const { return !platform::kAndroid && (settings.renderMode || renderCli); }
+bool App::wantsRender() const { return settings.renderMode || renderCli; }
 
 bool App::startRender(const std::string& title, const std::string& diff) {
     if (renderer.active()) return true;
-    if (!ffmpegProbed_) {
+    if (!ffmpegProbed_ && !platform::kAndroid) {  // Android uses the phone's own encoders
         ffmpegPath_ = findProgram(base, "ffmpeg", "-version");
         ffmpegProbed_ = true;
     }
-    if (ffmpegPath_.empty()) {
+    if (ffmpegPath_.empty() && !platform::kAndroid) {
         notify("Rendering mode needs ffmpeg: put ffmpeg next to the game, or install it", 10.0);
         return false;
     }

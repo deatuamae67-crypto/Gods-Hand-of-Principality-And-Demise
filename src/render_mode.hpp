@@ -1,18 +1,26 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Rendering mode, as in JS Engine, H-Slice and S2X: a song plays by itself
 // with its time cut loose from real time (every frame is one 1/fps step), and
 // every frame goes to ffmpeg, so the video is smooth however slowly the
 // computer draws it. The game's mixer mixes the song's audio alongside, one
 // frame's worth at a time, and it is put into the video at the end.
-// Desktop only: Android has no ffmpeg to run.
+// Frames are read back from the graphics card a few frames late (no waiting
+// for it, OpenGL 3.3) and encoded on a thread of their own while the game
+// draws the next ones. Android, which has no ffmpeg, uses the phone's own
+// encoders (android_encoder.hpp) and puts the video in Movies/GodsHand.
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "process.hpp"
@@ -46,9 +54,11 @@ std::vector<std::string> renderVideoArgs(const RenderOptions& o, const std::stri
 std::vector<std::string> renderMuxArgs(const RenderOptions& o, const std::string& video, const std::string& wav,
                                        const std::string& out);
 
+class AndroidEncoder;
+
 class VideoRenderer {
 public:
-    VideoRenderer() = default;
+    VideoRenderer();
     VideoRenderer(const VideoRenderer&) = delete;
     VideoRenderer& operator=(const VideoRenderer&) = delete;
     ~VideoRenderer();
@@ -85,6 +95,39 @@ private:
     uint64_t audioFrames_ = 0;
     std::vector<int16_t> pcm_;
     void closeWav();
+
+    // The encoder's thread: frames (and, on Android, sound) wait here, at
+    // most kQueued frames, so the game draws while the encoder works.
+    struct Job {
+        std::vector<uint8_t> px;    // a frame, RGBA, bottom row first
+        std::vector<int16_t> pcm;   // or stereo sound (Android)
+    };
+    static constexpr int kQueued = 3;
+    std::thread worker_;
+    std::mutex qm_;
+    std::condition_variable qcv_;
+    std::deque<Job> jobs_;
+    std::vector<std::vector<uint8_t>> spare_;  // frame buffers to use again
+    int queuedFrames_ = 0;
+    bool stopWorker_ = false;
+    std::atomic<bool> failed_{false};
+    void startWorker();
+    void stopWorker();
+    void workerLoop();
+    void post(Job&& j);
+    std::vector<uint8_t> takeBuffer(size_t bytes);
+
+    // Pixel buffer objects: glReadPixels into one, read it two frames later.
+    unsigned pbo_[3] = {};
+    int pboHead_ = 0, pboPending_ = 0;
+    bool usePbo_ = false;
+    bool initPbo();
+    void readPbo();         // this frame into the next buffer
+    void collectPbo();      // the oldest buffer to the encoder
+    void freePbo();
+
+    std::unique_ptr<AndroidEncoder> android_;
+    std::string galleryName_;
 };
 
 }  // namespace gh

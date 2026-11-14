@@ -55,6 +55,23 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGH_BUILD_TESTS=OFF
       - name: Build
         run: cmake --build build --config Release --parallel
+      - name: Note renderer assembly (MSVC)
+        # The MASM version of the x86-64 routine, checked against the C++ one
+        # on Windows itself (the Linux tests check the GCC one).
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake -S . -B build-raster -DGH_BUILD_GAME=OFF -DGH_BUILD_TESTS=ON
+          cmake --build build-raster --config Release --target gh_tests --parallel
+          build-raster/Release/gh_tests.exe --raster
+      - name: Note renderer assembly (ARM64)
+        # The NEON version, checked against the C++ one on Apple Silicon itself
+        # (Android phones run the same routine).
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build-raster -DGH_BUILD_GAME=OFF -DGH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-raster --target gh_tests --parallel
+          build-raster/gh_tests --raster
       - name: Package
         shell: bash
         run: |
@@ -164,7 +181,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.release }}
         run: |
           shopt -s nullglob
-          files=(artifacts/GodsHand-windows-x64.zip artifacts/GodsHand-linux-x64.zip artifacts/GodsHand-macos-arm64.zip artifacts/*.apk)
+          # Patterns, so a platform that did not build is simply left out (nullglob).
+          files=()
+          for f in artifacts/*.zip artifacts/*.apk; do
+            [ "$(basename "$f")" = GodsHand-complete-source.zip ] || files+=("$f")
+          done
           if [ ${#files[@]} -eq 0 ]; then echo "No packages were built."; exit 1; fi
           ls -la artifacts
           cat > notes.md <<'EOF'
@@ -177,7 +198,7 @@ jobs:
 
           Mod packs: Freeplay > MOD PACKS in the game, or the [`mods`](https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise/releases/tag/mods) release. Not all of the mods are by deatuamae67-crypto: some are, and the others belong to their original creators.
 
-          License: God's Hand Source-Available Collaboration License (see `LICENSE`): play it, make mods for it, and fork it to collaborate; publishing copies, modified versions or rebrands needs the owner's written permission. Versions up to 1.6.2 were published under the MIT License.
+          License: all rights reserved (see `LICENSE`). You may play the game and make mods for it; forking, copying, republishing, rebranding or reusing the code is not allowed. The only way to contribute is to open an issue in the official repository. The license covers every version, including those first published under the MIT License (up to 1.6.2) and 1.6.3: those licenses were withdrawn.
           EOF
           tag="$RELEASE_TAG"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"; fi

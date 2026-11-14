@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
@@ -106,9 +105,15 @@ void PlayState::enter() {
     job_ = std::async(std::launch::async,
                       [copy, diff, mirror, extraKeys] { return app().library.prepare(copy, diff, mirror, extraKeys); });
     loadStart_ = a.now;
+    loadStartReal_ = nowSec();
 }
 
 void PlayState::update(double dt) {
+    // Note renderer: pictures of the notes for the processor, made here where
+    // no camera or render target is active.
+    noteRaster_.setMode(app().settings.noteRenderer);
+    noteRaster_.setSmooth(app().settings.antialiasing);
+    noteRaster_.prepare();
     App& a = app();
     const double now = a.now;
     if (phase_ == Phase::Loading) {
@@ -118,7 +123,12 @@ void PlayState::update(double dt) {
                 phase_ = Phase::Error;
                 error_ = prep_.error;
             } else {
+                const double prepMs = (nowSec() - loadStartReal_) * 1000.0, t0 = nowSec();
                 setup();
+                // godshand --perf: where the loading time went.
+                if (a.perf)
+                    std::printf("[load] chart and audio %.0f ms (in the background), setup %.0f ms (%d pictures in %.0f ms)\n",
+                                prepMs, (nowSec() - t0) * 1000.0, renderer_.lastPreloadCount, renderer_.lastPreloadMs);
             }
         }
         return;
@@ -1046,6 +1056,14 @@ void PlayState::drawMine(Vector2 c, float size, float alpha, float rot) {
     DrawLineEx({c.x - r, c.y + r}, {c.x + r, c.y - r}, 3, fade(Color{255, 90, 100, 255}, alpha));
 }
 
+std::string PlayState::perfInfo() const {
+    std::string s = std::string("notes ") + std::to_string(drawnNotes_) + " drawn, renderer " + noteRaster_.name();
+    if (noteRaster_.cpu())
+        s += TextFormat(" (%d on the CPU, %.2f Mpx, %.2f ms)", noteRaster_.lastNotes(), double(noteRaster_.lastPixels()) / 1e6,
+                        noteRaster_.lastMs());
+    return s;
+}
+
 void PlayState::adaptNoteGap() {
     App& a = app();
     if (a.settings.noteDetail != 0) {
@@ -1083,6 +1101,20 @@ void PlayState::drawLanes() {
     const double pxPerMs = 0.45 * scrollSpeed() / rate_;
     const double reach = (gfx::H * 1.5 + ns) / pxPerMs;
     drawnNotes_ = candidateNotes_ = 0;
+    // Note renderer: CPU modes collect the note heads into one picture,
+    // drawn over the lanes at the end.
+    const bool cpuNotes = noteRaster_.cpu();
+    if (cpuNotes) noteRaster_.beginFrame(gfx::canvasScale());
+    // With a CPU note renderer, what the GPU draws over notes collected
+    // earlier (a receptor, a hold, a mine, a turned note) puts those notes on
+    // screen first, so what covers what stays as before. laneDir >= 0: that
+    // lane's colours are on (no shader may be active while the notes go).
+    auto keepOrder = [&](Rectangle r, int laneDir) {
+        if (!cpuNotes || !noteRaster_.covers(r)) return;
+        if (laneDir >= 0) ui.endDir();
+        noteRaster_.flush();
+        if (laneDir >= 0) ui.beginDir(laneDir);
+    };
     for (int side = 0; side < 2; ++side) {
         if (side == 0 && !s.opponentNotes) continue;  // Options: opponent notes (Psych hides their receptors and notes)
         for (int lane = 0; lane < K; ++lane) {
@@ -1095,6 +1127,7 @@ void PlayState::drawLanes() {
             const Color col = gfx::dirColor(dir);
             const bool rotated = std::fabs(st.direction - 90.0f) > 0.01f;
             if (rotated) {
+                if (cpuNotes) noteRaster_.flush();  // the notes so far go on screen unturned
                 rlDrawRenderBatchActive();
                 rlPushMatrix();
                 rlTranslatef(c.x, c.y, 0);
@@ -1102,6 +1135,7 @@ void PlayState::drawLanes() {
                 rlTranslatef(-c.x, -c.y, 0);
             }
             if (st.visible && alphaStrum > 0.001f) {
+                keepOrder({c.x - size * 0.5f, c.y - size * 0.5f, size, size}, -1);
                 float conf = confirm_[side][lane];
                 if (side == 0 && !s.opponentStrums) conf = 0;
                 const bool pressed = side == 1 && heldCount_[lane] > 0 && !cfg_.botplay;
@@ -1149,14 +1183,21 @@ void PlayState::drawLanes() {
                     const float y1 = c.y + dirSign * float((endT - songMs_) * pxPerMs * mult);
                     if ((dirSign > 0 && y1 < c.y - offY) || (dirSign < 0 && y1 > c.y + offY)) continue;
                     const float al = (n.state == kMissed || n.state == kDropped ? 0.35f : 1.0f) * alphaStrum * (nv ? nv->alpha : 1.0f);
-                    if (!ui.hold(dir, c.x + (nv ? nv->offsetX : 0.0f), y0, y1, size * 0.3f, al))
-                        gfx::drawSustain(dir, c.x + (nv ? nv->offsetX : 0.0f), y0, y1, size * 0.3f, al * 0.85f + 0.15f * (al > 0), true);
+                    const float hx = c.x + (nv ? nv->offsetX : 0.0f);
+                    keepOrder({hx - size * 0.3f, std::min(y0, y1) - size * 0.2f, size * 0.6f, std::fabs(y1 - y0) + size * 0.4f}, dir);
+                    if (!ui.hold(dir, hx, y0, y1, size * 0.3f, al))
+                        gfx::drawSustain(dir, hx, y0, y1, size * 0.3f, al * 0.85f + 0.15f * (al > 0), true);
                 }
                 // Notes less than a pixel apart look the same drawn once, so a
                 // lane never draws more notes than it has pixels (spam charts
                 // stay smooth); with Note detail "Adaptive" the gap grows
                 // while the frame rate is too low. Every note is still played
                 // and counted.
+                // A lane showing mines is drawn whole on the GPU (mines are
+                // drawn there), so notes over and under them keep their order.
+                bool laneCpu = cpuNotes && !rotated && st.angle == 0.0f;
+                for (auto it = lo; laneCpu && it != hi; ++it)
+                    if (it->kind == kMine && (it->state == kPending || it->state == kMissed)) laneCpu = false;
                 const float minGap = noteGap_;
                 float lastY = 1e9f, lastY1 = 1e9f;
                 for (auto it = hi; it != lo;) {
@@ -1181,8 +1222,14 @@ void PlayState::drawLanes() {
                     const float al = (n.state == kMissed ? 0.35f : 1.0f) * alphaStrum * (nv ? nv->alpha : 1.0f);
                     if (al <= 0.002f) continue;
                     const Vector2 p{c.x + (nv ? nv->offsetX : 0.0f), y + (nv ? nv->offsetY : 0.0f)};
-                    if (n.kind == kMine) drawMine(p, size, al, st.angle);
-                    else if (!ui.note(dir, p, size, al, st.angle)) gfx::drawNote(dir, p, size, al, 1.0f, st.angle);
+                    if (n.kind == kMine) {
+                        keepOrder({p.x - size * 0.4f, p.y - size * 0.4f, size * 0.8f, size * 0.8f}, dir);
+                        drawMine(p, size, al, st.angle);
+                    } else if (laneCpu && noteRaster_.note(dir, p, size, al, ui.active())) {
+                    } else {
+                        keepOrder({p.x - size * 0.5f, p.y - size * 0.5f, size, size}, dir);
+                        if (!ui.note(dir, p, size, al, st.angle)) gfx::drawNote(dir, p, size, al, 1.0f, st.angle);
+                    }
                 }
                 ui.endDir();
             }
@@ -1192,6 +1239,7 @@ void PlayState::drawLanes() {
             }
         }
     }
+    if (cpuNotes) noteRaster_.endFrame();
 }
 
 bool PlayState::hudShown(const char* name, float* alpha) const {
@@ -1844,6 +1892,10 @@ void PlayState::drawDebugOverlay() {
     rows.push_back({"AUDIO", (audio.empty() ? std::string("none") : audio) + (a.mixer.waitingForAudio() ? "  |  WAITING" : "")});
     rows.push_back({"NOTES", "drawn " + num(drawnNotes_) + " of " + num(candidateNotes_) +
                                  TextFormat("  |  gap %.0f px (%s)", noteGap_, a.settings.noteDetail ? "Full" : "Adaptive")});
+    rows.push_back({"", std::string("renderer ") + noteRaster_.name() +
+                            (noteRaster_.cpu() ? TextFormat("  |  %d notes, %.2f Mpx, %.2f ms", noteRaster_.lastNotes(),
+                                                            double(noteRaster_.lastPixels()) / 1e6, noteRaster_.lastMs())
+                                               : "")});
     rows.push_back({"", "judged " + num(double(session_.judged())) + "  combo " + num(double(session_.combo)) + "  misses " +
                             num(double(session_.misses)) + "  opponent " + num(double(session_.opponentHits)) + "  NPS " +
                             num(double(nps_))});

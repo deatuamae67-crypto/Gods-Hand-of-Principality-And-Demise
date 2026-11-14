@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Options menu and audio offset calibration.
 #include <array>
@@ -10,6 +9,7 @@
 #include "app.hpp"
 #include "common.hpp"
 #include "gfx.hpp"
+#include "note_raster.hpp"
 #include "platform.hpp"
 #include "psych_ui.hpp"
 #include "raylib.h"
@@ -64,6 +64,9 @@ public:
             {Row::Number, "Audio offset", "Positive if you hear the music late. Hold SHIFT for steps of 10 ms.", nullptr,
              &s.offsetMs, -300, 300, 1},
             {Row::Action, "Calibrate offset...", "Tap along to a metronome to measure your offset."},
+            {Row::Choice, "Audio latency", "The sound card's buffer: smaller is heard sooner (hit sounds, the song). Raise it "
+             "if the sound crackles. Applied the next time the game starts.", nullptr, nullptr, 0, 0, 0, &s.audioLatency,
+             {0, 1, 2, 3}, {"Lowest (6 ms)", "Low (15 ms)", "Normal (30 ms)", "Safe (60 ms)"}},
             {Row::Bool, "Show timing (ms)", "Shows how early or late each hit was.", &s.showTimings},
             {Row::Bool, "Opponent notes", "OFF hides the opponent's receptors and notes, as Psych's Opponent Notes.", &s.opponentNotes},
             {Row::Bool, "Opponent strums", "Light up the opponent's receptors when they sing.", &s.opponentStrums},
@@ -80,6 +83,9 @@ public:
             {Row::Header, "GRAPHICS", ""},
             {Row::Bool, "Fullscreen", "Borderless fullscreen (F11 works anywhere).", &s.fullscreen},
             {Row::Bool, "VSync", "Waits for the screen's refresh. OFF: the frame limit below decides (most precise input).", &s.vsync},
+            {Row::Bool, "Low latency", "With VSync: no frames waiting in the driver, and each one drawn just before the screen "
+             "shows it while the keys are read every millisecond. What you press shows a refresh or more sooner.",
+             &s.lowLatency},
             {Row::Choice, "Frame limit", "Higher limits make notes smoother. Input is polled at ~1000 Hz regardless.",
              nullptr, nullptr, 0, 0, 0, &s.fpsCap, {60, 120, 144, 165, 240, 360, 500, 0}},
             {Row::Bool, "Show FPS", "The frame rate at the top left.", &s.showFps},
@@ -97,6 +103,13 @@ public:
             {Row::Choice, "Note detail", "Spam charts: Adaptive draws notes stacked a few pixels apart once while the frame rate is "
              "under 60 (every note is still played). Full: every pixel.", nullptr, nullptr, 0, 0, 0, &s.noteDetail, {0, 1},
              {"Adaptive", "Full"}},
+            {Row::Choice, "Note renderer", "What draws the notes. Auto: the graphics card, or the processor's assembly when "
+             "OpenGL itself runs on the processor (llvmpipe, SwiftShader...), where that is faster. GPU: the graphics card. "
+             "CPU (ASM): the processor, with assembly (SSE2 on x86-64, NEON on ARM64 phones and Macs; other processors use "
+             "C++). CPU (C++): the processor, in C++. Turned notes and mines stay on the GPU. F3 in a song shows the time "
+             "it takes.", nullptr, nullptr, 0, 0, 0, &s.noteRenderer, {3, 0, 1, 2},
+             {"Auto", "GPU", std::string("CPU (") + (raster::haveAsm() ? (std::string(raster::asmName()).rfind("ARM", 0) == 0 ? "ARM64" : "x86") : "no") + " ASM)",
+              "CPU (C++)"}},
             {Row::Header, "INTERFACE", ""},
             {Row::Choice, "Note counter", "Notes hit so far, under the score: your side only, or both sides added up.", nullptr,
              nullptr, 0, 0, 0, &s.noteCounter, {0, 1, 2}, {"Off", "Your side", "Both sides"}},
@@ -124,7 +137,8 @@ public:
              &s.pauseMusic, {0, 1, 2}, {"None", "Breakfast", "Tea Time"}},
             {Row::Header, "RENDERING", ""},
             {Row::Bool, "Rendering mode", "Songs play by themselves and are recorded to a video in renders/, frame by frame, as in JS Engine and "
-             "H-Slice: smooth even if the computer cannot keep up. Needs ffmpeg next to the game or installed. ESC stops.", &s.renderMode},
+             "H-Slice: smooth even if the device cannot keep up. On a computer it needs ffmpeg (next to the game or installed); "
+             "on Android the phone's own encoder makes it and it goes to Movies/GodsHand. ESC stops.", &s.renderMode},
             {Row::Choice, "Video size", "", nullptr, nullptr, 0, 0, 0, &s.renderSize, {0, 1, 2, 3},
              {"1280x720", "1920x1080", "2560x1440", "3840x2160"}},
             {Row::Choice, "Video frame rate", "", nullptr, nullptr, 0, 0, 0, &s.renderFps, {30, 60, 120, 240}},
@@ -187,8 +201,9 @@ public:
             bool controls = false;
             std::vector<Row> kept;
             for (Row& r : rows_) {
-                if (r.kind == Row::Header) controls = r.label.rfind("CONTROLS", 0) == 0 || r.label == "RENDERING";  // no ffmpeg on Android
-                if (controls || r.label == "Fullscreen" || r.label == "Touch controls") continue;
+                if (r.kind == Row::Header) controls = r.label.rfind("CONTROLS", 0) == 0;
+                // Rendering mode uses the phone's own H.264 encoder: no encoder to pick.
+                if (controls || r.label == "Fullscreen" || r.label == "Touch controls" || r.label == "Video encoder") continue;
                 kept.push_back(std::move(r));
             }
             rows_ = std::move(kept);

@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Title, main menu, story, freeplay and credits screens.
 #include <atomic>
@@ -617,6 +616,11 @@ public:
             "@FONTS",
             "Cinzel Decorative by Natanael Gama (SIL Open Font License)",
             "Rajdhani by Indian Type Foundry (SIL Open Font License)",
+            "",
+            "@LICENSE",
+            "All rights reserved, every version (see LICENSE)",
+            "Play it, record it and make mods for it",
+            "No forks, copies or rebrands: contribute through issues",
             "",
             "@THE CAST",
             "The Herald - a mortal voice",

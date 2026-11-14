@@ -1,11 +1,14 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "scene_draw.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <memory>
+#include <thread>
 
 #include <cstdarg>
 #include <cstdio>
@@ -208,15 +211,19 @@ Texture2D* SceneRenderer::texture(const std::string& file) {
     if (file.rfind("video:", 0) == 0) return nullptr;
     auto it = tex_.find(file);
     if (it != tex_.end()) return it->second.id ? &it->second : nullptr;
-    Texture2D t{};
     std::string bytes;
-    if (scene::readFile(file, bytes) && !bytes.empty()) {
-        Image img = LoadImageFromMemory(".png", reinterpret_cast<const unsigned char*>(bytes.data()), int(bytes.size()));
-        if (img.data) {
-            t = LoadTextureFromImage(img);
-            UnloadImage(img);
-            SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
-        }
+    Image img{};
+    if (scene::readFile(file, bytes) && !bytes.empty())
+        img = LoadImageFromMemory(".png", reinterpret_cast<const unsigned char*>(bytes.data()), int(bytes.size()));
+    return store(file, img);
+}
+
+Texture2D* SceneRenderer::store(const std::string& file, Image img) {
+    Texture2D t{};
+    if (img.data) {
+        t = LoadTextureFromImage(img);
+        UnloadImage(img);
+        SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
     }
     tex_[file] = t;
     filter_[file] = 1;
@@ -239,7 +246,36 @@ Font* SceneRenderer::font(const std::string& file) {
 }
 
 void SceneRenderer::preload(scene::Scene& sc) {
-    for (const std::string& f : sc.gfx.pngFiles()) texture(f);
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::string> todo;
+    for (const std::string& f : sc.gfx.pngFiles())
+        if (!tex_.count(f) && !dynamic_.count(f) && f.rfind("video:", 0) != 0) todo.push_back(f);
+    lastPreloadCount = int(todo.size());
+    // Reading and decoding a picture is the slow part and needs no graphics
+    // context: every core takes the next one; only the upload stays here.
+    struct Slot {
+        Image img{};
+        std::atomic<bool> done{false};
+    };
+    std::unique_ptr<Slot[]> slots(new Slot[todo.size() ? todo.size() : 1]);
+    std::atomic<size_t> next{0};
+    const size_t workers = std::min<size_t>(todo.size(), std::clamp(std::thread::hardware_concurrency(), 1u, 8u));
+    std::vector<std::thread> pool;
+    for (size_t w = 0; w < workers; ++w)
+        pool.emplace_back([&] {
+            for (size_t i; (i = next.fetch_add(1)) < todo.size();) {
+                std::string bytes;
+                if (scene::readFile(todo[i], bytes) && !bytes.empty())
+                    slots[i].img = LoadImageFromMemory(".png", reinterpret_cast<const unsigned char*>(bytes.data()), int(bytes.size()));
+                slots[i].done.store(true, std::memory_order_release);
+            }
+        });
+    for (size_t i = 0; i < todo.size(); ++i) {
+        while (!slots[i].done.load(std::memory_order_acquire)) std::this_thread::sleep_for(std::chrono::microseconds(100));
+        store(todo[i], slots[i].img);
+    }
+    for (std::thread& t : pool) t.join();
+    lastPreloadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
 Vector2 SceneRenderer::toScreen(const Camera& c, float x, float y, float sfx, float sfy) {

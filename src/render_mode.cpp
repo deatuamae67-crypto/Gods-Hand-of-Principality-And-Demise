@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "render_mode.hpp"
 
@@ -8,18 +7,63 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <system_error>
 #include <thread>
 
+#include "android_encoder.hpp"
+#include "platform.hpp"
 #include "rlgl.h"
+
+#if !defined(__ANDROID__)
+// raylib's GLFW: where the OpenGL functions raylib does not wrap come from.
+typedef void (*GhGlProc)(void);
+extern "C" GhGlProc glfwGetProcAddress(const char* procname);
+#endif
 
 namespace gh {
 
 namespace fs = std::filesystem;
 
 namespace {
+
+#if !defined(__ANDROID__)
+// OpenGL 3.x functions for reading frames back without waiting (PBOs).
+struct GlPbo {
+    void (*GenBuffers)(int, unsigned*) = nullptr;
+    void (*DeleteBuffers)(int, const unsigned*) = nullptr;
+    void (*BindBuffer)(unsigned, unsigned) = nullptr;
+    void (*BufferData)(unsigned, std::ptrdiff_t, const void*, unsigned) = nullptr;
+    void* (*MapBufferRange)(unsigned, std::ptrdiff_t, std::ptrdiff_t, unsigned) = nullptr;
+    unsigned char (*UnmapBuffer)(unsigned) = nullptr;
+    void (*BindFramebuffer)(unsigned, unsigned) = nullptr;
+    void (*ReadPixels)(int, int, int, int, unsigned, unsigned, void*) = nullptr;
+    bool ok = false;
+};
+constexpr unsigned kPixelPackBuffer = 0x88EB, kStreamRead = 0x88E1, kMapRead = 0x0001, kReadFramebuffer = 0x8CA8,
+                   kRgba = 0x1908, kUnsignedByte = 0x1401;
+
+const GlPbo& glPbo() {
+    static const GlPbo g = [] {
+        GlPbo f;
+        auto get = [](const char* n) { return reinterpret_cast<void*>(glfwGetProcAddress(n)); };
+        f.GenBuffers = reinterpret_cast<decltype(f.GenBuffers)>(get("glGenBuffers"));
+        f.DeleteBuffers = reinterpret_cast<decltype(f.DeleteBuffers)>(get("glDeleteBuffers"));
+        f.BindBuffer = reinterpret_cast<decltype(f.BindBuffer)>(get("glBindBuffer"));
+        f.BufferData = reinterpret_cast<decltype(f.BufferData)>(get("glBufferData"));
+        f.MapBufferRange = reinterpret_cast<decltype(f.MapBufferRange)>(get("glMapBufferRange"));
+        f.UnmapBuffer = reinterpret_cast<decltype(f.UnmapBuffer)>(get("glUnmapBuffer"));
+        f.BindFramebuffer = reinterpret_cast<decltype(f.BindFramebuffer)>(get("glBindFramebuffer"));
+        f.ReadPixels = reinterpret_cast<decltype(f.ReadPixels)>(get("glReadPixels"));
+        f.ok = f.GenBuffers && f.DeleteBuffers && f.BindBuffer && f.BufferData && f.MapBufferRange && f.UnmapBuffer &&
+               f.BindFramebuffer && f.ReadPixels;
+        return f;
+    }();
+    return g;
+}
+#endif
 
 fs::path u8path(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
 
@@ -95,6 +139,8 @@ std::vector<std::string> renderMuxArgs(const RenderOptions& o, const std::string
     return a;
 }
 
+VideoRenderer::VideoRenderer() = default;
+
 VideoRenderer::~VideoRenderer() {
     std::string err;
     if (active_) finish(err);
@@ -108,6 +154,7 @@ bool VideoRenderer::start(const std::string& ffmpeg, const std::string& outBase,
     opt_.height = std::max(16, o.height & ~1);
     opt_.fps = std::clamp(o.fps, 1, 1000);
     if (opt_.encoder < 0 || opt_.encoder >= int(renderEncoders().size())) opt_.encoder = 0;
+    if (platform::kAndroid) opt_.encoder = 0;  // the phone's H.264 encoder, in an .mp4
     const std::string ext = renderEncoders()[size_t(opt_.encoder)].ext;
     ffmpeg_ = ffmpeg;
     outBase_ = outBase;
@@ -123,12 +170,32 @@ bool VideoRenderer::start(const std::string& ffmpeg, const std::string& outBase,
         return false;
     }
     SetTextureFilter(rt_.texture, TEXTURE_FILTER_BILINEAR);
+    frames_ = 0;
+    audioFrames_ = 0;
+    failed_ = false;
+    if (platform::kAndroid) {
+        // Straight into the finished .mp4, sound included.
+        android_ = std::make_unique<AndroidEncoder>();
+        if (!android_->start(final_, opt_.width, opt_.height, opt_.fps, opt_.bitrateMbps, opt_.audio, err)) {
+            android_.reset();
+            UnloadRenderTexture(rt_);
+            rt_ = {};
+            removeFile(final_);
+            return false;
+        }
+        galleryName_ = u8path(final_).filename().string();
+        startWorker();
+        active_ = true;
+        return true;
+    }
     if (!proc_.start(ffmpeg, renderVideoArgs(opt_, videoTmp_), log_)) {
         UnloadRenderTexture(rt_);
         rt_ = {};
         err = "could not start ffmpeg";
         return false;
     }
+    usePbo_ = initPbo();
+    startWorker();
     if (opt_.audio) {
         wav_ = std::fopen(wavTmp_.c_str(), "wb");
         if (wav_) {
@@ -146,10 +213,140 @@ bool VideoRenderer::start(const std::string& ffmpeg, const std::string& outBase,
             put32(wav_, 0);
         }
     }
-    frames_ = 0;
-    audioFrames_ = 0;
     active_ = true;
     return true;
+}
+
+// ------------------------------------------------- the encoder's thread --
+
+void VideoRenderer::startWorker() {
+    stopWorker_ = false;
+    queuedFrames_ = 0;
+    jobs_.clear();
+    worker_ = std::thread([this] { workerLoop(); });
+}
+
+void VideoRenderer::stopWorker() {
+    if (!worker_.joinable()) return;
+    {
+        std::lock_guard<std::mutex> lk(qm_);
+        stopWorker_ = true;  // after what is queued
+    }
+    qcv_.notify_all();
+    worker_.join();
+    spare_.clear();
+}
+
+void VideoRenderer::workerLoop() {
+    for (;;) {
+        Job j;
+        {
+            std::unique_lock<std::mutex> lk(qm_);
+            qcv_.wait(lk, [&] { return !jobs_.empty() || stopWorker_; });
+            if (jobs_.empty()) return;
+            j = std::move(jobs_.front());
+            jobs_.pop_front();
+        }
+        if (!failed_) {
+            if (android_) {
+                if (!j.px.empty() && !android_->video(j.px.data())) failed_ = true;
+                if (!j.pcm.empty()) android_->audio(j.pcm.data(), j.pcm.size() / 2);
+            } else if (!j.px.empty() && !proc_.write(j.px.data(), j.px.size())) {
+                failed_ = true;  // ffmpeg stopped
+            }
+        }
+        std::lock_guard<std::mutex> lk(qm_);
+        if (!j.px.empty()) {
+            --queuedFrames_;
+            if (spare_.size() < size_t(kQueued) + 1) spare_.push_back(std::move(j.px));
+        }
+        qcv_.notify_all();
+    }
+}
+
+void VideoRenderer::post(Job&& j) {
+    std::unique_lock<std::mutex> lk(qm_);
+    const bool frame = !j.px.empty();
+    // The game waits only when the encoder is kQueued frames behind.
+    qcv_.wait(lk, [&] { return !frame || queuedFrames_ < kQueued || failed_; });
+    if (frame) ++queuedFrames_;
+    jobs_.push_back(std::move(j));
+    qcv_.notify_all();
+}
+
+std::vector<uint8_t> VideoRenderer::takeBuffer(size_t bytes) {
+    std::vector<uint8_t> b;
+    {
+        std::lock_guard<std::mutex> lk(qm_);
+        if (!spare_.empty()) {
+            b = std::move(spare_.back());
+            spare_.pop_back();
+        }
+    }
+    b.resize(bytes);
+    return b;
+}
+
+// ------------------------------------------ reading frames back, late --
+
+bool VideoRenderer::initPbo() {
+#if defined(__ANDROID__)
+    return false;  // OpenGL ES 2 has no pixel buffers
+#else
+    const GlPbo& gl = glPbo();
+    if (!gl.ok) return false;
+    const std::ptrdiff_t bytes = std::ptrdiff_t(opt_.width) * opt_.height * 4;
+    gl.GenBuffers(3, pbo_);
+    for (unsigned b : pbo_) {
+        gl.BindBuffer(kPixelPackBuffer, b);
+        gl.BufferData(kPixelPackBuffer, bytes, nullptr, kStreamRead);
+    }
+    gl.BindBuffer(kPixelPackBuffer, 0);
+    pboHead_ = pboPending_ = 0;
+    return pbo_[0] && pbo_[1] && pbo_[2];
+#endif
+}
+
+void VideoRenderer::readPbo() {
+#if !defined(__ANDROID__)
+    const GlPbo& gl = glPbo();
+    gl.BindFramebuffer(kReadFramebuffer, rt_.id);
+    gl.BindBuffer(kPixelPackBuffer, pbo_[pboHead_ % 3]);
+    gl.ReadPixels(0, 0, opt_.width, opt_.height, kRgba, kUnsignedByte, nullptr);  // into the buffer, no waiting
+    gl.BindBuffer(kPixelPackBuffer, 0);
+    gl.BindFramebuffer(kReadFramebuffer, 0);
+    ++pboHead_;
+    ++pboPending_;
+#endif
+}
+
+void VideoRenderer::collectPbo() {
+#if !defined(__ANDROID__)
+    if (pboPending_ <= 0) return;
+    const GlPbo& gl = glPbo();
+    const size_t bytes = size_t(opt_.width) * size_t(opt_.height) * 4;
+    gl.BindBuffer(kPixelPackBuffer, pbo_[(pboHead_ - pboPending_) % 3]);
+    --pboPending_;
+    Job j;
+    if (const void* p = gl.MapBufferRange(kPixelPackBuffer, 0, std::ptrdiff_t(bytes), kMapRead)) {
+        j.px = takeBuffer(bytes);
+        std::memcpy(j.px.data(), p, bytes);
+        gl.UnmapBuffer(kPixelPackBuffer);
+    } else {
+        failed_ = true;
+    }
+    gl.BindBuffer(kPixelPackBuffer, 0);
+    if (!j.px.empty()) post(std::move(j));
+#endif
+}
+
+void VideoRenderer::freePbo() {
+#if !defined(__ANDROID__)
+    if (pbo_[0]) glPbo().DeleteBuffers(3, pbo_);
+#endif
+    pbo_[0] = pbo_[1] = pbo_[2] = 0;
+    pboHead_ = pboPending_ = 0;
+    usePbo_ = false;
 }
 
 unsigned renderAudioFrames(long long frame, int fps) {
@@ -161,21 +358,39 @@ unsigned renderAudioFrames(long long frame, int fps) {
 unsigned VideoRenderer::audioFramesFor(long long frame) const { return renderAudioFrames(frame, opt_.fps); }
 
 bool VideoRenderer::captureFrame() {
-    if (!active_ || !rt_.id) return false;
-    void* px = rlReadTexturePixels(rt_.texture.id, rt_.texture.width, rt_.texture.height, rt_.texture.format);
-    if (!px) return false;
-    const bool ok = proc_.write(px, size_t(rt_.texture.width) * size_t(rt_.texture.height) * 4);
-    MemFree(px);
-    if (ok) ++frames_;
-    return ok;
+    if (!active_ || !rt_.id || failed_) return false;
+    if (usePbo_) {
+        // This frame goes into a pixel buffer; the one from two frames ago,
+        // long since copied by the graphics card, goes to the encoder.
+        if (pboPending_ >= 3) collectPbo();
+        readPbo();
+        if (pboPending_ >= 3) collectPbo();
+    } else {
+        void* px = rlReadTexturePixels(rt_.texture.id, rt_.texture.width, rt_.texture.height, rt_.texture.format);
+        if (!px) return false;
+        const size_t bytes = size_t(rt_.texture.width) * size_t(rt_.texture.height) * 4;
+        Job j;
+        j.px = takeBuffer(bytes);
+        std::memcpy(j.px.data(), px, bytes);
+        MemFree(px);
+        post(std::move(j));
+    }
+    ++frames_;
+    return !failed_;
 }
 
 void VideoRenderer::addAudio(const float* stereo, unsigned frames) {
-    if (!active_ || !wav_ || frames == 0) return;
+    if (!active_ || frames == 0 || !(wav_ || (android_ && opt_.audio))) return;
     pcm_.resize(size_t(frames) * 2);
     for (size_t i = 0; i < pcm_.size(); ++i) pcm_[i] = int16_t(std::lround(std::clamp(stereo[i], -1.0f, 1.0f) * 32767.0f));
-    std::fwrite(pcm_.data(), 2, pcm_.size(), wav_);
     audioFrames_ += frames;
+    if (android_) {  // encoded with the frames, on the encoder's thread
+        Job j;
+        j.pcm = pcm_;
+        post(std::move(j));
+        return;
+    }
+    std::fwrite(pcm_.data(), 2, pcm_.size(), wav_);
 }
 
 void VideoRenderer::closeWav() {
@@ -193,6 +408,33 @@ std::string VideoRenderer::finish(std::string& err) {
     err.clear();
     if (!active_) return "";
     active_ = false;
+    while (usePbo_ && pboPending_ > 0) collectPbo();  // the last frames, still in pixel buffers
+    stopWorker();  // everything queued reaches the encoder
+    freePbo();
+    if (android_) {
+        const bool ok = !failed_ && android_->finish(err);
+        android_.reset();
+        if (rt_.id) {
+            UnloadRenderTexture(rt_);
+            rt_ = {};
+        }
+        if (!ok || frames_ == 0) {
+            if (err.empty()) err = frames_ == 0 ? "nothing was recorded" : "the video encoder stopped";
+            removeFile(final_);
+            return "";
+        }
+#if defined(__ANDROID__)
+        // Into the phone's Movies/GodsHand folder, where the gallery finds it.
+        const std::string shown = platform::publishVideo(final_, galleryName_);
+        if (!shown.empty()) {
+            removeFile(final_);
+            setMessage("Video saved: " + shown);
+            return shown;
+        }
+        setMessage("Video saved: " + platform::displayPath(final_));
+#endif
+        return final_;
+    }
     const int rc = proc_.finish();  // ffmpeg encodes what is left and ends
     if (rt_.id) {
         UnloadRenderTexture(rt_);

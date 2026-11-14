@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 1.6.3 LANGUAGES C CXX)
+project(GodsHand VERSION 1.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -103,8 +103,30 @@ add_library(gh_core STATIC
   src/replay.cpp
   src/mod_install.cpp
   src/autochart.cpp
+  src/note_raster.cpp
+  src/frame_pacer.cpp
+  src/android_encoder.cpp
 )
 target_include_directories(gh_core PUBLIC src)
+# The note renderer's inner loop in assembly: x86-64 (SSE2; GAS syntax for
+# GCC and Clang, MASM for MSVC) and ARM64 (NEON; Android, Apple Silicon, ARM
+# Linux). Other processors use the C++ version.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64|X64)$")
+  if(MSVC)
+    enable_language(ASM_MASM)
+    target_sources(gh_core PRIVATE src/asm/blend_x64.asm)
+  else()
+    enable_language(ASM)
+    target_sources(gh_core PRIVATE src/asm/blend_x64.S)
+  endif()
+  target_compile_definitions(gh_core PRIVATE GH_X86_ASM=1)
+  message(STATUS "Note renderer: x86-64 assembly")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  enable_language(ASM)
+  target_sources(gh_core PRIVATE src/asm/blend_arm64.S)
+  target_compile_definitions(gh_core PRIVATE GH_ARM_ASM=1)
+  message(STATUS "Note renderer: ARM64 assembly")
+endif()
 target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz)
 if(MSVC)
   target_compile_options(gh_core PRIVATE /W3 /utf-8)
@@ -113,7 +135,7 @@ else()
 endif()
 
 if(GH_BUILD_TESTS)
-  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp)
+  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/raster_tests.cpp tests/pacer_tests.cpp)
   target_link_libraries(gh_tests PRIVATE gh_core)
   enable_testing()
   add_test(NAME core COMMAND gh_tests)
@@ -168,6 +190,28 @@ if(GH_BUILD_GAME)
   # The main loop polls input ~1000 times per second and only renders at the
   # frame limit, so raylib must not swap/poll/sleep inside EndDrawing().
   target_compile_definitions(raylib PRIVATE SUPPORT_CUSTOM_FRAME_CONTROL=1)
+  # Options > Audio latency: raylib opens the audio device with miniaudio's
+  # default buffer (10 ms x 3). Two variables added to raudio.c let the game
+  # pick the size before InitAudioDevice(). Applied once, in raylib's source.
+  set(gh_raudio ${raylib_SOURCE_DIR}/src/raudio.c)
+  file(READ ${gh_raudio} gh_src)
+  if(NOT gh_src MATCHES "GhAudioPeriodMs")
+    set(gh_cb "    config.dataCallback = OnSendAudioDataToDevice;")
+    set(gh_init "void InitAudioDevice(void)\n{")
+    string(FIND "${gh_src}" "${gh_cb}" gh_at1)
+    string(FIND "${gh_src}" "${gh_init}" gh_at2)
+    if(gh_at1 EQUAL -1 OR gh_at2 EQUAL -1)
+      message(FATAL_ERROR "Could not patch ${gh_raudio} (raylib 5.5 expected)")
+    endif()
+    string(REPLACE "${gh_cb}"
+      "${gh_cb}\n    config.periodSizeInMilliseconds = GhAudioPeriodMs;  // God's Hand: Options > Audio latency\n    config.periods = GhAudioPeriods;"
+      gh_src "${gh_src}")
+    string(REPLACE "${gh_init}"
+      "unsigned int GhAudioPeriodMs = 0, GhAudioPeriods = 0;  // God's Hand: the audio buffer (0: miniaudio's default)\n\n${gh_init}"
+      gh_src "${gh_src}")
+    file(WRITE ${gh_raudio} "${gh_src}")
+    message(STATUS "Patched raylib's raudio.c: the game picks the audio buffer")
+  endif()
   if(ANDROID)
     # Android: make raylib follow the window when it changes size (see
     # cmake/raylib_android_resize.c). Applied once, in raylib's own source.
@@ -219,6 +263,7 @@ if(GH_BUILD_GAME)
     src/platform.cpp
     src/folder_picker.cpp
     src/psych_ui.cpp
+    src/note_renderer.cpp
     src/sysinfo.cpp
     src/touch_ui.cpp
   )
@@ -226,7 +271,7 @@ if(GH_BUILD_GAME)
     # NativeActivity loads libgodshand.so; raylib's android_main() calls main().
     add_library(godshand SHARED ${GH_GAME_SOURCES})
     target_include_directories(godshand PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
-    target_link_libraries(godshand PRIVATE gh_core raylib android log EGL GLESv2 OpenSLES m)
+    target_link_libraries(godshand PRIVATE gh_core raylib android log EGL GLESv2 OpenSLES mediandk m)
     target_link_options(godshand PRIVATE -u ANativeActivity_onCreate -Wl,--no-undefined -Wl,-z,max-page-size=16384)
   else()
     add_executable(godshand WIN32 ${GH_GAME_SOURCES})

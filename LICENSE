@@ -1,93 +1,114 @@
 God's Hand of Principality and Demise
-Source-Available Collaboration License, version 1.0 (November 2026)
+License, version 2.0 (November 2026)
 
-Copyright (c) 2026 deatuamae67-crypto. All rights reserved, except for the
-permissions this License gives.
+Copyright (c) 2026 deatuamae67-crypto. All rights reserved.
+
+THIS IS NOT AN OPEN-SOURCE LICENSE. The source code is public so that it can
+be read and so that problems and ideas can be reported. It may not be forked,
+copied, republished or reused.
+
+In short:
+  - You MAY play the game, record it and make mods for it.
+  - You may NOT fork it, copy it, republish it, rebrand it or reuse its code.
+  - The ONLY way to contribute is to open an issue in the official repository.
+  - This License covers EVERY version of the game, the old ones too.
 
 "The Owner" is deatuamae67-crypto, the copyright holder.
 "The official repository" is
 https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise.
-"The Software" is God's Hand of Principality and Demise: the source code,
-build files, documentation, game builds and every other file of the official
-repository and its official releases, from version 1.6.3 on, except the
-third-party parts listed in section 7.
+"The Software" is God's Hand of Principality and Demise in every version,
+from the first one (1.0.0) on: the source code, build files, documentation,
+game builds and every other file of the official repository, of its history
+and of its official releases, except the third-party parts listed in
+section 8.
 
-In short: anyone may play the game and make mods for it; anyone who wants
-to use its code is a Collaborator and may fork it to work on it; nobody may
-make copies, rebrands or separate projects out of it, or take the credit,
-without the Owner's written permission.
+Every version
+  This License applies to every version of the Software, including the
+  versions first published under the MIT License (up to and including
+  1.6.2) and version 1.6.3, first published under the God's Hand
+  Source-Available Collaboration License 1.0. The Owner has withdrawn both
+  of those licenses: from 14 November 2026 on, no version of the Software is
+  offered under them, and every copy of any version obtained from then on,
+  from any source (a clone, a download, an old commit, release or tag, a
+  fork, a mirror or another person), is covered by this License alone. A
+  license file or notice inside an old version does not change this.
 
-Earlier versions
-  Versions up to and including 1.6.2 were published under the MIT License.
-  Copies of those versions that people already have stay under the MIT
-  License, which requires keeping the Owner's copyright notice in every copy.
-  This License covers version 1.6.3 and every later version.
-
-1. What everyone may do
-  a. Play: download, build, install and run the Software on your own devices,
-     and record, stream and share videos and screenshots of it (monetized or
-     not), as long as you do not present the Software as made by anyone other
-     than the Owner.
+1. What you may do
+  a. Play: download the official releases, install them and play them on
+     your own devices, and record, stream and share videos and screenshots
+     of the game (monetized or not), as long as you do not present the
+     Software as made by anyone other than the Owner.
   b. Make content: create mods, charts, songs, scripts, characters, stages and
      other content that runs in the Software, and share it however you like.
      Your content is yours, as long as it does not contain the Software's
      code.
-  c. Read the source code and learn from it.
+  c. Read the source code in the official repository. You may build it on
+     your own devices for your own use, and try changes there in private to
+     describe them in an issue, but you may not share the code, your changes
+     or what you build.
 
-2. Collaborators
-  Anyone who wants to use the Software's code is welcome to, as a
-  Collaborator. You become a Collaborator by forking the official repository
-  on GitHub, and as one you may:
-  a. change, build, run and test the Software in your fork;
-  b. keep your fork on GitHub, as a fork of the official repository, with
-     this License, the copyright notice and the credits unchanged;
-  c. send your changes to the official repository (pull requests, patches,
-     issues) and work on the Software with the Owner and the other
-     Collaborators.
-  A fork is a place to work on God's Hand, not a separate project: its
-  README must say that it is a fork of "God's Hand of Principality and
-  Demise by deatuamae67-crypto", with a link to the official repository.
-
-3. Blatant copies are not allowed
-  Unless the Owner has given written permission (section 4), nobody, a
-  Collaborator included, may:
-  a. publish, share or distribute builds of the Software or of a modified
-     version of it, other than the official releases;
-  b. publish its source code, or a modified version of it, anywhere other
-     than the official repository and Collaborators' forks on GitHub;
+2. What you may not do
+  Unless the Owner has given written permission (section 4), you may not:
+  a. fork the official repository, or copy the Software or any part of its
+     code to any other place (another repository, a website, a file host, a
+     mod, another game or engine);
+  b. publish, share or distribute the Software, a modified version of it or
+     builds of either, other than the official releases;
   c. publish the Software, a modified version of it, or a program built from
-     its code as a separate project or engine, under any name;
-  d. remove or change the copyright notice, this License or the credits,
-     present the Software or any part of it as their own work, or name
-     themselves as its author or co-author;
-  e. sell the Software or a modified version of it, or charge for access to
+     its code as another project or engine, under any name;
+  d. use the Software's code, or any part of it, in another program;
+  e. remove or change the copyright notice, this License or the credits,
+     present the Software or any part of it as your own work, or name
+     yourself as its author or co-author;
+  f. sell the Software or a modified version of it, or charge for access to
      either;
-  f. use the names "God's Hand of Principality and Demise" or "God's Hand"
-     for another project, other than to say that it is based on the Software.
+  g. use the names "God's Hand of Principality and Demise" or "God's Hand"
+     for another project.
+  These apply to every version, the old ones included (see "Every version").
+
+  About forks: GitHub's Terms of Service let any GitHub user press "Fork" on
+  a public repository, and this License cannot take that button away. A fork
+  made that way gives no permission at all: it may not be changed, built,
+  run, published or used in any other way, and it must be deleted when the
+  Owner asks.
+
+3. Contributing: only through issues
+  The ONLY way to contribute to the Software is to open an issue in the
+  official repository: report a bug, suggest a feature or an improvement, or
+  explain an idea (short code snippets are welcome). Pull requests, patches
+  and forks are not accepted. By writing in an issue you agree that the
+  Owner may use what you suggest in the Software, under this License or any
+  later license the Owner chooses; your issue stays in the repository's
+  history with your name.
 
 4. Written permission
-  The Owner can allow more in writing (for example, builds or releases of a
-  fork under its own name) in an issue, discussion or pull request of the
-  official repository, or in a file there. A permission covers only what it
-  says, and the work must always credit the Software as "Based on God's Hand
-  of Principality and Demise by deatuamae67-crypto", with a link to the
-  official repository.
+  The Owner can give written permission for something section 2 forbids, in
+  an issue of the official repository or in a file there. A permission
+  covers only what it says, and the work must always credit the Software as
+  "Based on God's Hand of Principality and Demise by deatuamae67-crypto",
+  with a link to the official repository.
 
-5. Contributions
-  When you send a contribution to the official repository (a pull request, a
-  patch, or code in an issue), you agree that the Owner may include it in the
-  Software and publish it under this License or any later license the Owner
-  chooses. You keep the copyright of your contribution and stay credited as
-  its author in the repository's history.
-
-6. Mods and mod packs
+5. Mods and mod packs
   The mod packs published on the "mods" release are not part of the Software
   and are not covered by this License. Not all of them are the Owner's: some
   were made by the Owner, and the others belong to their original creators,
   who keep every right to them. They are shared so they can be played in
   God's Hand.
 
-7. Third-party parts
+6. Patents and other rights
+  The Software is a project of the Owner at Instituto Superior Técnico (IST),
+  Universidade de Lisboa. Every patent right and every other intellectual
+  property right in the Software is reserved, including any held by or
+  through IST. This License grants no patent license and no other right,
+  expressly, by implication, by estoppel or otherwise, beyond what section 1
+  allows.
+
+7. When permissions end
+  If you break this License, your permissions under it end. If you stop and
+  put things right within 30 days after the Owner tells you about it, your
+  permissions come back.
+
+8. Third-party parts
   These parts keep their own licenses, and nothing in this License limits
   what those licenses allow for them:
   - raylib (fetched at build time): zlib/libpng license,
@@ -106,11 +127,6 @@ Earlier versions
     SIL Open Font License 1.1 (see the OFL files next to them)
   Features from PulseForge, also by the Owner, were rewritten for this code
   base and are part of the Software.
-
-8. When permissions end
-  If you break this License, your permissions under it end. If you stop and
-  put things right within 30 days after the Owner tells you about it, your
-  permissions come back.
 
 9. No warranty
   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR

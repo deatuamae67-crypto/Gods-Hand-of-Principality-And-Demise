@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "platform.hpp"
 
@@ -21,11 +20,16 @@
 #include <android/native_activity.h>
 #include <android/window.h>
 #include <EGL/egl.h>
+#include <GLES2/gl2.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
 #include <time.h>
 
 extern "C" struct android_app* GetAndroidApp(void);  // raylib, rcore_android.c
+#elif defined(_WIN32)
+extern "C" __declspec(dllimport) void __stdcall glFinish(void);  // opengl32, which raylib links
+#else
+extern "C" void glFinish(void);  // libGL / the OpenGL framework, which raylib links
 #endif
 
 namespace gh::platform {
@@ -217,6 +221,25 @@ jclass activityClass(JNIEnv* env) {
     return env->GetObjectClass(app->activity->clazz);
 }
 
+std::string staticString(const char* name) {
+    Jni j;
+    if (!j.env) return {};
+    jclass cls = activityClass(j.env);
+    if (!cls) return {};
+    std::string out;
+    if (jfieldID f = j.env->GetStaticFieldID(cls, name, "Ljava/lang/String;")) {
+        if (auto s = static_cast<jstring>(j.env->GetStaticObjectField(cls, f))) {
+            const char* u = j.env->GetStringUTFChars(s, nullptr);
+            if (u) out = u;
+            j.env->ReleaseStringUTFChars(s, u);
+            j.env->DeleteLocalRef(s);
+        }
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    return out;
+}
+
 int staticInt(const char* name, int fallback) {
     Jni j;
     if (!j.env) return fallback;
@@ -316,6 +339,47 @@ void prepareDataDir(const std::string& base) {
 void setVsync(bool on) {
     const EGLDisplay d = eglGetCurrentDisplay();
     if (d != EGL_NO_DISPLAY) eglSwapInterval(d, on ? 1 : 0);
+}
+
+void gpuFinish() { glFinish(); }
+
+std::vector<std::string> launchArgs() {
+    std::vector<std::string> out;
+    const std::string s = staticString("launchArgs");
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && s[i] == ' ') ++i;
+        size_t e = i;
+        while (e < s.size() && s[e] != ' ') ++e;
+        if (e > i) out.push_back(s.substr(i, e - i));
+        i = e;
+    }
+    return out;
+}
+
+std::string publishVideo(const std::string& path, const std::string& name) {
+    Jni j;
+    if (!j.env) return {};
+    jclass cls = activityClass(j.env);
+    if (!cls) return {};
+    std::string out;
+    if (jmethodID m = j.env->GetMethodID(cls, "publishVideo", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")) {
+        jstring jp = j.env->NewStringUTF(path.c_str()), jn = j.env->NewStringUTF(name.c_str());
+        auto r = static_cast<jstring>(j.env->CallObjectMethod(GetAndroidApp()->activity->clazz, m, jp, jn));
+        std::string err;
+        if (!j.failed(err, "publishing the video") && r) {
+            const char* u = j.env->GetStringUTFChars(r, nullptr);
+            if (u) out = u;
+            j.env->ReleaseStringUTFChars(r, u);
+        }
+        if (r) j.env->DeleteLocalRef(r);
+        j.env->DeleteLocalRef(jp);
+        j.env->DeleteLocalRef(jn);
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    if (!out.empty()) logInfo("video in " + out);
+    return out;
 }
 
 void afterWindowInit() {
@@ -446,6 +510,10 @@ void setVsync(bool on) {
     if (on) SetWindowState(FLAG_VSYNC_HINT);
     else ClearWindowState(FLAG_VSYNC_HINT);
 }
+
+void gpuFinish() { glFinish(); }
+std::vector<std::string> launchArgs() { return {}; }
+std::string publishVideo(const std::string&, const std::string&) { return {}; }
 bool inBackground() { return false; }
 bool takeResumed() { return false; }
 void rememberVolume(float) {}

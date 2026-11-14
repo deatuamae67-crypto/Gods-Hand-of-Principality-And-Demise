@@ -1,6 +1,5 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
-// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
-// collaborators may fork it to work on it; copies and rebrands need written permission.
+// All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 // Persistent options, key bindings and best scores (plain text files).
 #pragma once
@@ -30,11 +29,18 @@ struct Settings {
     bool fpsHardware = false;    // processor, graphics card, OpenGL and system names
     bool lowDetail = false;
     bool vsync = false;
+    // With V-sync: no frames queued, each drawn just before its refresh
+    // (frame_pacer.hpp). OFF: the driver's own queue.
+    bool lowLatency = true;
+    // The audio device's buffer: 0 lowest (3 ms x 2), 1 low (5 ms x 3),
+    // 2 normal (10 ms x 3, miniaudio's own), 3 safe (20 ms x 3). Next start.
+    int audioLatency = 1;
     bool shaders = true;       // mod shaders and screen effects
     // Spam charts: 0 adaptive (notes stacked closer than a few pixels are drawn
     // once while the frame rate is under its target; all are still played),
     // 1 full (every pixel).
     int noteDetail = 0;
+    int noteRenderer = 3;  // 0 GPU, 1 CPU with x86-64 assembly, 2 CPU with C++, 3 Auto
     bool luaNoteCallbacks = true;  // goodNoteHit, opponentNoteHit, noteMiss... (OFF: faster spam charts)
     // Rendering mode (desktop): songs play by themselves and are recorded to a
     // video with ffmpeg, frame by frame (render_mode.hpp).
