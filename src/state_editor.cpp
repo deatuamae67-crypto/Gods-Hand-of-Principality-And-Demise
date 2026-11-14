@@ -84,12 +84,14 @@ const EventInfo kEvents[] = {
     {"Dadbattle Spotlight", "Week 1 only. Value 1: 0/1 off/on, 2 Dad, 3 BF."},
 };
 
+// 24 bytes, copied as plain memory: charts of many millions of notes stay
+// light to keep, draw and undo.
 struct EdNote {
     double t = 0;
-    int col = 0;  // 0..K-1 opponent, K..2K-1 player
     double len = 0;
-    std::string type;
-    int stack = 1;  // notes of the file stacked here (written back that many times)
+    uint32_t stack = 1;  // notes of the file stacked here (written back that many times)
+    uint16_t type = 0;   // the editor's note type list (0: a normal note)
+    uint8_t col = 0;     // 0..K-1 opponent, K..2K-1 player
     bool sel = false;
 };
 
@@ -220,11 +222,11 @@ public:
             snapshot();
             EdSection& s = section(sectionAt(cur_));
             s.mustHit = !s.mustHit;
-            dirty_ = true;
+            dirty_ = statsDirty_ = true;
         }
         if (in.pressed(KEY_T)) {
             typeIdx_ = (typeIdx_ + 1) % int(noteTypes_.size());
-            applyToSelection([&](EdNote& n) { n.type = noteTypes_[size_t(typeIdx_)]; });
+            applyToSelection([&](EdNote& n) { n.type = typeId(noteTypes_[size_t(typeIdx_)]); });
         }
         if (in.pressed(KEY_Q) || in.pressed(KEY_E)) {
             const bool longer = in.pressed(KEY_E);
@@ -237,8 +239,8 @@ public:
             double nb = section(sectionAt(cur_)).bpm + (in.pressed(KEY_RIGHT_BRACKET) ? 1 : -1) * (shift ? 0.1 : 1.0);
             setSectionBpm(sectionAt(cur_), nb);
         }
-        if (in.pressed(KEY_MINUS)) { speed_ = std::max(0.1, std::round((speed_ - 0.1) * 10) / 10); dirty_ = true; }
-        if (in.pressed(KEY_EQUAL)) { speed_ = std::min(10.0, std::round((speed_ + 0.1) * 10) / 10); dirty_ = true; }
+        if (in.pressed(KEY_MINUS)) { speed_ = std::max(0.1, std::round((speed_ - 0.1) * 10) / 10); dirty_ = statsDirty_ = true; }
+        if (in.pressed(KEY_EQUAL)) { speed_ = std::min(10.0, std::round((speed_ + 0.1) * 10) / 10); dirty_ = statsDirty_ = true; }
         if (ctrl && in.pressed(KEY_C)) copySelectionOrSection();
         if (ctrl && in.pressed(KEY_X)) cutSelectionOrSection();
         if (ctrl && in.pressed(KEY_V)) paste();
@@ -291,10 +293,12 @@ public:
 private:
     static constexpr float kPanelX = 880, kGridCenter = 555;
     struct UndoStep {
-        std::vector<EdNote> notes;
+        std::vector<EdNote> notes;  // all of them, or those from a to b
         std::vector<EdSection> sections;
         std::vector<psych::ChartEvent> events;
         double speed = 1;
+        bool full = true;
+        double a = 0, b = 0;
     };
 
 
@@ -337,14 +341,17 @@ private:
             }
         }
         notes_.reserve(c.notes.size());
+        std::vector<uint16_t> ids(c.noteTypes.size());
+        for (size_t i = 0; i < ids.size(); ++i) ids[i] = typeId(c.noteTypes[i]);
+        const uint16_t hurt = typeId("Hurt Note");
         for (const Note& n : c.notes) {
             EdNote e;
             e.t = n.time;
-            e.col = n.side ? keys_ + n.lane : n.lane;
+            e.col = uint8_t(n.side ? keys_ + n.lane : n.lane);
             e.len = n.length;
-            e.type = n.type < c.noteTypes.size() ? c.noteTypes[n.type] : "";
-            if (e.type.empty() && n.kind == kMine) e.type = "Hurt Note";
-            e.stack = std::max<int>(1, n.stack);
+            e.type = n.type < ids.size() ? ids[n.type] : 0;
+            if (e.type == 0 && n.kind == kMine) e.type = hurt;
+            e.stack = uint32_t(std::max<int>(1, n.stack));
             notes_.push_back(e);
         }
         sortNotes();
@@ -473,10 +480,58 @@ private:
         const double old = section(s).bpm;
         for (size_t i = size_t(s); i < sections_.size() && std::fabs(sections_[i].bpm - old) < 1e-9; ++i) sections_[i].bpm = bpm;
         rebuildStarts();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
     }
 
     // ------------------------------------------------------------ editing --
+    // Note types by number (EdNote::type); 0 is a normal note.
+    uint16_t typeId(const std::string& name) {
+        if (name.empty()) return 0;
+        for (size_t i = 1; i < typeNames_.size(); ++i)
+            if (typeNames_[i] == name) return uint16_t(i);
+        if (typeNames_.size() >= 65535) return 0;
+        typeNames_.push_back(name);
+        typeHurt_.push_back(name.find("Hurt") != std::string::npos);
+        return uint16_t(typeNames_.size() - 1);
+    }
+
+    // Notes from time a to b (both included), as iterators.
+    std::pair<std::vector<EdNote>::iterator, std::vector<EdNote>::iterator> notesIn(double a, double b) {
+        auto lo = std::lower_bound(notes_.begin(), notes_.end(), a, [](const EdNote& n, double v) { return n.t < v; });
+        auto hi = std::upper_bound(lo, notes_.end(), b, [](double v, const EdNote& n) { return v < n.t; });
+        return {lo, hi};
+    }
+    // One note into its place (time, then column): no sort of the whole chart.
+    void insertNote(const EdNote& n) {
+        auto at = std::upper_bound(notes_.begin(), notes_.end(), n,
+                                   [](const EdNote& a, const EdNote& b) { return a.t != b.t ? a.t < b.t : a.col < b.col; });
+        notes_.insert(at, n);
+    }
+
+    // What the info panel shows, counted again only after a change (a chart
+    // of millions of notes is not walked every frame).
+    struct Stats {
+        long long total = 0;
+        int selected = 0;
+        size_t firstSel = size_t(-1);  // index of the first selected note
+        double maxLen = 0;
+    };
+    const Stats& stats() {
+        if (notes_.size() != statsSize_ || statsDirty_) {
+            Stats st;
+            for (size_t i = 0; i < notes_.size(); ++i) {
+                const EdNote& n = notes_[i];
+                st.total += n.stack;
+                if (n.sel && st.selected++ == 0) st.firstSel = i;
+                st.maxLen = std::max(st.maxLen, n.len);
+            }
+            stats_ = st;
+            statsSize_ = notes_.size();
+            statsDirty_ = false;
+        }
+        return stats_;
+    }
+
     void sortNotes() {
         std::stable_sort(notes_.begin(), notes_.end(), [](const EdNote& a, const EdNote& b) {
             return a.t != b.t ? a.t < b.t : a.col < b.col;
@@ -486,41 +541,86 @@ private:
         std::stable_sort(events_.begin(), events_.end(),
                          [](const psych::ChartEvent& a, const psych::ChartEvent& b) { return a.timeMs < b.timeMs; });
     }
-    void snapshot() {
-        undo_.push_back({notes_, sections_, events_, speed_});
-        const size_t cap = notes_.size() > 200000 ? 4 : 60;
-        while (undo_.size() > cap) undo_.erase(undo_.begin());
+    // Undo: a step keeps the whole chart, or only the notes from time a to
+    // b for edits that touch nothing else (placing, removing, pasting...):
+    // on a chart of millions of notes those are what keeps editing quick.
+    void snapshot() { snapshotRange(-1e300, 1e300); }
+    void snapshotRange(double a, double b) {
+        UndoStep st;
+        st.sections = sections_;
+        st.events = events_;
+        st.speed = speed_;
+        st.full = a <= -1e299 && b >= 1e299;
+        st.a = a;
+        st.b = b;
+        if (st.full) {
+            st.notes = notes_;
+        } else {
+            auto r = notesIn(a, b);
+            st.notes.assign(r.first, r.second);
+        }
+        undo_.push_back(std::move(st));
+        // At most 100 steps, and not more notes kept than a few charts' worth.
+        auto kept = [&] {
+            size_t k = 0;
+            for (const UndoStep& u : undo_) k += u.notes.size();
+            return k;
+        };
+        const size_t budget = std::max<size_t>(size_t(1) << 22, notes_.size() * 3);
+        while (undo_.size() > 1 && (undo_.size() > 100 || kept() > budget)) undo_.erase(undo_.begin());
         redo_.clear();
+        statsDirty_ = true;
     }
     void restore(std::vector<UndoStep>& from, std::vector<UndoStep>& to, const char* what) {
         if (from.empty()) return;
-        to.push_back({notes_, sections_, events_, speed_});
-        notes_ = std::move(from.back().notes);
-        sections_ = std::move(from.back().sections);
-        events_ = std::move(from.back().events);
-        speed_ = from.back().speed;
+        UndoStep& st = from.back();
+        UndoStep back;
+        back.sections = sections_;
+        back.events = events_;
+        back.speed = speed_;
+        back.full = st.full;
+        back.a = st.a;
+        back.b = st.b;
+        if (st.full) {
+            back.notes = std::move(notes_);
+            notes_ = std::move(st.notes);
+        } else {
+            auto r = notesIn(st.a, st.b);
+            back.notes.assign(r.first, r.second);
+            const size_t at = size_t(r.first - notes_.begin());
+            notes_.erase(r.first, r.second);
+            notes_.insert(notes_.begin() + std::ptrdiff_t(at), st.notes.begin(), st.notes.end());
+        }
+        sections_ = std::move(st.sections);
+        events_ = std::move(st.events);
+        speed_ = st.speed;
         from.pop_back();
+        to.push_back(std::move(back));
         rebuildStarts();
         selEvent_ = -1;
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
+        statsDirty_ = true;
         flash(what);
     }
     void undo() { restore(undo_, redo_, "Undo"); }
     void redo() { restore(redo_, undo_, "Redo"); }
 
-    bool anySelected() const {
-        return std::any_of(notes_.begin(), notes_.end(), [](const EdNote& n) { return n.sel; });
-    }
+    // The selection, from the counts stats() keeps (every change of the
+    // selection marks them stale), so the panel does not walk the chart.
+    bool anySelected() { return stats().selected > 0; }
     EdNote* firstSelected() {
+        const Stats& st = stats();
+        if (st.selected == 0) return nullptr;
+        if (st.firstSel < notes_.size() && notes_[st.firstSel].sel) return &notes_[st.firstSel];
         for (EdNote& n : notes_)
             if (n.sel) return &n;
         return nullptr;
     }
-    int selectedCount() const {
-        return int(std::count_if(notes_.begin(), notes_.end(), [](const EdNote& n) { return n.sel; }));
-    }
+    int selectedCount() { return stats().selected; }
     void clearSelection() {
+        if (!statsDirty_ && stats().selected == 0) return;
         for (EdNote& n : notes_) n.sel = false;
+        statsDirty_ = true;
     }
     template <class F>
     void applyToSelection(F f) {
@@ -529,25 +629,47 @@ private:
         for (EdNote& n : notes_)
             if (n.sel) f(n);
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
+        statsDirty_ = true;
     }
     void selectSection() {
         const int s = sectionAt(cur_);
         const double a = sectionStart(s), b = sectionStart(s + 1);
-        for (EdNote& n : notes_) n.sel = n.t >= a - 0.5 && n.t < b - 0.5;
-        flash(TextFormat("%d notes selected", selectedCount()));
+        clearSelection();
+        int count = 0;
+        for (auto r = notesIn(a - 0.5, b - 0.5); r.first != r.second; ++r.first)
+            if (r.first->t < b - 0.5) {
+                r.first->sel = true;
+                ++count;
+            }
+        statsDirty_ = true;
+        flash(TextFormat("%d notes selected", count));
     }
     void deleteSelection() {
-        snapshot();
-        notes_.erase(std::remove_if(notes_.begin(), notes_.end(), [](const EdNote& n) { return n.sel; }), notes_.end());
-        dirty_ = true;
+        double a = 1e300, b = -1e300;
+        for (const EdNote& n : notes_)
+            if (n.sel) {
+                a = std::min(a, n.t);
+                b = std::max(b, n.t);
+            }
+        if (a > b) return;
+        snapshotRange(a, b);
+        auto r = notesIn(a, b);
+        notes_.erase(std::remove_if(r.first, r.second, [](const EdNote& n) { return n.sel; }), r.second);
+        dirty_ = statsDirty_ = true;
     }
 
+    // The note of column `col` nearest to t within tolMs (-1: none).
     long findNote(double t, int col, double tolMs) {
         auto lo = std::lower_bound(notes_.begin(), notes_.end(), t - tolMs, [](const EdNote& n, double v) { return n.t < v; });
+        long best = -1;
+        double bestD = 1e300;
         for (auto it = lo; it != notes_.end() && it->t <= t + tolMs; ++it)
-            if (it->col == col) return long(it - notes_.begin());
-        return -1;
+            if (it->col == col && std::fabs(it->t - t) < bestD) {
+                bestD = std::fabs(it->t - t);
+                best = long(it - notes_.begin());
+            }
+        return best;
     }
     long findEvent(double t, double tolMs) {
         for (size_t i = 0; i < events_.size(); ++i)
@@ -594,6 +716,7 @@ private:
         snapshot();
         clearSelection();
         const double at = anySelected() ? cur_ : msAtBeat(snapBeat(beatAt(cur_)));
+        statsDirty_ = true;
         for (EdNote c : clipboard_) {
             c.t += at;
             c.sel = true;
@@ -605,7 +728,7 @@ private:
         }
         sortNotes();
         sortEvents();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("Pasted %d notes", int(clipboard_.size())));
     }
     void clearSection(bool notes, bool events) {
@@ -620,7 +743,7 @@ private:
                                          [&](const psych::ChartEvent& e) { return e.timeMs >= a - 0.5 && e.timeMs < b - 0.5; }),
                           events_.end());
         selEvent_ = -1;
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
     }
     // Notes of the selection (or the section) change sides.
     void swapSides() {
@@ -631,7 +754,7 @@ private:
         for (EdNote& n : notes_)
             if (sel ? n.sel : (n.t >= a - 0.5 && n.t < b - 0.5)) n.col = n.col >= keys_ ? n.col - keys_ : n.col + keys_;
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
     }
     // Left becomes right within each side.
     void mirror() {
@@ -645,7 +768,7 @@ private:
                 n.col = side * keys_ + (keys_ - 1 - lane);
             }
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash("Mirrored");
     }
     // Copies the notes of the section `back` sections earlier into this one.
@@ -665,7 +788,7 @@ private:
         for (const EdNote& c : add)
             if (findNote(c.t, c.col, 0.5) < 0) notes_.push_back(c);
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("Copied %d notes from section %d", int(add.size()), from));
     }
     // JS Engine style spam tools: a note on every snap of the section.
@@ -690,12 +813,12 @@ private:
                 EdNote n;
                 n.t = t;
                 n.col = col;
-                n.type = noteTypes_[size_t(typeIdx_)];
+                n.type = typeId(noteTypes_[size_t(typeIdx_)]);
                 notes_.push_back(n);
             }
         }
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("Filled section %d", s));
     }
     void setKeys(int k) {
@@ -712,7 +835,7 @@ private:
         }
         notes_.swap(kept);
         keys_ = k;
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(dropped ? TextFormat("%d keys (%d notes past the last lane removed)", k, dropped) : TextFormat("%d keys", k));
     }
 
@@ -770,7 +893,7 @@ private:
                 events_.push_back(e);
                 sortEvents();
                 selEvent_ = findEvent(et, 0.01);
-                dirty_ = true;
+                dirty_ = statsDirty_ = true;
             }
             tab_ = 3;
             return;
@@ -781,7 +904,7 @@ private:
                 snapshot();
                 events_.erase(events_.begin() + hit);
                 selEvent_ = -1;
-                dirty_ = true;
+                dirty_ = statsDirty_ = true;
             }
             return;
         }
@@ -799,39 +922,52 @@ private:
                 const double ta = cur_ + (ya - lineY()) / pxPerMs(), tb = cur_ + (yb - lineY()) / pxPerMs();
                 const int ca = int((xa - gridX()) / laneW()), cb = int((xb - gridX()) / laneW());
                 if (!ctrl) clearSelection();
-                for (EdNote& n : notes_)
-                    if (n.t >= ta && n.t <= tb && n.col >= ca && n.col <= cb) n.sel = true;
-                flash(TextFormat("%d notes selected", selectedCount()));
+                int count = 0;
+                for (auto r = notesIn(ta, tb); r.first != r.second; ++r.first)
+                    if (r.first->col >= ca && r.first->col <= cb) {
+                        r.first->sel = true;
+                        ++count;
+                    }
+                statsDirty_ = true;
+                flash(TextFormat("%d notes selected", ctrl ? selectedCount() : count));
             }
             return;
         }
         if (ui_.click && inGrid) {
-            const long hit = findNote(t, col, tol);
+            // Exact placement (Charting tab): a note only counts as clicked
+            // when it sits in this very cell, so a note can go at a section's
+            // start right after one at the end of the section before.
+            const long hit = findNote(t, col, exactPlace_ ? 0.5 : tol);
             if (hit >= 0) {
                 EdNote& n = notes_[size_t(hit)];
                 if (ctrl) {
                     n.sel = !n.sel;
+                    statsDirty_ = true;
                 } else if (n.sel && selectedCount() == 1) {  // second click on a selected note removes it
-                    snapshot();
+                    snapshotRange(n.t, n.t);
                     notes_.erase(notes_.begin() + hit);
-                    dirty_ = true;
+                    dirty_ = statsDirty_ = true;
                 } else {
                     clearSelection();
-                    n.sel = true;
+                    notes_[size_t(hit)].sel = true;
                 }
+                statsDirty_ = true;
             } else {
-                snapshot();
+                if (ezMode_) snapshot();
+                else snapshotRange(t, t);
                 clearSelection();
                 EdNote n;
                 n.t = t;
-                n.col = col;
-                n.type = noteTypes_[size_t(typeIdx_)];
+                n.col = uint8_t(col);
+                n.type = typeId(noteTypes_[size_t(typeIdx_)]);
                 n.sel = true;
-                notes_.push_back(n);
-                if (ezMode_) ezPlaceSpam(n);  // JS Engine's EZ Spam Mode
-                sortNotes();
+                insertNote(n);
+                if (ezMode_) {  // JS Engine's EZ Spam Mode
+                    ezPlaceSpam(n);
+                    sortNotes();
+                }
                 dragging_ = true;
-                dirty_ = true;
+                dirty_ = statsDirty_ = true;
             }
             tab_ = tab_ == 3 ? 2 : tab_;
         }
@@ -840,15 +976,16 @@ private:
             if (EdNote* n = firstSelected()) {
                 const double end = snappedTimeAtY(ui_.mouse.y);
                 n->len = std::max(0.0, end - n->t);
+                stats_.maxLen = std::max(stats_.maxLen, n->len);
             }
         }
         if (in.mouseReleased(MOUSE_BUTTON_LEFT)) dragging_ = false;
         if (ui_.rclick && inGrid) {
-            const long hit = findNote(t, col, tol);
+            const long hit = findNote(t, col, exactPlace_ ? 0.5 : tol);
             if (hit >= 0) {
-                snapshot();
+                snapshotRange(notes_[size_t(hit)].t, notes_[size_t(hit)].t);
                 notes_.erase(notes_.begin() + hit);
-                dirty_ = true;
+                dirty_ = statsDirty_ = true;
             }
         }
     }
@@ -949,9 +1086,9 @@ private:
                 const int lane = player ? n.col - keys_ : n.col;
                 const int data = (player == sec.mustHit) ? lane : lane + keys_;
                 std::string one = "[" + num(n.t) + ", " + std::to_string(data) + ", " + num(n.len);
-                if (!n.type.empty()) one += ", " + jsonStr(n.type);
+                if (n.type) one += ", " + jsonStr(typeNames_[n.type]);
                 one += "]";
-                for (int k = 0; k < std::max(1, n.stack); ++k) {  // stacked notes stay stacked
+                for (uint32_t k = 0; k < std::max<uint32_t>(1, n.stack); ++k) {  // stacked notes stay stacked
                     o += std::string(first ? "" : ", ") + one;
                     first = false;
                 }
@@ -1128,36 +1265,73 @@ private:
                 gfx::text(FontId::Ui, e.name, ex - 8, y + 6, 16, gfx::fade(kAccent, 0.9f), Align::Right);
             }
         }
-        // Notes in view (sustains first)
-        auto lo = std::lower_bound(notes_.begin(), notes_.end(), tTop - 60000.0, [](const EdNote& n, double v) { return n.t < v; });
-        float lastY[18];
+        // Notes in view (sustains first). Only what is on screen is walked:
+        // holds from as far back as the longest one, and where a pixel row is
+        // already full of notes the rest of that row is jumped over, so a
+        // chart of millions of notes draws as fast as a small one.
+        auto byTime = [](const EdNote& n, double v) { return n.t < v; };
+        const Stats& st = stats();
+        const double msPerPx = 1.0 / std::max(1e-9, double(pp));
+        float lastY[64];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
-        for (int pass = 0; pass < 2; ++pass) {
-            for (auto it = lo; it != notes_.end() && it->t <= tBot; ++it) {
+        if (st.maxLen > 0) {
+            auto it = std::lower_bound(notes_.begin(), notes_.end(), tTop - st.maxLen, byTime);
+            for (; it != notes_.end() && it->t <= tBot; ++it) {
                 const EdNote& n = *it;
-                const float yEnd = ly + float((n.t + n.len - cur_) * pp);
-                if (yEnd < 30 && n.len <= 0) continue;
+                if (n.len <= 0 || n.t + n.len < tTop) continue;
                 const int lane = n.col % keys_;
                 const int dir = gfx::laneDir(keys_, lane);
                 const float cx = x0 + (n.col + 0.5f) * lw;
-                const float y = ly + float((n.t - cur_) * pp);
-                if (pass == 0) {
-                    if (n.len > 0) gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, y, yEnd, lw * 0.32f, 0.85f, true);
-                    continue;
-                }
-                if (y < 30 || y > gfx::H + 30) continue;
-                // Spam charts: one note per pixel row is enough to see them.
-                if (std::fabs(y - lastY[n.col]) < 1.0f && !n.sel) continue;
-                lastY[n.col] = y;
-                const bool mine = n.type.find("Hurt") != std::string::npos;
-                if (mine) DrawCircleV({cx, y}, lw * 0.32f, Color{220, 40, 60, 255});
-                else gfx::drawNote(dir, {cx, y}, lw * 0.82f, 1.0f);
-                if (!n.type.empty() && !mine) DrawCircleV({cx + lw * 0.3f, y - lw * 0.3f}, 5, gfx::rgb(0xFFD54A));
-                if (n.stack > 1)
-                    gfx::text(FontId::Ui, "x" + std::to_string(n.stack), cx + lw * 0.42f, y + 2, 14, kAccent, Align::Right, 1.0f);
-                if (n.sel) DrawRectangleLinesEx({cx - lw * 0.48f, y - lw * 0.48f, lw * 0.96f, lw * 0.96f}, 2, gfx::rgb(0xFFFFFF));
+                const float y = ly + float((n.t - cur_) * pp), yEnd = ly + float((n.t + n.len - cur_) * pp);
+                gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, y, yEnd, lw * 0.32f, 0.85f, true);
             }
         }
+        // A note is ~lw tall: one every few pixels per column looks the same
+        // as one per pixel, at a fraction of the drawing.
+        const float rowPx = std::max(1.0f, lw * 0.08f);
+        auto it = std::lower_bound(notes_.begin(), notes_.end(), tTop - 2 * msPerPx * lw, byTime);
+        double rowEnd = -1e300;
+        int inRow = 0;
+        while (it != notes_.end() && it->t <= tBot) {
+            const EdNote& n = *it;
+            if (n.t >= rowEnd) {
+                rowEnd = n.t + msPerPx * rowPx;
+                inRow = 0;
+            } else if (++inRow > 2 * cols && !n.sel) {
+                it = std::lower_bound(it, notes_.end(), rowEnd, byTime);
+                continue;
+            }
+            ++it;
+            const float y = ly + float((n.t - cur_) * pp);
+            if (y < 30 || y > gfx::H + 30 || n.col >= 64) continue;
+            // Spam charts: one note per pixel row is enough to see them.
+            if (std::fabs(y - lastY[n.col]) < rowPx && !n.sel) continue;
+            lastY[n.col] = y;
+            VisNote v;
+            v.cx = x0 + (n.col + 0.5f) * lw;
+            v.y = y;
+            v.dir = gfx::laneDir(keys_, n.col % keys_);
+            v.mine = n.type < typeHurt_.size() && typeHurt_[n.type];
+            v.typed = n.type != 0;
+            v.sel = n.sel;
+            v.stack = n.stack;
+            vis_.push_back(v);
+        }
+        // Drawn texture by texture (each arrow direction has its own): a
+        // change of texture is a new draw call, thousands of them per frame
+        // on a spam chart otherwise.
+        for (int d = 0; d <= gfx::kCenter; ++d)
+            for (const VisNote& v : vis_)
+                if (!v.mine && v.dir == d) gfx::drawNote(d, {v.cx, v.y}, lw * 0.82f, 1.0f);
+        for (const VisNote& v : vis_) {
+            if (v.mine) DrawCircleV({v.cx, v.y}, lw * 0.32f, Color{220, 40, 60, 255});
+            else if (v.typed) DrawCircleV({v.cx + lw * 0.3f, v.y - lw * 0.3f}, 5, gfx::rgb(0xFFD54A));
+            if (v.sel) DrawRectangleLinesEx({v.cx - lw * 0.48f, v.y - lw * 0.48f, lw * 0.96f, lw * 0.96f}, 2, gfx::rgb(0xFFFFFF));
+        }
+        for (const VisNote& v : vis_)
+            if (v.stack > 1)
+                gfx::text(FontId::Ui, "x" + std::to_string(v.stack), v.cx + lw * 0.42f, v.y + 2, 14, kAccent, Align::Right, 1.0f);
+        vis_.clear();
         // Mouse cursor cell / selection box
         int col = 0;
         double t = 0;
@@ -1202,11 +1376,10 @@ private:
         line(TextFormat("Beat %.2f  Step %d", beat, int(std::floor(beat * 4))));
         line(TextFormat("Section %d  BPM %.2f", sec, bpmAt(cur_)));
         line(TextFormat("Snap 1/%d  Zoom %.2fx", kSnaps[snapIdx_], zoom_));
-        long long total = 0;
-        for (const EdNote& n : notes_) total += n.stack;
-        line("Notes " + fmtThousands(total));
+        const Stats& st = stats();
+        line("Notes " + fmtThousands(st.total));
         line(TextFormat("Events %d", int(events_.size())));
-        if (const int sc = selectedCount()) line(TextFormat("Selected %d", sc), gfx::rgb(0x9AE6FF));
+        if (st.selected) line(TextFormat("Selected %d", st.selected), gfx::rgb(0x9AE6FF));
         y += 6;
         static const char* help[] = {"SPACE play", "Wheel/W/S move", "A/D section (SHIFT: 4)", "LEFT/RIGHT snap",
                                      "Click add/select", "SHIFT+drag select", "Ctrl+C/X/V copy, cut",
@@ -1236,18 +1409,18 @@ private:
         };
         switch (tab_) {
             case 0: {  // Song
-                if (ui_.text("title", row(), "Song", title_)) dirty_ = true;
-                if (ui_.text("p1", row(), "Player", player_)) dirty_ = true;
-                if (ui_.text("p2", row(), "Opponent", opponent_)) dirty_ = true;
-                if (ui_.text("gf", row(), "Girlfriend", gf_)) dirty_ = true;
-                if (ui_.text("stage", row(), "Stage", stage_)) dirty_ = true;
+                if (ui_.text("title", row(), "Song", title_)) dirty_ = statsDirty_ = true;
+                if (ui_.text("p1", row(), "Player", player_)) dirty_ = statsDirty_ = true;
+                if (ui_.text("p2", row(), "Opponent", opponent_)) dirty_ = statsDirty_ = true;
+                if (ui_.text("gf", row(), "Girlfriend", gf_)) dirty_ = statsDirty_ = true;
+                if (ui_.text("stage", row(), "Stage", stage_)) dirty_ = statsDirty_ = true;
                 double bpm = sections_.empty() ? 120 : sections_[0].bpm;
                 if (ui_.stepper(row(), "BPM", bpm, 1, 10, 2000, "%.2f")) setSectionBpm(0, bpm);
-                if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) dirty_ = true;
+                if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) dirty_ = statsDirty_ = true;
                 double k = keys_;
                 if (ui_.stepper(row(), "Keys", k, 1, 1, 9, "%.0f")) setKeys(int(k));
-                if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = true;
-                if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = true;
+                if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
+                if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
                 y += 6;
                 if (ui_.button(half(0), "Save (F2)")) save(false);
                 if (ui_.button(half(1), "Save and play")) {
@@ -1257,13 +1430,13 @@ private:
                 if (ui_.button(half(0), "Clear notes")) {
                     snapshot();
                     notes_.clear();
-                    dirty_ = true;
+                    dirty_ = statsDirty_ = true;
                 }
                 if (ui_.button(half(1), "Clear events")) {
                     snapshot();
                     events_.clear();
                     selEvent_ = -1;
-                    dirty_ = true;
+                    dirty_ = statsDirty_ = true;
                 }
                 y += 38;
                 gfx::text(FontId::Ui, "FL Studio (SNIFF): drop a .flp or .fsc here", x, y, 15, kDim);
@@ -1277,15 +1450,15 @@ private:
                 EdSection& sec = section(s);
                 heading(TextFormat("Section %d", s));
                 bool must = sec.mustHit, gf = sec.gf, alt = sec.altAnim;
-                if (ui_.check(row(), "Must hit section (camera on the player)", must)) { snapshot(); section(s).mustHit = must; dirty_ = true; }
-                if (ui_.check(row(), "GF section (girlfriend sings)", gf)) { snapshot(); section(s).gf = gf; dirty_ = true; }
-                if (ui_.check(row(), "Alt animation (opponent)", alt)) { snapshot(); section(s).altAnim = alt; dirty_ = true; }
+                if (ui_.check(row(), "Must hit section (camera on the player)", must)) { snapshot(); section(s).mustHit = must; dirty_ = statsDirty_ = true; }
+                if (ui_.check(row(), "GF section (girlfriend sings)", gf)) { snapshot(); section(s).gf = gf; dirty_ = statsDirty_ = true; }
+                if (ui_.check(row(), "Alt animation (opponent)", alt)) { snapshot(); section(s).altAnim = alt; dirty_ = statsDirty_ = true; }
                 double beats = section(s).beats;
                 if (ui_.stepper(row(), "Beats", beats, 0.25, 0.25, 64, "%.2f")) {
                     snapshot();
                     section(s).beats = beats;
                     rebuildStarts();
-                    dirty_ = true;
+                    dirty_ = statsDirty_ = true;
                 }
                 // Time signature: 7/16 is 7 sixteenth notes, 1.75 beats (Psych's sectionBeats).
                 {
@@ -1307,14 +1480,14 @@ private:
                         snapshot();
                         section(s).beats = std::max(0.125, std::round(numEdit) * 4.0 / denVal[denEdit]);
                         rebuildStarts();
-                        dirty_ = true;
+                        dirty_ = statsDirty_ = true;
                     }
                 }
                 if (ui_.button(row(), "Same length for every section after this")) {
                     snapshot();
                     for (int k = s + 1; k < int(sections_.size()); ++k) sections_[size_t(k)].beats = section(s).beats;
                     rebuildStarts();
-                    dirty_ = true;
+                    dirty_ = statsDirty_ = true;
                 }
                 double sbpm = section(s).bpm;
                 if (ui_.stepper(row(), "Section BPM", sbpm, 1, 10, 2000, "%.2f")) setSectionBpm(s, sbpm);
@@ -1343,7 +1516,7 @@ private:
                 heading(count == 0 ? std::string("No note selected") : count == 1 ? std::string("Selected note")
                                                                                    : TextFormat("%d notes selected", count));
                 if (ui_.choice(row(), "Type", noteTypes_, typeIdx_))
-                    applyToSelection([&](EdNote& e) { e.type = noteTypes_[size_t(typeIdx_)]; });
+                    applyToSelection([&](EdNote& e) { e.type = typeId(noteTypes_[size_t(typeIdx_)]); });
                 if (n) {
                     double t = n->t;
                     if (ui_.stepper(row(), "Time (ms)", t, 60000.0 / bpmAt(n->t) * snapBeats(), 0, 1e9, "%.1f")) {
@@ -1398,23 +1571,23 @@ private:
                         snapshot();
                         e->name = eventNames_[size_t(idx)];
                         eventIdx_ = idx;
-                        dirty_ = true;
+                        dirty_ = statsDirty_ = true;
                     }
-                    if (ui_.text("ev1", row(), "Value 1", e->v1)) dirty_ = true;
-                    if (ui_.text("ev2", row(), "Value 2", e->v2)) dirty_ = true;
+                    if (ui_.text("ev1", row(), "Value 1", e->v1)) dirty_ = statsDirty_ = true;
+                    if (ui_.text("ev2", row(), "Value 2", e->v2)) dirty_ = statsDirty_ = true;
                     drawEventHelp(e->name, y);
                     if (ui_.button(half(0), "Add here")) {
                         snapshot();
                         psych::ChartEvent c = *e;
                         events_.insert(events_.begin() + selEvent_ + 1, c);
                         ++selEvent_;
-                        dirty_ = true;
+                        dirty_ = statsDirty_ = true;
                     }
                     if (ui_.button(half(1), "Remove")) {
                         snapshot();
                         events_.erase(events_.begin() + selEvent_);
                         selEvent_ = -1;
-                        dirty_ = true;
+                        dirty_ = statsDirty_ = true;
                     }
                     y += 38;
                 } else {
@@ -1433,7 +1606,7 @@ private:
                         events_.push_back(c);
                         sortEvents();
                         selEvent_ = findEvent(c.timeMs, 0.01);
-                        dirty_ = true;
+                        dirty_ = statsDirty_ = true;
                     }
                     gfx::text(FontId::Ui, "Click the EVENTS lane to add or select one;", x, y, 16, kDim);
                     gfx::text(FontId::Ui, "right click removes it.", x, y + 20, 16, kDim);
@@ -1519,13 +1692,13 @@ private:
             e.t = n.time;
             e.col = n.side ? keys_ + n.lane : n.lane;
             e.len = n.length;
-            if (n.side == 1 && (n.flags & kFlagAlt)) e.type = "Alt Animation";
+            if (n.side == 1 && (n.flags & kFlagAlt)) e.type = typeId("Alt Animation");
             e.stack = std::max<int>(1, n.stack);
             notes_.push_back(e);
         }
         sortNotes();
         rebuildStarts();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("Imported %s notes from %s (%s, %.0f BPM)", fmtThousands((long long)c.notes.size()).c_str(),
                          pathStr(toPath(path).filename()).c_str(), flpPatternLabel(p, pattern < 0 ? flpChartPatterns(p, false).front() : pattern).c_str(),
                          c.bpmAt(0)));
@@ -1545,7 +1718,7 @@ private:
             n.t = std::max(a, a + (n.t - a) * ezStretch_);
         }
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("Stretched the section's notes x%.4g", ezStretch_));
     }
     void ezShiftNotes() {
@@ -1555,7 +1728,7 @@ private:
         for (EdNote& n : notes_)
             if (n.t >= a - 0.5 && n.t < b - 0.5) n.t = std::max(0.0, n.t + by);
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("Shifted the section's notes %.4g steps", ezShift_));
     }
     void ezDuplicateNotes() {
@@ -1573,7 +1746,7 @@ private:
                 notes_.push_back(n);
             }
         sortNotes();
-        dirty_ = true;
+        dirty_ = statsDirty_ = true;
         flash(TextFormat("%s notes added", fmtThousands((long long)(src.size() * size_t(ezDupes_))).c_str()));
     }
     // EZ Spam Mode: a note placed at (t, col) brings Spam Count x Spam
@@ -1659,6 +1832,19 @@ private:
     std::map<std::string, std::string> eventHelp_;
     std::string eventV1_, eventV2_, eventsFile_;
     std::vector<UndoStep> undo_, redo_;
+    struct VisNote {  // a note on screen this frame
+        float cx = 0, y = 0;
+        int dir = 0;
+        bool mine = false, typed = false, sel = false;
+        uint32_t stack = 1;
+    };
+    std::vector<VisNote> vis_;
+    std::vector<std::string> typeNames_{""};  // EdNote::type -> name
+    std::vector<char> typeHurt_{0};           // ... a mine (Hurt Note)
+    Stats stats_;
+    size_t statsSize_ = size_t(-1);
+    bool statsDirty_ = true;
+    bool exactPlace_ = false;  // Charting tab: notes only selected in their own cell
     PcmPtr inst_, voiceP_, voiceO_;
 };
 
