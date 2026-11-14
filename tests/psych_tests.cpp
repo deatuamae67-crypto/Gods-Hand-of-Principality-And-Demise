@@ -729,26 +729,51 @@ void testChartStreaming() {
         PCHECK(at != std::string::npos);
         tricky.insert(at + mark.size(), "/* a [comment] } with { brackets */ [12.5, 3, 0, \"Odd [type] \\\" ]\"], // and ] here\n");
         const std::string tpath = (std::filesystem::temp_directory_path() / "gh_stream_threads.json").string();
-        std::ofstream(tpath, std::ios::binary) << tricky;
-        std::string skel0, err0;
-        StreamedNotes one;
-        PCHECK(streamChartSkeleton(tpath, skel0, one, err0, 0));
-        PCHECK(one.types.size() >= 2);  // the odd type and Hurt Note
-        for (size_t cap : {size_t(64), size_t(300), size_t(4096), size_t(1) << 20}) {
-            std::string skel, e;
-            StreamedNotes par;
-            const bool ok = streamChartSkeleton(tpath, skel, par, e, 3, cap);
-            PCHECK(ok);
-            bool same = ok && skel == skel0 && par.notes.size() == one.notes.size() && par.rangeStart == one.rangeStart &&
-                        par.types == one.types && par.dataCount == one.dataCount && par.rawCount == one.rawCount &&
-                        par.maxData == one.maxData;
-            for (size_t i = 0; same && i < one.notes.size(); ++i) {
-                const StreamedNote& a = one.notes[i];
-                const StreamedNote& b = par.notes[i];
-                same = a.time == b.time && a.length == b.length && a.data == b.data && a.stack == b.stack && a.type == b.type;
+        auto sameAsOneThread = [&](const std::string& text, const char* what) {
+            std::ofstream(tpath, std::ios::binary | std::ios::trunc) << text;
+            std::string skel0, err0;
+            StreamedNotes one;
+            PCHECK(streamChartSkeleton(tpath, skel0, one, err0, 0));
+            PCHECK(one.types.size() >= 2);  // the odd type and Hurt Note
+            for (size_t cap : {size_t(64), size_t(300), size_t(4096), size_t(1) << 20}) {
+                std::string skel, e;
+                StreamedNotes par;
+                const bool ok = streamChartSkeleton(tpath, skel, par, e, 3, cap);
+                PCHECK(ok);
+                bool same = ok && skel == skel0 && par.notes.size() == one.notes.size() &&
+                            par.rangeStart == one.rangeStart && par.types == one.types &&
+                            par.dataCount == one.dataCount && par.rawCount == one.rawCount && par.maxData == one.maxData;
+                for (size_t i = 0; same && i < one.notes.size(); ++i) {
+                    const StreamedNote& a = one.notes[i];
+                    const StreamedNote& b = par.notes[i];
+                    same = a.time == b.time && a.length == b.length && a.data == b.data && a.stack == b.stack &&
+                           a.type == b.type;
+                }
+                if (!same) std::printf("  parallel sections differ (%s) with cap %zu (%s)\n", what, cap, e.c_str());
+                PCHECK(same);
             }
-            if (!same) std::printf("  parallel sections differ with cap %zu (%s)\n", cap, e.c_str());
-            PCHECK(same);
+            return one.notes.size();
+        };
+        const size_t tricky1 = sameAsOneThread(tricky, "brackets in comments and types");
+        // Comments longer than the 4 MiB read buffer, ending and starting
+        // right where it is refilled: a block comment whose "*/" is cut
+        // between two reads, and a 5 MiB line comment whose "//" is.
+        {
+            const size_t kBuf = size_t(4) << 20, p0 = at + mark.size();
+            std::string longer = tricky.substr(0, p0);
+            std::string fill;
+            while (longer.size() + 2 + fill.size() < kBuf - 1) fill += "a*[b]{c}\"d\\ ** x ";
+            fill.resize(kBuf - 1 - longer.size() - 2);
+            longer += "/*" + fill + "*/";  // its '*' is the last byte of the first read
+            PCHECK(longer.size() == kBuf + 1 && longer[kBuf - 1] == '*');
+            longer += "[13.5, 1, 0], ";
+            longer.append(2 * kBuf - 1 - longer.size(), ' ');
+            longer += "//";  // its first '/' ends the second read
+            for (size_t k = 0; k < 5 * (size_t(1) << 20) / 16; ++k) longer += "]}[{\"*/*  ** /x ";
+            longer += "\n";
+            longer += tricky.substr(p0);
+            PCHECK(longer[2 * kBuf - 1] == '/' && longer[2 * kBuf] == '/');
+            PCHECK(sameAsOneThread(longer, "comments longer than the read buffer") == tricky1 + 1);
         }
         std::filesystem::remove(tpath);
     }

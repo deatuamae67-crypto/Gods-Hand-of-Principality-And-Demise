@@ -749,25 +749,68 @@ private:
     // Copies the elements of the array whose '[' was just read into `chunk`
     // (as chunkElements reads them), up to about `cap_` bytes, cutting only
     // after a top-level ','. done: its closing ']' was reached (and read).
+    // Comments are copied whole (chunkElements skips them) and their brackets
+    // count for nothing; one may be longer than the read buffer, so where a
+    // piece ends inside one is kept for the next piece.
     bool capture(std::string& chunk, bool& done) {
         done = false;
         int depth = 0;
         bool inStr = false, esc = false;
+        int comment = 0;     // in a comment: 1 for //, 2 for /* */
+        bool slash = false;  // the last piece ended with a '/' outside strings and comments
+        bool star = false;   // the last piece ended inside a /* */ comment, with a '*'
+        // In a comment from p[i]: the index just after its end, or n when it
+        // goes on in the next piece.
+        auto commentEnd = [&](const char* p, size_t i, size_t n) -> size_t {
+            if (comment == 1) {
+                const void* nl = i < n ? std::memchr(p + i, '\n', n - i) : nullptr;
+                if (!nl) return n;
+                comment = 0;
+                return size_t(static_cast<const char*>(nl) - p) + 1;
+            }
+            if (star && i < n) {
+                star = false;
+                if (p[i] == '/') {
+                    comment = 0;
+                    return i + 1;
+                }
+            }
+            while (i < n) {
+                const void* s = std::memchr(p + i, '*', n - i);
+                if (!s) return n;
+                i = size_t(static_cast<const char*>(s) - p) + 1;  // just after the '*'
+                if (i == n) {
+                    star = true;
+                    return n;
+                }
+                if (p[i] == '/') {
+                    comment = 0;
+                    return i + 1;
+                }
+            }
+            return n;
+        };
         for (;;) {
             if (!r_.fill()) return fail("unterminated sectionNotes");
             const char* p = r_.data();
             const size_t n = r_.avail();
             // Commas matter only where this piece may be cut.
             const bool commas = chunk.size() + n >= cap_;
-            bool needMore = false;  // a comment goes on past what is in the buffer
             size_t i = 0;
             if (esc) {  // a backslash ended the last piece: this byte is escaped
                 esc = false;
                 i = 1;
+            } else if (slash) {  // a '/' ended it: this byte says whether a comment starts
+                slash = false;
+                if (p[0] == '/' || p[0] == '*') {
+                    comment = p[0] == '/' ? 1 : 2;
+                    i = 1;
+                }
             }
+            if (comment) i = commentEnd(p, i, n);
             // One byte, by the rules of JSON (in a string or not); returns
-            // 0 to go on, 1 at the section's end or where it is cut, 2 when
-            // the buffer must hold more (a comment) and sets `next`.
+            // 0 to go on, 1 at the section's end or where it is cut, 3 after
+            // a comment's start, going on at `next`.
             size_t skipAt = size_t(-1), next = 0;
             auto step = [&](size_t j) -> int {
                 if (j == skipAt) return 0;  // escaped in a string
@@ -794,16 +837,14 @@ private:
                     }
                     --depth;
                 } else if (c == '/') {
-                    // A comment: kept whole (chunkElements skips it) so that
-                    // brackets in it count for nothing.
-                    if (j + 1 >= n) { next = j; return 2; }
+                    if (j + 1 >= n) {  // the next piece tells
+                        slash = true;
+                        return 0;
+                    }
                     if (p[j + 1] != '/' && p[j + 1] != '*') return 0;
-                    const bool line = p[j + 1] == '/';
-                    size_t e = j + 2;
-                    while (e < n && !(line ? p[e] == '\n' : (p[e] == '*' && e + 1 < n && p[e + 1] == '/'))) ++e;
-                    if (e >= n) { next = j; return 2; }
-                    next = line ? e + 1 : e + 2;
-                    return 3;  // go on after the comment
+                    comment = p[j + 1] == '/' ? 1 : 2;
+                    next = commentEnd(p, j + 2, n);
+                    return 3;
                 } else if (c == ',' && depth == 0 && chunk.size() + j >= cap_) {
                     chunk.append(p, j + 1);
                     r_.advance(j + 1);
@@ -830,16 +871,10 @@ private:
                     if (st == 0) break;
                 }
                 if (st == 1) return true;
-                if (st == 2) { needMore = true; i = next; break; }
-                i = next;  // st == 3: after a comment
+                i = next;  // after the comment (n: it goes on in the next piece)
             }
-            if (!needMore) i = std::min(i, n);
-            chunk.append(p, i);
-            r_.advance(i);
-            if (needMore) {  // the whole comment into the buffer at once
-                const size_t had = r_.avail();
-                if (r_.ensure(had + 65536) <= had) return fail("unterminated comment in sectionNotes");
-            }
+            chunk.append(p, n);
+            r_.advance(n);
         }
     }
 

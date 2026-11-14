@@ -212,6 +212,26 @@ if(GH_BUILD_GAME)
     file(WRITE ${gh_raudio} "${gh_src}")
     message(STATUS "Patched raylib's raudio.c: the game picks the audio buffer")
   endif()
+  # Closing the audio device: raylib destroys the mixer's lock before the
+  # device, while the sound card's callback may still take it; and miniaudio
+  # 0.11 closes an AAudio stream without stopping it, which Android 11 and
+  # older (AAudio over AudioTrack) cannot take: the callback thread runs into
+  # the deleted stream and aborts the game as it quits ("Pure virtual function
+  # called"). On Android the stream is stopped first and the callback thread
+  # given time to leave (as Google's Oboe does); everywhere the lock goes last.
+  file(READ ${gh_raudio} gh_src)
+  if(NOT gh_src MATCHES "GhStopBeforeClose")
+    set(gh_close "        ma_mutex_uninit(&AUDIO.System.lock);\n        ma_device_uninit(&AUDIO.System.device);")
+    string(FIND "${gh_src}" "${gh_close}" gh_at)
+    if(gh_at EQUAL -1)
+      message(FATAL_ERROR "Could not patch CloseAudioDevice() in ${gh_raudio} (raylib 5.5 expected)")
+    endif()
+    string(REPLACE "${gh_close}"
+      "        // GhStopBeforeClose (God's Hand): on Android stopped first; the lock last\n#if defined(__ANDROID__)\n        ma_device_stop(&AUDIO.System.device);\n        ma_sleep(20);  // Android 11 and older do not wait for a running callback\n#endif\n        ma_device_uninit(&AUDIO.System.device);\n        ma_mutex_uninit(&AUDIO.System.lock);"
+      gh_src "${gh_src}")
+    file(WRITE ${gh_raudio} "${gh_src}")
+    message(STATUS "Patched raylib's raudio.c: the audio device stops before it closes")
+  endif()
   if(ANDROID)
     # Android: make raylib follow the window when it changes size (see
     # cmake/raylib_android_resize.c). Applied once, in raylib's own source.
