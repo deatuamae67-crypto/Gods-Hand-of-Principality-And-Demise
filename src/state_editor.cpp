@@ -140,7 +140,22 @@ public:
     void update(double dt) override {
         App& a = app();
         Input& in = a.input;
-        if (job_.valid()) {
+        if (job_.valid() && audioOnly_) {  // Reload audio: the editor goes on meanwhile
+            if (job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                Prepared p = job_.get();
+                audioOnly_ = false;
+                if (p.ok) {
+                    inst_ = p.inst;
+                    voiceP_ = p.voiceP;
+                    voiceO_ = p.voiceO;
+                    a.mixer.setTracks(inst_, voiceP_, voiceO_);
+                    applyVolumes();
+                    flash("Audio reloaded");
+                } else {
+                    flash("Audio: " + p.error);
+                }
+            }
+        } else if (job_.valid()) {
             if (job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
             Prepared p = job_.get();
             if (!p.ok) error_ = p.error.empty() ? "cannot load the chart" : p.error;
@@ -282,6 +297,7 @@ public:
         }
         drawGrid();
         drawInfo();
+        if (preview_) drawPreview();
         drawPanel();  // also handles the panel's clicks (immediate mode)
         if (!ui_.used && !typing_) handleGridMouse();
         if (a.now - flashAt_ < 3.0)
@@ -703,6 +719,52 @@ private:
         for (psych::ChartEvent& e : clipEvents_) e.timeMs -= base;
         flash(TextFormat("Copied %d notes", int(clipboard_.size())));
     }
+    // JS Engine's copy of a range of sections: their notes and events go to
+    // the clipboard, from the start of the first one; paste puts them at the line.
+    void copySectionRange(int from, int to) {
+        if (from > to) std::swap(from, to);
+        from = std::max(0, from);
+        to = std::min(to, int(sections_.size()) - 1);
+        if (to < from) return;
+        clipboard_.clear();
+        clipEvents_.clear();
+        const double base = sectionStart(from), end = sectionStart(to + 1);
+        for (auto r = notesIn(base - 0.5, end - 0.5); r.first != r.second; ++r.first)
+            if (r.first->t < end - 0.5) {
+                EdNote n = *r.first;
+                n.t -= base;
+                n.sel = false;
+                clipboard_.push_back(n);
+            }
+        for (const psych::ChartEvent& e : events_)
+            if (e.timeMs >= base - 0.5 && e.timeMs < end - 0.5) {
+                psych::ChartEvent c = e;
+                c.timeMs -= base;
+                clipEvents_.push_back(c);
+            }
+        flash(TextFormat("Copied sections %d to %d: %d notes", from, to, int(clipboard_.size())));
+    }
+
+    void reloadAudio() {
+        if (job_.valid() || !entry_) return;
+        stopPlay();
+        const SongEntry copy = *entry_;
+        audioOnly_ = true;
+        job_ = std::async(std::launch::async, [copy] { return app().library.reloadAudio(copy); });
+        flash("Reloading the audio...");
+    }
+    // The chart as saved on disk (the editor starts again on it); with
+    // unsaved changes, the second click.
+    void reloadChart() {
+        if (dirty_ && !reloadArmed_) {
+            reloadArmed_ = true;
+            flash("Unsaved changes: click again to reload the chart without them");
+            return;
+        }
+        stopPlay();
+        app().change(makeChartEditor(songId_, diff_));
+    }
+
     // Cut: copy, then remove what was copied (the selection, or the section's notes and events).
     void cutSelectionOrSection() {
         const bool sel = anySelected();
@@ -1337,9 +1399,15 @@ private:
             else if (v.typed) DrawCircleV({v.cx + lw * 0.3f, v.y - lw * 0.3f}, 5, gfx::rgb(0xFFD54A));
             if (v.sel) DrawRectangleLinesEx({v.cx - lw * 0.48f, v.y - lw * 0.48f, lw * 0.96f, lw * 0.96f}, 2, gfx::rgb(0xFFFFFF));
         }
-        for (const VisNote& v : vis_)
-            if (v.stack > 1)
-                gfx::text(FontId::Ui, "x" + std::to_string(v.stack), v.cx + lw * 0.42f, v.y + 2, 14, kAccent, Align::Right, 1.0f);
+        float lastLabel[64];  // "xN" (stacked notes) only where it has room
+        std::fill(std::begin(lastLabel), std::end(lastLabel), -1e9f);
+        for (const VisNote& v : vis_) {
+            if (v.stack <= 1) continue;
+            const int c = std::clamp(int((v.cx - x0) / lw), 0, 63);
+            if (std::fabs(v.y - lastLabel[c]) < 16.0f) continue;
+            lastLabel[c] = v.y;
+            gfx::text(FontId::Ui, "x" + std::to_string(v.stack), v.cx + lw * 0.42f, v.y + 2, 14, kAccent, Align::Right, 1.0f);
+        }
         vis_.clear();
         // Mouse cursor cell / selection box
         int col = 0;
@@ -1367,6 +1435,57 @@ private:
         gfx::text(FontId::Ui, "EVENTS", ex + lw * 0.5f, 10, 16, gfx::fade(WHITE, 0.6f), Align::Center);
         gfx::text(FontId::Ui, "OPPONENT", x0 + lw * keys_ * 0.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
         gfx::text(FontId::Ui, "PLAYER", x0 + lw * keys_ * 1.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+    }
+
+    // The chart as it will be played, in a small window under the info: the
+    // strums, and the notes coming up to them at the song's scroll speed
+    // (Charting tab: Chart preview).
+    void drawPreview() {
+        const Rectangle box{12, 478, 228, 230};
+        DrawRectangleRounded(box, 0.04f, 6, Color{8, 5, 14, 235});
+        DrawRectangleRoundedLinesEx(box, 0.04f, 6, 1.5f, Color{110, 92, 150, 200});
+        const int cols = 2 * keys_;
+        const float lw = std::min(26.0f, (box.width - 16) / float(cols));
+        const float x0 = box.x + (box.width - lw * cols) * 0.5f, recY = box.y + 26;
+        const double pp = 0.45 * speed_ * (lw / 112.0) * 1.6;  // pixels per ms, as Psych scales it
+        const double tTop = cur_ - (recY - box.y) / pp, tBot = cur_ + (box.y + box.height - recY) / pp;
+        const Vector2 o = gfx::canvasOrigin();
+        const float cs = gfx::canvasScale();
+        BeginScissorMode(int(o.x + box.x * cs), int(o.y + box.y * cs), int(box.width * cs), int(box.height * cs));
+        for (int c = 0; c < cols; ++c)
+            gfx::drawReceptor(gfx::laneDir(keys_, c % keys_), {x0 + (c + 0.5f) * lw, recY}, lw * 0.9f, Color{200, 190, 230, 150});
+        float lastY[64];
+        std::fill(std::begin(lastY), std::end(lastY), -1e9f);
+        const Stats& st = stats();
+        auto r = notesIn(tTop - st.maxLen, tBot);
+        for (auto it = r.first; it != r.second; ++it) {
+            const EdNote& n = *it;
+            if (n.col >= 64) continue;
+            const float y = recY + float((n.t - cur_) * pp);
+            const float cx = x0 + (n.col + 0.5f) * lw;
+            const int dir = gfx::laneDir(keys_, n.col % keys_);
+            if (n.len > 0) {
+                const float yEnd = recY + float((n.t + n.len - cur_) * pp);
+                if (yEnd >= box.y) gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, std::max(y, recY), yEnd, lw * 0.3f, 0.8f, true);
+            }
+            if (n.t < cur_ - 1 || std::fabs(y - lastY[n.col]) < 2.0f) continue;  // played already / same pixel row
+            lastY[n.col] = y;
+            VisNote v;
+            v.cx = cx;
+            v.y = y;
+            v.dir = dir;
+            v.mine = n.type < typeHurt_.size() && typeHurt_[n.type];
+            vis_.push_back(v);
+            if (vis_.size() > 20000) break;
+        }
+        for (int d = 0; d <= gfx::kCenter; ++d)
+            for (const VisNote& v : vis_)
+                if (!v.mine && v.dir == d) gfx::drawNote(d, {v.cx, v.y}, lw * 0.9f, 1.0f);
+        for (const VisNote& v : vis_)
+            if (v.mine) DrawCircleV({v.cx, v.y}, lw * 0.3f, Color{220, 40, 60, 255});
+        vis_.clear();
+        EndScissorMode();
+        gfx::text(FontId::Ui, "PREVIEW", box.x + 8, box.y + box.height - 22, 14, gfx::fade(WHITE, 0.45f));
     }
 
     void drawInfo() {
@@ -1435,6 +1554,9 @@ private:
                 if (ui_.button(half(1), "Save and play")) {
                     if (save(true)) return;
                 }
+                y += 38;
+                if (ui_.button(half(0), "Reload audio")) reloadAudio();
+                if (ui_.button(half(1), reloadArmed_ ? "Reload: unsaved, again" : "Reload chart")) reloadChart();
                 y += 38;
                 if (ui_.button(half(0), "Clear notes")) {
                     snapshot();
@@ -1514,8 +1636,18 @@ private:
                 if (ui_.button(half(0), "Swap sides")) swapSides();
                 if (ui_.button(half(1), "Mirror lanes")) mirror();
                 y += 38;
-                if (ui_.stepper(row(), "Sections back", copyBack_, 1, 1, 64, "%.0f")) {}
+                ui_.stepper(row(), "Sections back", copyBack_, 1, 1, std::max(1.0, double(sections_.size())), "%.0f");
                 if (ui_.button(row(), "Copy notes from that section")) copyLastSection(int(copyBack_));
+                // JS Engine: a range of sections to the clipboard (paste puts it at the line).
+                {
+                    const Rectangle r = row();
+                    gfx::text(FontId::Ui, "Sections", r.x, r.y + 6, 18, kDim);
+                    const double top = std::max(0.0, double(sections_.size()) - 1);
+                    ui_.stepper({r.x + 80, r.y, 150, r.height}, "", rangeFrom_, 1, 0, top, "%.0f");
+                    gfx::text(FontId::Ui, "to", r.x + 238, r.y + 6, 18, kDim);
+                    ui_.stepper({r.x + 262, r.y, r.width - 262, r.height}, "", rangeTo_, 1, 0, top, "%.0f");
+                }
+                if (ui_.button(row(), "Copy that range of sections")) copySectionRange(int(rangeFrom_), int(rangeTo_));
                 if (ui_.button(row(), "Select all notes of the section (Ctrl+A)")) selectSection();
                 break;
             }
@@ -1631,7 +1763,8 @@ private:
                 ui_.stepper(row(), "Player hitsound volume", hitVolPlayer_, 0.05, 0, 1, "%.2f");
                 ui_.check(row(), "Hit sounds: opponent", hitOpponent_);
                 ui_.stepper(row(), "Opponent hitsound volume", hitVolOpponent_, 0.05, 0, 1, "%.2f");
-                ui_.check(row(), "Exact placement (a note at a section's start next to one just before it)", exactPlace_);
+                ui_.check(row(), "Exact placement (section starts)", exactPlace_);
+                ui_.check(row(), "Chart preview (bottom left)", preview_);
                 ui_.check(row(), "Metronome", metronome_);
                 double snap = snapIdx_;
                 if (ui_.stepper(row(), "Snap (1/N)", snap, 1, 0, double(std::size(kSnaps) - 1), "%.0f")) snapIdx_ = int(snap);
@@ -1826,6 +1959,8 @@ private:
     bool needsVoices_ = true, eventsSeparate_ = true, boxing_ = false;
     bool hitPlayer_ = true, hitOpponent_ = true, metronome_ = false, muteVoices_ = false;
     double hitVolPlayer_ = 0.6, hitVolOpponent_ = 0.6, schedUpTo_ = 0;  // hitsound volumes; scheduled up to (ms)
+    double rangeFrom_ = 0, rangeTo_ = 0;  // Section tab: a range of sections to copy
+    bool audioOnly_ = false, reloadArmed_ = false, preview_ = true;
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)
     bool ezMode_ = false;

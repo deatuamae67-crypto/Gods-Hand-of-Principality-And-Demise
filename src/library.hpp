@@ -49,6 +49,9 @@ public:
     // extraKeys = false: every chart gets 4 keys (Options, Extra keys).
     Prepared prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys = true);
     PcmPtr preview(const SongEntry& e);  // instrumental only, for menus
+    // The song's audio read again from its files, the chart left alone (the
+    // chart editor's Reload audio).
+    Prepared reloadAudio(const SongEntry& e);
 
     // Menu music (composed once).
     PcmPtr menuMusic(double* loopSec);

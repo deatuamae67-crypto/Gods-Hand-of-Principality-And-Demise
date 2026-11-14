@@ -190,6 +190,33 @@ Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirr
     return p;
 }
 
+Prepared Library::reloadAudio(const SongEntry& e) {
+    Prepared p;
+    if (e.builtin && e.def) {
+        const auto a = builtinAudio(*e.def);
+        p.inst = a.inst;
+        p.voiceP = a.vp;
+        p.voiceO = a.vo;
+    } else {
+        std::lock_guard<std::mutex> lk(customMtx_);
+        customInstKey_ = customCacheKey_ = e.id;
+        customInst_ = streamOrNull(e.inst);
+        customVoices_ = streamOrNull(e.voices);
+        customVp_ = streamOrNull(e.voicesP);
+        customVo_ = streamOrNull(e.voicesO);
+        p.inst = customInst_;
+        if (customVp_ || customVo_) {
+            p.voiceP = customVp_;
+            p.voiceO = customVo_;
+        } else {
+            p.voiceP = customVoices_;
+        }
+    }
+    p.ok = p.inst != nullptr;
+    if (!p.ok) p.error = "cannot decode " + e.inst;
+    return p;
+}
+
 PcmPtr Library::preview(const SongEntry& e) {
     if (e.builtin && e.def) return builtinAudio(*e.def).inst;
     std::lock_guard<std::mutex> lk(customMtx_);
