@@ -217,6 +217,8 @@ std::unique_ptr<State> makeEditorMenu();
 std::unique_ptr<State> makeCharacterEditor();
 std::unique_ptr<State> makeStageEditor();
 std::unique_ptr<State> makeEventEditor();
+std::unique_ptr<State> makeScriptEditor();
+std::unique_ptr<State> makeChartConverter();
 
 // Waits (bounded) for detached preview/compose jobs before shutdown.
 void waitForBackgroundJobs();

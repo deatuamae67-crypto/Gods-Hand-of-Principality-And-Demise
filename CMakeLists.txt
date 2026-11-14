@@ -87,6 +87,7 @@ add_library(gh_core STATIC
   src/json.cpp
   src/chart.cpp
   src/chart_stream.cpp
+  src/chart_binary.cpp
   src/basegame.cpp
   src/shader_glsl.cpp
   src/effects.cpp

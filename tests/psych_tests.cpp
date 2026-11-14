@@ -720,6 +720,7 @@ int runPsychCorpus(const char* dir) {
 
 // ------------------------------------------------- AutoChart, replays, zips --
 #include "autochart.hpp"
+#include "chart_binary.hpp"
 #include "chart_stream.hpp"
 #include "effects.hpp"
 #include "shader_glsl.hpp"
@@ -935,6 +936,55 @@ void testChartStreaming() {
             PCHECK(sameAsOneThread(longer, "comments longer than the read buffer") == tricky1 + 1);
         }
         std::filesystem::remove(tpath);
+    }
+
+    // Binary charts (.ghc, issue #22): the same chart, notes, events and song
+    // data as the JSON, in a fraction of the size; peeks read their song
+    // fields; a damaged file is an error, not a crash.
+    {
+        namespace fs = std::filesystem;
+        const std::string ghc = (fs::temp_directory_path() / "gh_binary_chart.ghc").string();
+        ConvertStats st;
+        std::string e;
+        PCHECK(convertChartToBinary(path, ghc, e, &st));
+        if (!e.empty()) std::printf("  binary chart: %s\n", e.c_str());
+        PCHECK(isBinaryChart(ghc) && !isBinaryChart(path));
+        PCHECK(st.outBytes > 0 && st.outBytes * 5 < st.inBytes);
+        std::printf("  binary chart: %llu notes, %llu bytes of JSON -> %llu (%.1fx smaller)\n", (unsigned long long)st.notes,
+                    (unsigned long long)st.inBytes, (unsigned long long)st.outBytes, double(st.inBytes) / double(std::max<uint64_t>(1, st.outBytes)));
+        Chart fromJson, fromBin;
+        PCHECK(loadChartFile(path, "Hard", fromJson, e, {}, 1));
+        PCHECK(loadChartFile(ghc, "Hard", fromBin, e));
+        bool same = fromJson.notes.size() == fromBin.notes.size() && fromJson.notes.size() > 1000;
+        for (size_t i = 0; same && i < fromJson.notes.size(); ++i) {
+            const Note& a = fromJson.notes[i];
+            const Note& b = fromBin.notes[i];
+            same = std::fabs(a.time - b.time) < 1e-5 && std::fabs(a.length - b.length) < 1e-2 && a.lane == b.lane && a.side == b.side &&
+                   a.kind == b.kind && a.flags == b.flags && a.stack == b.stack && a.type == b.type;
+        }
+        PCHECK(same);
+        PCHECK(fromBin.title == fromJson.title && fromBin.stage == fromJson.stage && fromBin.opponent == fromJson.opponent &&
+               fromBin.events.size() == fromJson.events.size() && fromBin.keys == fromJson.keys &&
+               fromBin.noteTypes == fromJson.noteTypes && std::fabs(fromBin.speed - fromJson.speed) < 1e-9);
+        const ChartPeek pb = peekChart(ghc);
+        PCHECK(pb.song == "Blocked" && pb.player2 == "bambi" && pb.isChart);
+        // Damaged: cut short, or a byte changed in the notes.
+        std::string bytes;
+        {
+            std::ifstream in(ghc, std::ios::binary);
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        const std::string bad = ghc + ".bad";
+        std::ofstream(bad, std::ios::binary) << bytes.substr(0, bytes.size() / 2);
+        Chart broken;
+        PCHECK(!loadChartFile(bad, "Hard", broken, e) && !e.empty());
+        std::string flipped = bytes;
+        flipped[flipped.size() - 10] = char(flipped[flipped.size() - 10] ^ 0x55);
+        std::ofstream(bad, std::ios::binary | std::ios::trunc) << flipped;
+        e.clear();
+        PCHECK(!loadChartFile(bad, "Hard", broken, e));
+        fs::remove(bad);
+        fs::remove(ghc);
     }
 
     // The chart cache: the first load keeps the notes, the second reads them

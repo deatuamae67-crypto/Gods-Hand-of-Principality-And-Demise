@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,7 @@
 
 #include "app.hpp"
 #include "audio_decode.hpp"
+#include "chart_binary.hpp"
 #include "chart_stream.hpp"
 #include "flp_import.hpp"
 #include "common.hpp"
@@ -381,6 +383,8 @@ private:
                 if (equalsI(pathStr(f.path().filename()), "events.json")) eventsFile_ = pathStr(f.path());
         }
         scanNames(c);
+        for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
+            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kBinaryChartExt)) saveBinary_ = true;
         loaded_ = true;
         App& a = app();
         a.mixer.setTracks(inst_, voiceP_, voiceO_);
@@ -1193,6 +1197,9 @@ private:
         for (size_t i = 0; i < e.diffs.size(); ++i)
             if (e.diffs[i] == diff_ && i < e.chartPaths.size() && !e.chartPaths[i].empty() && e.metaPath.empty()) {
                 if (psychJsonFile(e.chartPaths[i])) return e.chartPaths[i];
+                // A binary chart: the Psych JSON beside it is what is saved (the .ghc follows).
+                if (endsWithI(e.chartPaths[i], kBinaryChartExt))
+                    return e.chartPaths[i].substr(0, e.chartPaths[i].size() - std::strlen(kBinaryChartExt)) + ".json";
                 // FL Studio / PulseForge: a Psych chart next to the original.
                 std::string file = e.chartPaths[i];
                 int pattern = 0;
@@ -1249,6 +1256,15 @@ private:
             flash("Could not save " + path);
             return false;
         }
+        // The binary chart (.ghc) beside it, when there is one or it is asked
+        // for: made from the JSON just written, so the two never differ.
+        const std::string ghcPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kBinaryChartExt;
+        bool wroteGhc = false;
+        if (saveBinary_ || fs::exists(toPath(ghcPath), ec)) {
+            std::string err;
+            wroteGhc = convertChartToBinary(path, ghcPath, err);
+            if (!wroteGhc) flash("Saved the JSON; the .ghc failed: " + err);
+        }
         if (!eventsInChart()) {
             const fs::path ep = toPath(eventsFile_);
             if (!fs::exists(toPath(eventsFile_ + ".bak"), ec)) fs::copy_file(ep, toPath(eventsFile_ + ".bak"), ec);
@@ -1257,7 +1273,8 @@ private:
         dirty_ = false;
         long long total = 0;
         for (const EdNote& n : notes_) total += n.stack;
-        flash("Saved " + pathStr(p.filename()) + " (" + fmtThousands(total) + " notes, " + std::to_string(events_.size()) + " events)");
+        flash("Saved " + pathStr(p.filename()) + (wroteGhc ? " and .ghc" : "") + " (" + fmtThousands(total) + " notes, " +
+              std::to_string(events_.size()) + " events)");
         // New files: rescan so Freeplay (and the playtest) see the chart.
         std::string id = songId_;
         if (entry_->builtin || entry_->autoChart) {
@@ -1549,6 +1566,7 @@ private:
                 if (ui_.stepper(row(), "Keys", k, 1, 1, 9, "%.0f")) setKeys(int(k));
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
+                ui_.check(row(), "Also save as .ghc (binary, much smaller)", saveBinary_);
                 y += 6;
                 if (ui_.button(half(0), "Save (F2)")) save(false);
                 if (ui_.button(half(1), "Save and play")) {
@@ -1961,6 +1979,7 @@ private:
     double hitVolPlayer_ = 0.6, hitVolOpponent_ = 0.6, schedUpTo_ = 0;  // hitsound volumes; scheduled up to (ms)
     double rangeFrom_ = 0, rangeTo_ = 0;  // Section tab: a range of sections to copy
     bool audioOnly_ = false, reloadArmed_ = false, preview_ = true;
+    bool saveBinary_ = false;  // Song tab: a .ghc beside the JSON (on by itself for charts loaded from one)
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)
     bool ezMode_ = false;

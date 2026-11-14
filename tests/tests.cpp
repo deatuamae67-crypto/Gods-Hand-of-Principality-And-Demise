@@ -11,6 +11,7 @@
 #include <string>
 
 #include "chart.hpp"
+#include "chart_binary.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "composer.hpp"
@@ -440,8 +441,21 @@ int main(int argc, char** argv) {
     const char* wav = nullptr;
     for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--cache")) setChartCacheDir(argv[i + 1]);  // gh_tests --cache dir --chart files
-    for (int i = 1; i < argc; ++i)
+    for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--chart")) return benchCharts(argc, argv, i + 1);
+        if (!std::strcmp(argv[i], "--convert") && i + 2 < argc) {  // gh_tests --convert chart.json chart.ghc
+            ConvertStats st;
+            std::string err;
+            if (!convertChartToBinary(argv[i + 1], argv[i + 2], err, &st)) {
+                std::printf("%s\n", err.c_str());
+                return 1;
+            }
+            std::printf("%llu notes: %.1f MB -> %.1f MB (%.1fx smaller) in %.2f s\n", (unsigned long long)st.notes,
+                        double(st.inBytes) / 1e6, double(st.outBytes) / 1e6, double(st.inBytes) / double(std::max<uint64_t>(1, st.outBytes)),
+                        st.seconds);
+            return 0;
+        }
+    }
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--keys")) return printKeys(argc, argv, i + 1);
     for (int i = 1; i + 1 < argc; ++i)

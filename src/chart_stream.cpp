@@ -33,6 +33,8 @@
 
 #include "chart.hpp"
 #include "chart_stream.hpp"
+
+#include "chart_binary.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
 
@@ -1206,6 +1208,12 @@ bool loadChartFile(const std::string& path, const std::string& difficulty, Chart
         out.difficulty = difficulty;
         return true;
     }
+    if (isBinaryChart(path)) {  // God's Hand's own binary chart (.ghc)
+        std::string skeleton;
+        StreamedNotes sn;
+        if (!readBinaryChart(path, skeleton, sn, err)) return false;
+        return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
+    }
     const uint64_t size = fileSize(path);
     if (size == 0 && !fileExistsAt(path)) { err = "cannot read " + path; return false; }
     // A pipe has no size (gh_tests --chart /dev/stdin, fed by a decompressor):
@@ -1269,13 +1277,23 @@ std::string findStringField(std::string_view text, std::string_view key) {
 
 ChartPeek peekChart(const std::string& path) {
     ChartPeek pk;
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) return pk;
     constexpr size_t kWin = 96 * 1024;
-    std::string head(kWin, '\0'), tail;
-    head.resize(std::fread(head.data(), 1, kWin, f));
-    const uint64_t size = fileSize(path);
-    if (size > kWin) {
+    std::string head, tail;
+    if (isBinaryChart(path)) {  // its JSON part holds the song's fields
+        if (!readBinarySkeleton(path, head)) return pk;
+        if (head.size() > 2 * kWin) {
+            tail = head.substr(head.size() - kWin);
+            head.resize(kWin);
+        }
+    }
+    FILE* f = head.empty() ? std::fopen(path.c_str(), "rb") : nullptr;
+    if (head.empty() && !f) return pk;
+    if (f) {
+        head.assign(kWin, '\0');
+        head.resize(std::fread(head.data(), 1, kWin, f));
+    }
+    const uint64_t size = f ? fileSize(path) : 0;
+    if (f && size > kWin) {
 #if defined(_WIN32)
         _fseeki64(f, (long long)(size - std::min<uint64_t>(size - kWin, kWin)), SEEK_SET);
 #else
@@ -1284,7 +1302,7 @@ ChartPeek peekChart(const std::string& path) {
         tail.resize(kWin);
         tail.resize(std::fread(tail.data(), 1, kWin, f));
     }
-    std::fclose(f);
+    if (f) std::fclose(f);
     // Top-level fields come either before or after the (huge) notes array.
     // A section's "notes" never contain a "song" string, so the first match
     // in the head or the last in the tail is the song's own.

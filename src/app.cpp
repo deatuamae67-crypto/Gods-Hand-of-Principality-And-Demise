@@ -368,6 +368,8 @@ int App::run(int argc, char** argv) {
     else if (autoRun.state == "calibration") state_ = makeCalibration();
     else if (autoRun.state == "modpacks") state_ = makeModPacks();
     else if (autoRun.state == "editors") state_ = makeEditorMenu();
+    else if (autoRun.state == "scripts") state_ = makeScriptEditor();
+    else if (autoRun.state == "converter") state_ = makeChartConverter();
     else if (autoRun.state == "note-colors") state_ = makeNoteColors();
     else if (autoRun.state == "character-editor") state_ = makeCharacterEditor();
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
