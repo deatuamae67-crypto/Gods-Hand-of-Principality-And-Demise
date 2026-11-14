@@ -270,6 +270,72 @@ void testRenderMode(const std::string& dir) {
 
 }  // namespace
 
+// Hitsounds (issue #22): each starts on its note's own sample, a new one cuts
+// the one still playing (the level does not pile up), and a spam of 16 notes
+// a step at 520 BPM sounds as a tone of 554.67 Hz, as in FL Studio.
+void testHitsounds() {
+    Mixer m;  // offline: no sound device needed
+    m.setOffline(true);
+    auto silent = std::make_shared<Pcm>();
+    silent->channels = 2;
+    silent->data.assign(size_t(2) * 44100 * 3, 0);
+    m.setTracks(silent, nullptr, nullptr);
+    std::vector<float> click(400);
+    float peak = 0;
+    for (size_t i = 0; i < click.size(); ++i) {
+        click[i] = float(0.5 * std::sin(2 * 3.14159265358979 * 3000.0 * double(i + 1) / 44100.0) * std::exp(-double(i) / 90.0));
+        peak = std::max(peak, std::fabs(click[i]));
+    }
+    m.setHitSound(click);
+    auto render = [&](double seconds) {
+        std::vector<float> out(size_t(seconds * 44100) * 2);
+        for (size_t at = 0; at < out.size() / 2; at += 512) {
+            const unsigned n = unsigned(std::min<size_t>(512, out.size() / 2 - at));
+            m.mixOffline(out.data() + at * 2, n);
+        }
+        return out;
+    };
+    // One note at 0.5 s: its sound starts on sample 22050, not a buffer later.
+    m.play(0);
+    m.hitAt(0.5, 0, 1.0f);
+    std::vector<float> one = render(1.0);
+    size_t first = 0;
+    while (first < one.size() / 2 && one[first * 2] == 0) ++first;
+    ACHECK(first == 22050);
+    // The spam: 16 notes a step at 520 BPM.
+    const double stepSec = 60.0 / 520.0 / 4.0, gap = stepSec / 16.0;
+    m.play(0);
+    for (double t = 0.1; t < 1.9; t += gap) m.hitAt(t, 0, 1.0f);
+    std::vector<float> spam = render(2.0);
+    float top = 0;
+    for (size_t i = 0; i < spam.size(); i += 2) top = std::max(top, std::fabs(spam[i]));
+    ACHECK(top <= peak * 1.6f);  // added up, 400-sample sounds every 80 would reach ~5x
+    // The strongest frequency between 300 and 900 Hz is the notes' rate.
+    double best = 0, bestF = 0;
+    for (double f = 300; f <= 900; f += 1.0) {
+        double re = 0, im = 0;
+        for (size_t k = 22050; k < 77175; ++k) {  // 0.5 s to 1.75 s
+            const double ph = 2 * 3.14159265358979 * f * double(k) / 44100.0;
+            re += spam[k * 2] * std::cos(ph);
+            im += spam[k * 2] * std::sin(ph);
+        }
+        const double mag = re * re + im * im;
+        if (mag > best) {
+            best = mag;
+            bestF = f;
+        }
+    }
+    std::printf("  hitsounds: 16 notes a step at 520 BPM sound at %.1f Hz (554.67 expected), peak %.2fx one hitsound\n", bestF,
+                top / peak);
+    ACHECK(std::fabs(bestF - 1.0 / gap) < 2.0);
+    // A seek forgets the notes scheduled for where the song was.
+    m.play(0);
+    m.hitAt(1.5, 1, 1.0f);
+    m.seek(0);
+    std::vector<float> after = render(2.0);
+    ACHECK(std::all_of(after.begin(), after.end(), [](float x) { return x == 0; }));
+}
+
 void runAudioTests() {
     const fs::path dir = fs::temp_directory_path() / "gh_audio_tests";
     std::error_code ec;
@@ -283,6 +349,7 @@ void runAudioTests() {
     testLoopHold(d);
     testNotAudio(d);
     testRenderMode(d);
+    testHitsounds();
     stopAudioDecoders();
     ACHECK(liveAudioDecoders() == 0);
     fs::remove_all(dir, ec);

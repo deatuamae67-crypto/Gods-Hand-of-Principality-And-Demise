@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -124,15 +125,50 @@ struct Ui {
         if (button(minus, "-")) { v -= s; changed = true; }
         if (button(plus, "+")) { v += s; changed = true; }
         const Rectangle mid{vx + bw + 2, r.y, 150 - 2 * bw - 4, r.height};
-        if (hover(mid) && wheel != 0) {
+        // A click on the value types one in (ENTER or a click elsewhere
+        // keeps it, ESC drops it); the wheel or the buttons step it.
+        const std::string id = "num:" + label + "@" + std::to_string(int(r.x)) + "," + std::to_string(int(r.y));
+        if (numId == id && focus != id) {  // left by a click elsewhere: keep what was typed
+            changed = commitNumber(v) || changed;
+            numId.clear();
+        }
+        if (hover(mid) && click) {
+            focus = numId = id;
+            numText.clear();
+            used = true;
+        }
+        const bool typing = focus == id;
+        if (typing && in) {
+            for (char32_t c : in->typed())
+                if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+') numText += char(c);
+            if (in->pressed(KEY_BACKSPACE) && !numText.empty()) numText.pop_back();
+            if (in->pressed(KEY_ESCAPE)) {
+                focus.clear();
+                numId.clear();
+            } else if (in->pressed(KEY_ENTER) || in->pressed(KEY_KP_ENTER) || in->pressed(KEY_TAB)) {
+                changed = commitNumber(v) || changed;
+                focus.clear();
+                numId.clear();
+            }
+        }
+        if (hover(mid) && wheel != 0 && !typing) {
             v += (wheel > 0 ? s : -s);
             changed = true;
             used = true;
         }
         v = clampv(v, lo, hi);
-        box(mid);
-        gfx::text(FontId::Ui, TextFormat(fmt, v), mid.x + mid.width * 0.5f, r.y + (r.height - 18) * 0.5f, 18, kInk, Align::Center);
+        box(mid, typing);
+        const std::string shown = typing ? numText + (std::fmod(GetTime(), 1.0) < 0.5 ? "|" : "") : std::string(TextFormat(fmt, v));
+        gfx::text(FontId::Ui, shown, mid.x + mid.width * 0.5f, r.y + (r.height - 18) * 0.5f, 18, kInk, Align::Center);
         return changed;
+    }
+    std::string numId, numText;  // the number box being typed into, and what was typed
+    bool commitNumber(double& v) {
+        char* end = nullptr;
+        const double d = std::strtod(numText.c_str(), &end);
+        if (numText.empty() || end == numText.c_str() || !std::isfinite(d)) return false;
+        v = d;
+        return true;
     }
     // A text field: click to type, ENTER or a click elsewhere to finish.
     bool text(const std::string& id, Rectangle r, const std::string& label, std::string& s) {

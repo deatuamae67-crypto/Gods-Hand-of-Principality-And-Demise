@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -71,6 +72,16 @@ public:
 
     void audioCallback(float* out, unsigned frames);  // audio thread
 
+    // Hitsounds that follow the notes (issue #22): each one starts on the
+    // very sample of its note in the song, on a voice of its side that the
+    // next note cuts (a sampler set to cut itself). A fast spam becomes a
+    // tone at the rate of its notes (16 a step at 520 BPM: 554.67 Hz)
+    // instead of a louder pile that crackles, and a hitch of the game does
+    // not move them. side: 0 player, 1 opponent.
+    void hitAt(double songSec, int side, float volume);
+    void clearHits();
+    void setHitSound(std::vector<float> mono);  // instead of the game's (or the mod's) hitsound
+
     // Rendering mode: the device plays nothing and the game mixes the song
     // itself, one video frame at a time; the song clock is then exactly the
     // position mixed so far.
@@ -96,6 +107,23 @@ private:
     std::atomic<bool> stalled_{false};
     std::atomic<bool> offline_{false};
     void hintStreams(double sec);  // tells streamed tracks where playing goes on
+    // The hitsounds of this buffer, from song frame pos0 on (audio thread).
+    void mixHits(float* out, unsigned frames, double pos0, double rate);
+    struct Grain {
+        double at = 0;  // song frame
+        float vol = 1;
+    };
+    std::mutex hitMtx_;  // guards hits_ and hitPcm_
+    std::deque<Grain> hits_[2];
+    std::shared_ptr<const std::vector<float>> hitPcm_, hitPcmAudio_;
+    unsigned hitVersion_ = ~0u;
+    struct HitVoice {
+        double pos = -1, oldPos = -1;  // in the sound; -1 silent
+        float vol = 0, oldVol = 0;
+        int fade = 0;  // frames left of the cut sound's fade-out
+    };
+    HitVoice voice_[2];
+    std::vector<Grain> due_[2];  // this buffer's (audio thread)
     // Mixes `frames` frames from `pos` into out (pos moves on); true when a
     // streamed track has not decoded that part yet (silence, pos kept).
     bool mixTracks(float* out, unsigned frames, double& pos);
@@ -118,6 +146,10 @@ void sfxInit();
 void sfxShutdown();
 void sfxPlay(Sfx s, float volume = 1.0f, float pitch = 1.0f);
 void sfxSetVolume(float v);
+// The samples of a sound effect (the mod's when it overrides it), mono,
+// 44.1 kHz; sfxVersion() changes whenever the overrides do.
+std::vector<float> sfxSamples(Sfx id);
+unsigned sfxVersion();
 // Plays the sound in `path` (any audio file the game reads) for `id` from
 // now on; an empty path goes back to the game's own sound.
 bool sfxOverride(Sfx id, const std::string& path);

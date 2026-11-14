@@ -1000,6 +1000,7 @@ private:
         a.mixer.play(cur_ / 1000.0);
         playing_ = true;
         lastT_ = cur_;
+        schedUpTo_ = cur_ - 1e-6;  // notes from here on sound
     }
     void stopPlay() {
         if (!playing_) return;
@@ -1012,16 +1013,24 @@ private:
         m.setTrackVolume(Mixer::kVoicePlayer, muteVoices_ ? 0.0f : float(voiceVol_));
         m.setTrackVolume(Mixer::kVoiceOpponent, muteVoices_ ? 0.0f : float(voiceVol_));
     }
+    // Hitsounds go to the mixer a little ahead of the song, each on its
+    // note's own sample (see Mixer::hitAt): what is heard is the chart.
     void tickSounds(double from, double to) {
-        if (to <= from || to - from > 500) return;
-        auto lo = std::upper_bound(notes_.begin(), notes_.end(), from, [](double v, const EdNote& n) { return v < n.t; });
-        int count = 0;
-        for (auto it = lo; it != notes_.end() && it->t <= to && count < 4; ++it) {
-            const bool player = it->col >= keys_;
-            if (player ? !hitPlayer_ : !hitOpponent_) continue;
-            sfxPlay(Sfx::Hit, 0.45f);  // the same tick for both sides
-            ++count;
+        Mixer& m = app().mixer;
+        if (to < schedUpTo_ - 300.0 || to - from > 500) {  // a jump (seek, loop): from here again
+            m.clearHits();
+            schedUpTo_ = to;
         }
+        const double ahead = to + 150.0;
+        if (ahead > schedUpTo_ && (hitPlayer_ || hitOpponent_)) {
+            auto it = std::upper_bound(notes_.begin(), notes_.end(), schedUpTo_, [](double v, const EdNote& n) { return v < n.t; });
+            for (; it != notes_.end() && it->t <= ahead; ++it) {
+                const bool player = it->col >= keys_;
+                if (player ? !hitPlayer_ : !hitOpponent_) continue;
+                m.hitAt(it->t / 1000.0, player ? 0 : 1, float(player ? hitVolPlayer_ : hitVolOpponent_));
+            }
+        }
+        schedUpTo_ = std::max(schedUpTo_, ahead);
         if (metronome_ && std::floor(beatAt(to)) != std::floor(beatAt(from)))
             sfxPlay(Sfx::Scroll, 0.5f, int(std::floor(beatAt(to))) % 4 == 0 ? 1.4f : 1.0f);
     }
@@ -1619,7 +1628,10 @@ private:
                 if (ui_.stepper(row(), "Voices volume", voiceVol_, 0.1, 0, 1, "%.1f")) applyVolumes();
                 if (ui_.check(row(), "Mute voices", muteVoices_)) applyVolumes();
                 ui_.check(row(), "Hit sounds: player", hitPlayer_);
+                ui_.stepper(row(), "Player hitsound volume", hitVolPlayer_, 0.05, 0, 1, "%.2f");
                 ui_.check(row(), "Hit sounds: opponent", hitOpponent_);
+                ui_.stepper(row(), "Opponent hitsound volume", hitVolOpponent_, 0.05, 0, 1, "%.2f");
+                ui_.check(row(), "Exact placement (a note at a section's start next to one just before it)", exactPlace_);
                 ui_.check(row(), "Metronome", metronome_);
                 double snap = snapIdx_;
                 if (ui_.stepper(row(), "Snap (1/N)", snap, 1, 0, double(std::size(kSnaps) - 1), "%.0f")) snapIdx_ = int(snap);
@@ -1813,6 +1825,7 @@ private:
     bool loaded_ = false, playing_ = false, dirty_ = false, dragging_ = false, backedUp_ = false, typing_ = false;
     bool needsVoices_ = true, eventsSeparate_ = true, boxing_ = false;
     bool hitPlayer_ = true, hitOpponent_ = true, metronome_ = false, muteVoices_ = false;
+    double hitVolPlayer_ = 0.6, hitVolOpponent_ = 0.6, schedUpTo_ = 0;  // hitsound volumes; scheduled up to (ms)
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)
     bool ezMode_ = false;

@@ -72,6 +72,8 @@ static void streamCallback(void* buffer, unsigned int frames) {
 }
 
 bool Mixer::init() {
+    due_[0].reserve(16384);
+    due_[1].reserve(16384);
     g_mixer = this;
     startAudioDecoders();
     for (auto& v : trackVol_) v.store(1.0f);
@@ -124,6 +126,7 @@ void Mixer::hintStreams(double sec) {
 }
 
 void Mixer::setTracks(PcmPtr inst, PcmPtr vp, PcmPtr vo) {
+    clearHits();  // hitsounds belong to where the song was
     playing_ = false;
     paused_ = false;
     std::lock_guard<std::mutex> lk(mtx_);
@@ -141,6 +144,7 @@ void Mixer::setTracks(PcmPtr inst, PcmPtr vp, PcmPtr vo) {
 }
 
 void Mixer::play(double fromSec) {
+    clearHits();  // hitsounds belong to where the song was
     hintStreams(fromSec);
     pos_ = fromSec * kRate;
     fbStart_ = nowSec();
@@ -167,6 +171,7 @@ void Mixer::resume() {
 }
 
 void Mixer::stop() {
+    clearHits();  // hitsounds belong to where the song was
     playing_ = false;
     paused_ = false;
     pos_ = 0.0;
@@ -174,6 +179,7 @@ void Mixer::stop() {
 }
 
 void Mixer::seek(double sec) {
+    clearHits();  // hitsounds belong to where the song was
     hintStreams(sec);
     pos_ = sec * kRate;
     fbStart_ = nowSec();
@@ -308,7 +314,10 @@ void Mixer::audioCallback(float* out, unsigned frames) {
         return;
     }
     double pos = pos_.load();
-    stalled_.store(mixTracks(out, frames, pos));
+    const double pos0 = pos;
+    const bool stalled = mixTracks(out, frames, pos);
+    stalled_.store(stalled);
+    if (!stalled) mixHits(out, frames, pos0, rate_.load());
     publish(pos);
 }
 
@@ -319,13 +328,116 @@ void Mixer::mixOffline(float* out, unsigned frames) {
         return;
     }
     double pos = pos_.load();
+    const double pos0 = pos;
     // Every sample is wanted here: wait for a streamed track's decoder rather
     // than leave a gap (it decodes far faster than a video renders).
     for (int tries = 0; mixTracks(out, frames, pos); ++tries) {
         if (tries >= 5000) break;  // ~5 s: something is wrong, leave the silence
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    mixHits(out, frames, pos0, rate_.load());
     pos_.store(pos);
+}
+
+void Mixer::hitAt(double songSec, int side, float volume) {
+    side = side ? 1 : 0;
+    if (volume <= 0) return;
+    std::lock_guard<std::mutex> lk(hitMtx_);
+    if (hitVersion_ != sfxVersion()) {  // the hitsound itself (a mod may bring its own)
+        hitVersion_ = sfxVersion();
+        hitPcm_ = std::make_shared<const std::vector<float>>(sfxSamples(Sfx::Hit));
+    }
+    const double at = songSec * kRate;
+    std::deque<Grain>& q = hits_[side];
+    // In order of time; one per sample at most (a note on the same sample
+    // as the last one would only cut it at once).
+    if (!q.empty() && at < q.back().at) {
+        auto it = std::upper_bound(q.begin(), q.end(), at, [](double v, const Grain& g) { return v < g.at; });
+        q.insert(it, Grain{at, volume});
+    } else if (q.empty() || at - q.back().at >= 1.0) {
+        q.push_back(Grain{at, volume});
+    }
+    if (q.size() > 200000) q.pop_front();  // never a backlog without end
+}
+
+void Mixer::setHitSound(std::vector<float> mono) {
+    std::lock_guard<std::mutex> lk(hitMtx_);
+    hitPcm_ = std::make_shared<const std::vector<float>>(std::move(mono));
+    hitVersion_ = sfxVersion();
+}
+
+void Mixer::clearHits() {
+    std::lock_guard<std::mutex> lk(hitMtx_);
+    hits_[0].clear();
+    hits_[1].clear();
+}
+
+void Mixer::mixHits(float* out, unsigned frames, double pos0, double rate) {
+    constexpr double kLate = 0.25 * kRate;  // later than this: dropped
+    constexpr int kFade = 48;               // the cut sound fades out in ~1 ms
+    const double end = pos0 + double(frames) * rate;
+    due_[0].clear();
+    due_[1].clear();
+    {
+        std::unique_lock<std::mutex> lk(hitMtx_, std::try_to_lock);
+        if (lk.owns_lock()) {
+            hitPcmAudio_ = hitPcm_;
+            for (int s = 0; s < 2; ++s) {
+                std::deque<Grain>& q = hits_[s];
+                while (!q.empty() && q.front().at < pos0 - kLate) q.pop_front();
+                while (!q.empty() && q.front().at < end) {
+                    due_[s].push_back(q.front());
+                    q.pop_front();
+                }
+            }
+        }
+    }
+    const std::vector<float>* pcm = hitPcmAudio_.get();
+    if (!pcm || pcm->empty()) return;
+    const size_t n = pcm->size();
+    for (int s = 0; s < 2; ++s) {
+        HitVoice& v = voice_[s];
+        const std::vector<Grain>& due = due_[s];
+        if (v.pos < 0 && v.oldPos < 0 && due.empty()) continue;
+        size_t gi = 0;
+        for (unsigned f = 0; f < frames; ++f) {
+            const double t = pos0 + double(f) * rate;
+            bool started = false;
+            float vol = 0;
+            while (gi < due.size() && due[gi].at < t + rate) {  // the last one starting here wins
+                vol = due[gi].vol;
+                started = true;
+                ++gi;
+            }
+            if (started) {
+                if (v.pos >= 0) {  // cut: the sound playing fades out under the new one
+                    v.oldPos = v.pos;
+                    v.oldVol = v.vol;
+                    v.fade = kFade;
+                }
+                v.pos = 0;
+                v.vol = vol;
+            }
+            float smp = 0;
+            if (v.pos >= 0) {
+                const size_t i = size_t(v.pos);
+                if (i < n) {
+                    smp += (*pcm)[i] * v.vol;
+                    v.pos += 1;
+                } else {
+                    v.pos = -1;
+                }
+            }
+            if (v.oldPos >= 0 && v.fade > 0) {
+                const size_t i = size_t(v.oldPos);
+                if (i < n) smp += (*pcm)[i] * v.oldVol * float(v.fade) / float(kFade);
+                v.oldPos += 1;
+                if (--v.fade == 0 || i >= n) v.oldPos = -1;
+            }
+            out[2 * f] += smp;
+            out[2 * f + 1] += smp;
+        }
+    }
 }
 
 bool Mixer::mixTracks(float* out, unsigned frames, double& posInOut) {
@@ -452,9 +564,11 @@ struct SfxSlot {
     Sound over{};
     Sound overAlias[kAliases]{};
     bool hasOver = false;
+    std::vector<float> pcm, overPcm;  // mono samples of base and over
 };
 SfxSlot g_sfx[int(Sfx::kCount)];
 float g_sfxVol = 0.7f;
+std::atomic<unsigned> g_sfxVersion{1};
 
 void loadSlot(Sfx id, const synth::Stereo& s) {
     std::vector<int16_t> mono(s.size());
@@ -463,6 +577,8 @@ void loadSlot(Sfx id, const synth::Stereo& s) {
     const float g = std::min(4.0f, 0.8f / peak);
     for (size_t i = 0; i < s.size(); ++i)
         mono[i] = int16_t(std::clamp((s.l[i] + s.r[i]) * 0.5f * g, -1.0f, 1.0f) * 32767.0f);
+    g_sfx[int(id)].pcm.resize(mono.size());
+    for (size_t i = 0; i < mono.size(); ++i) g_sfx[int(id)].pcm[i] = float(mono[i]) / 32768.0f;
     Wave w{};
     w.frameCount = unsigned(mono.size());
     w.sampleRate = synth::SR;
@@ -560,6 +676,8 @@ bool sfxOverride(Sfx id, const std::string& path) {
         for (auto& a : s.overAlias) UnloadSoundAlias(a);
         UnloadSound(s.over);
         s.hasOver = false;
+        s.overPcm.clear();
+        ++g_sfxVersion;
     }
     if (path.empty()) return true;
     Pcm pcm;
@@ -575,8 +693,22 @@ bool sfxOverride(Sfx id, const std::string& path) {
     if (!IsSoundValid(s.over)) return false;
     for (auto& a : s.overAlias) a = LoadSoundAlias(s.over);
     s.hasOver = true;
+    s.overPcm.resize(pcm.frames());
+    for (size_t i = 0; i < pcm.frames(); ++i) {
+        float v = 0;
+        for (int c = 0; c < pcm.channels; ++c) v += float(pcm.data[i * size_t(pcm.channels) + size_t(c)]);
+        s.overPcm[i] = v / (32768.0f * float(pcm.channels));
+    }
+    ++g_sfxVersion;
     return true;
 }
+
+std::vector<float> sfxSamples(Sfx id) {
+    const SfxSlot& s = g_sfx[int(id)];
+    return s.hasOver ? s.overPcm : s.pcm;
+}
+
+unsigned sfxVersion() { return g_sfxVersion.load(); }
 
 void sfxClearOverrides() {
     for (int i = 0; i < int(Sfx::kCount); ++i) sfxOverride(Sfx(i), "");

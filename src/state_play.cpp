@@ -727,10 +727,10 @@ void PlayState::handleNoteEvents() {
                     splash(1, ev.lane);
                     lastSplash_[ev.lane] = now;
                 }
-                if (a.settings.hitsoundVol > 0 && now - lastHitsound_ > 0.02) {
-                    sfxPlay(Sfx::Hit, a.settings.hitsoundVol / std::max(0.05f, a.settings.sfxVol));
-                    lastHitsound_ = now;
-                }
+                // Every note its own hitsound, on its sample of the song
+                // (the moment of the press; the note's own time for bots).
+                if (a.settings.hitsoundVol > 0)
+                    a.mixer.hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol);
                 if (psych_) psychNoteHit(ev, false);
                 scoreDirty_ = true;
                 scoreDirtyMiss_ = false;
