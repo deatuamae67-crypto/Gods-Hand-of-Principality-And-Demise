@@ -9,6 +9,14 @@
 // the same lane within 1 ms are merged while streaming, as finalize() would,
 // so memory stays proportional to the playable notes.
 #include <algorithm>
+#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#include <emmintrin.h>
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+#elif defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#include <arm_neon.h>
+#endif
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -16,6 +24,8 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <system_error>
@@ -30,7 +40,7 @@ namespace gh {
 
 namespace {
 
-constexpr size_t kStreamThreshold = 48u << 20;  // bytes
+constexpr size_t kStreamThreshold = 8u << 20;  // bytes: from here streaming is faster than the DOM
 
 // Reads the file on a thread of its own, a few blocks ahead of the parser, so
 // the disk (or a decompressor writing into a pipe) and the parsing overlap.
@@ -99,6 +109,12 @@ public:
         if (f_) ra_ = std::make_unique<ReadAhead>(f_);
         refill();
     }
+    // Over text already in memory (a section's notes, parsed by a worker).
+    Reader(const char* data, size_t n) : f_(nullptr), p_(data), end_(data + n) {}
+    // The bytes readable now without reading more of the file; fill(): reads
+    // more when none are left (false at the end of the file).
+    size_t avail() const { return size_t(end_ - p_); }
+    bool fill() { return p_ < end_ || refill(); }
     bool eof() { return p_ == end_ && !refill(); }
     int peek() { return (p_ < end_ || refill()) ? (unsigned char)*p_ : -1; }
     int get() { return (p_ < end_ || refill()) ? (unsigned char)*p_++ : -1; }
@@ -161,18 +177,171 @@ private:
 const double kPow10[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
                          1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
 
+// ---- finding JSON's structural bytes, 16 at a time (SSE2 / NEON) ----
+
+#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#define GH_SCAN_SSE2 1
+#elif defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#define GH_SCAN_NEON 1
+#endif
+
+inline unsigned lowestBit(uint64_t m) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    unsigned long i;
+    _BitScanForward64(&i, m);
+    return unsigned(i);
+#else
+    return unsigned(__builtin_ctzll(m));
+#endif
+}
+
+// Where JSON's structural bytes are in 64 bytes at once: bit i is set when
+// p[i] is one of [ ] { } " \\ / (and , when asked), as simdjson finds them.
+class StructScan {
+public:
+    StructScan() {
+#if GH_SCAN_SSE2
+        const char set[8] = {'[', ']', '{', '}', '"', '\\', '/', ','};
+        for (int k = 0; k < 8; ++k) b_[k] = _mm_set1_epi8(set[k]);
+#elif GH_SCAN_NEON
+        const char set[8] = {'[', ']', '{', '}', '"', '\\', '/', ','};
+        for (int k = 0; k < 8; ++k) b_[k] = vdupq_n_u8(uint8_t(set[k]));
+        static const uint8_t bits[16] = {1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128};
+        bits_ = vld1q_u8(bits);
+#endif
+    }
+    uint64_t mask(const char* p, bool commas) const {
+#if GH_SCAN_SSE2
+        uint64_t m = 0;
+        for (int q = 0; q < 4; ++q) {
+            const __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p + 16 * q));
+            __m128i e = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(v, b_[0]), _mm_cmpeq_epi8(v, b_[1])),
+                                     _mm_or_si128(_mm_cmpeq_epi8(v, b_[2]), _mm_cmpeq_epi8(v, b_[3])));
+            e = _mm_or_si128(e, _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(v, b_[4]), _mm_cmpeq_epi8(v, b_[5])),
+                                             _mm_cmpeq_epi8(v, b_[6])));
+            if (commas) e = _mm_or_si128(e, _mm_cmpeq_epi8(v, b_[7]));
+            m |= uint64_t(unsigned(_mm_movemask_epi8(e))) << (16 * q);
+        }
+        return m;
+#elif GH_SCAN_NEON
+        uint8x16_t t[4];
+        for (int q = 0; q < 4; ++q) {
+            const uint8x16_t v = vld1q_u8(reinterpret_cast<const uint8_t*>(p + 16 * q));
+            uint8x16_t e = vorrq_u8(vorrq_u8(vceqq_u8(v, b_[0]), vceqq_u8(v, b_[1])), vorrq_u8(vceqq_u8(v, b_[2]), vceqq_u8(v, b_[3])));
+            e = vorrq_u8(e, vorrq_u8(vorrq_u8(vceqq_u8(v, b_[4]), vceqq_u8(v, b_[5])), vceqq_u8(v, b_[6])));
+            if (commas) e = vorrq_u8(e, vceqq_u8(v, b_[7]));
+            t[q] = vandq_u8(e, bits_);
+        }
+        uint8x16_t sum = vpaddq_u8(vpaddq_u8(t[0], t[1]), vpaddq_u8(t[2], t[3]));
+        sum = vpaddq_u8(sum, sum);
+        return vgetq_lane_u64(vreinterpretq_u64_u8(sum), 0);
+#else
+        uint64_t m = 0;
+        for (int i = 0; i < 64; ++i) {
+            const char c = p[i];
+            if (c == '[' || c == ']' || c == '{' || c == '}' || c == '"' || c == '\\' || c == '/' || (commas && c == ','))
+                m |= uint64_t(1) << i;
+        }
+        return m;
+#endif
+    }
+
+private:
+#if GH_SCAN_SSE2
+    __m128i b_[8];
+#elif GH_SCAN_NEON
+    uint8x16_t b_[8], bits_;
+#endif
+};
+
+// Worker threads for the notes of whole sections.
+class SectionPool {
+public:
+    explicit SectionPool(int n) {
+        for (int i = 0; i < n; ++i) threads_.emplace_back([this] { run(); });
+    }
+    ~SectionPool() {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        for (std::thread& t : threads_) t.join();
+    }
+    int size() const { return int(threads_.size()); }
+    void post(std::function<void()> job) {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            jobs_.push_back(std::move(job));
+        }
+        cv_.notify_one();
+    }
+
+private:
+    void run() {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock<std::mutex> lk(m_);
+                cv_.wait(lk, [&] { return stop_ || !jobs_.empty(); });
+                if (jobs_.empty()) return;
+                job = std::move(jobs_.front());
+                jobs_.pop_front();
+            }
+            job();
+        }
+    }
+    std::vector<std::thread> threads_;
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::function<void()>> jobs_;
+    bool stop_ = false;
+};
+
+// The notes of one section, parsed by a worker: merged into the chart's in order.
+struct SectionResult {
+    StreamedNotes notes;  // types numbered within the section
+    std::string kept;     // its elements that are not plain notes
+    bool keptAny = false, ok = true;
+    std::string err;
+};
+
 class Streamer {
 public:
     Streamer(Reader& r, StreamedNotes& out) : r_(r), out_(out) {}
+    // Parallel: sections are copied out (at most `cap` bytes each) and parsed
+    // on the pool's threads, then merged in order; bigger sections are parsed
+    // here, piece by piece. The result is exactly the sequential one.
+    void setPool(SectionPool* pool, size_t cap) {
+        pool_ = pool;
+        cap_ = std::max<size_t>(cap, 64);
+    }
 
     bool run(std::string& skeleton, std::string& err) {
         r_.skipWs();
-        if (!value(skeleton, std::string_view(), 0)) {
+        bool ok = value(skeleton, std::string_view(), 0);
+        ok = drainAll() && ok;
+        if (!ok) {
             err = err_.empty() ? "invalid JSON" : err_;
             return false;
         }
+        if (!keptText_.empty()) finishSkeleton(skeleton);
         return true;
     }
+
+    // The elements of a section held in memory: "e1, e2, ..." (with or
+    // without a trailing comma), no brackets around them.
+    bool chunkElements(std::vector<double>& lastT, std::string& kept, bool& keptAny) {
+        for (;;) {
+            r_.skipWs();
+            if (r_.eof()) return true;
+            if (!noteElement(kept, keptAny, lastT)) return false;
+            r_.skipWs();
+            if (r_.eof()) return true;
+            if (r_.get() != ',') return fail("expected , in sectionNotes");
+        }
+    }
+    const std::string& error() const { return err_; }
 
 private:
     bool fail(const char* m) {
@@ -462,7 +631,8 @@ private:
         if (c == '[') {
             r_.get();
             if (pulseForge_ && depth == 1 && key == "notes") {
-                const size_t k = out_.rangeStart.size();
+                if (!drainAll()) return false;  // earlier sections first: the ranges stay in order
+                const size_t k = sections_++;
                 out_.rangeStart.push_back(uint32_t(out_.notes.size()));
                 std::vector<double> lastT(64, -1e300);
                 for (;;) {
@@ -477,9 +647,10 @@ private:
                 out += "[{\"__gh_stream\":" + std::to_string(k) + "}]";
                 return true;
             }
+            if (key == "sectionNotes" && pool_) return parallelSection(out);
             if (key == "sectionNotes") {
                 // Marker object first, then any kept (non-note) elements.
-                const size_t k = out_.rangeStart.size();
+                const size_t k = sections_++;
                 out_.rangeStart.push_back(uint32_t(out_.notes.size()));
                 std::vector<double> lastT(64, -1e300);
                 std::string kept;
@@ -573,10 +744,215 @@ private:
         return true;
     }
 
+    // ---- parallel sections ----
+
+    // Copies the elements of the array whose '[' was just read into `chunk`
+    // (as chunkElements reads them), up to about `cap_` bytes, cutting only
+    // after a top-level ','. done: its closing ']' was reached (and read).
+    bool capture(std::string& chunk, bool& done) {
+        done = false;
+        int depth = 0;
+        bool inStr = false, esc = false;
+        for (;;) {
+            if (!r_.fill()) return fail("unterminated sectionNotes");
+            const char* p = r_.data();
+            const size_t n = r_.avail();
+            // Commas matter only where this piece may be cut.
+            const bool commas = chunk.size() + n >= cap_;
+            bool needMore = false;  // a comment goes on past what is in the buffer
+            size_t i = 0;
+            if (esc) {  // a backslash ended the last piece: this byte is escaped
+                esc = false;
+                i = 1;
+            }
+            // One byte, by the rules of JSON (in a string or not); returns
+            // 0 to go on, 1 at the section's end or where it is cut, 2 when
+            // the buffer must hold more (a comment) and sets `next`.
+            size_t skipAt = size_t(-1), next = 0;
+            auto step = [&](size_t j) -> int {
+                if (j == skipAt) return 0;  // escaped in a string
+                const char c = p[j];
+                if (inStr) {
+                    if (c == '\\') {
+                        if (j + 1 >= n) esc = true;
+                        else skipAt = j + 1;
+                    } else if (c == '"') {
+                        inStr = false;
+                    }
+                    return 0;
+                }
+                if (c == '"') {
+                    inStr = true;
+                } else if (c == '[' || c == '{') {
+                    ++depth;
+                } else if (c == ']' || c == '}') {
+                    if (depth == 0) {  // the end of the section
+                        chunk.append(p, j);
+                        r_.advance(j + 1);
+                        done = true;
+                        return 1;
+                    }
+                    --depth;
+                } else if (c == '/') {
+                    // A comment: kept whole (chunkElements skips it) so that
+                    // brackets in it count for nothing.
+                    if (j + 1 >= n) { next = j; return 2; }
+                    if (p[j + 1] != '/' && p[j + 1] != '*') return 0;
+                    const bool line = p[j + 1] == '/';
+                    size_t e = j + 2;
+                    while (e < n && !(line ? p[e] == '\n' : (p[e] == '*' && e + 1 < n && p[e + 1] == '/'))) ++e;
+                    if (e >= n) { next = j; return 2; }
+                    next = line ? e + 1 : e + 2;
+                    return 3;  // go on after the comment
+                } else if (c == ',' && depth == 0 && chunk.size() + j >= cap_) {
+                    chunk.append(p, j + 1);
+                    r_.advance(j + 1);
+                    return 1;  // the rest of the section follows
+                }
+                return 0;
+            };
+            while (i < n) {
+                int st = 0;
+                if (i + 64 <= n) {
+                    for (uint64_t m = scan_.mask(p + i, commas); m; m &= m - 1) {
+                        st = step(i + lowestBit(m));
+                        if (st) break;
+                    }
+                    if (st == 0) { i += 64; continue; }
+                } else {
+                    for (; i < n; ++i) {
+                        const char c = p[i];
+                        if (c == '[' || c == ']' || c == '{' || c == '}' || c == '"' || c == '\\' || c == '/' || c == ',') {
+                            st = step(i);
+                            if (st) break;
+                        }
+                    }
+                    if (st == 0) break;
+                }
+                if (st == 1) return true;
+                if (st == 2) { needMore = true; i = next; break; }
+                i = next;  // st == 3: after a comment
+            }
+            if (!needMore) i = std::min(i, n);
+            chunk.append(p, i);
+            r_.advance(i);
+            if (needMore) {  // the whole comment into the buffer at once
+                const size_t had = r_.avail();
+                if (r_.ensure(had + 65536) <= had) return fail("unterminated comment in sectionNotes");
+            }
+        }
+    }
+
+    bool parallelSection(std::string& out) {
+        const size_t k = sections_++;
+        std::string chunk;
+        bool done = false;
+        if (!capture(chunk, done)) return false;
+        if (done) {
+            // The whole section: a worker parses it.
+            auto task = std::make_shared<std::packaged_task<SectionResult()>>([text = std::move(chunk)] {
+                SectionResult r;
+                r.notes.rangeStart.push_back(0);
+                Reader mr(text.data(), text.size());
+                Streamer s(mr, r.notes);
+                std::vector<double> lastT(64, -1e300);
+                r.ok = s.chunkElements(lastT, r.kept, r.keptAny);
+                if (!r.ok) r.err = s.error();
+                return r;
+            });
+            pending_.push_back({k, task->get_future()});
+            pool_->post([task] { (*task)(); });
+            out += "[{\"__gh_stream\":" + std::to_string(k) + "}\x01" + std::to_string(k) + "\x02]";
+            while (pending_.size() > size_t(pool_->size()) + 2)
+                if (!mergeFront()) return false;
+            return true;
+        }
+        // A section bigger than cap_: parsed here, piece after piece, as the
+        // sequential reader would.
+        if (!drainAll()) return false;
+        out_.rangeStart.push_back(uint32_t(out_.notes.size()));
+        std::vector<double> lastT(64, -1e300);
+        std::string kept;
+        bool keptAny = false;
+        for (;;) {
+            Reader mr(chunk.data(), chunk.size());
+            Streamer s(mr, out_);
+            if (!s.chunkElements(lastT, kept, keptAny)) {
+                if (err_.empty()) err_ = s.error();
+                return false;
+            }
+            if (done) break;
+            chunk.clear();
+            if (!capture(chunk, done)) return false;
+        }
+        out += "[{\"__gh_stream\":" + std::to_string(k) + "}";
+        if (keptAny) out += "," + kept;
+        out += ']';
+        return true;
+    }
+
+    // The oldest parsed section joins the chart's notes.
+    bool mergeFront() {
+        Pending p = std::move(pending_.front());
+        pending_.pop_front();
+        SectionResult r = p.result.get();
+        if (!r.ok) {
+            if (err_.empty()) err_ = r.err;
+            return false;
+        }
+        out_.rangeStart.push_back(uint32_t(out_.notes.size()));
+        std::vector<uint16_t> types(r.notes.types.size() + 1, 0);
+        for (size_t i = 0; i < r.notes.types.size(); ++i) types[i + 1] = out_.typeIndex(r.notes.types[i]);
+        const size_t at = out_.notes.size();
+        out_.notes.insert(out_.notes.end(), r.notes.notes.begin(), r.notes.notes.end());
+        if (!r.notes.types.empty())
+            for (size_t i = at; i < out_.notes.size(); ++i) out_.notes[i].type = types[out_.notes[i].type];
+        out_.maxData = std::max(out_.maxData, r.notes.maxData);
+        for (size_t d = 0; d < out_.dataCount.size(); ++d) out_.dataCount[d] += r.notes.dataCount[d];
+        out_.rawCount += r.notes.rawCount;
+        keptText_[p.k] = r.keptAny ? "," + r.kept : std::string();
+        return true;
+    }
+
+    bool drainAll() {
+        bool ok = true;
+        while (!pending_.empty()) ok = mergeFront() && ok;
+        return ok;
+    }
+
+    // The kept elements of sections parsed by workers go where their markers are.
+    void finishSkeleton(std::string& s) const {
+        std::string out;
+        out.reserve(s.size());
+        size_t i = 0;
+        while (i < s.size()) {
+            const size_t a = s.find('\x01', i);
+            if (a == std::string::npos) break;
+            const size_t b = s.find('\x02', a);
+            out.append(s, i, a - i);
+            const auto it = keptText_.find(std::stoull(s.substr(a + 1, b - a - 1)));
+            if (it != keptText_.end()) out += it->second;
+            i = b + 1;
+        }
+        out.append(s, i, std::string::npos);
+        s.swap(out);
+    }
+
+    struct Pending {
+        size_t k;
+        std::future<SectionResult> result;
+    };
+
     Reader& r_;
     StreamedNotes& out_;
     std::string err_;
     bool pulseForge_ = false;
+    SectionPool* pool_ = nullptr;
+    size_t cap_ = 8u << 20;
+    size_t sections_ = 0;
+    std::deque<Pending> pending_;
+    std::map<size_t, std::string> keptText_;
+    StructScan scan_;
 };
 
 }  // namespace
@@ -603,18 +979,23 @@ uint64_t fileSize(const std::string& path) {
     return sz > 0 ? uint64_t(sz) : 0;
 }
 
-bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err) {
+bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err, int threads,
+                         size_t sectionCap) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) { err = "cannot open " + path; return false; }
+    if (threads < 0) threads = std::clamp(int(std::thread::hardware_concurrency()) - 1, 0, 8);
     bool ok;
     {
         Reader r(f);
         // UTF-8 BOM
         if (r.peek() == 0xEF) { r.get(); r.get(); r.get(); }
+        std::unique_ptr<SectionPool> pool;
+        if (threads > 0) pool = std::make_unique<SectionPool>(threads);
         Streamer s(r, notes);
+        if (pool) s.setPool(pool.get(), sectionCap ? sectionCap : (8u << 20));
         skeleton.clear();
         ok = s.run(skeleton, err);
-    }  // the read-ahead thread stops before the file is closed
+    }  // the workers and the read-ahead thread stop before the file is closed
     std::fclose(f);
     notes.rangeStart.push_back(uint32_t(notes.notes.size()));
     return ok;

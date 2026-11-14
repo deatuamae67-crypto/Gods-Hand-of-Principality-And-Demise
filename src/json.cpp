@@ -22,9 +22,11 @@ void appendUtf8(std::string& out, uint32_t cp) {
         out += char(0x80 | ((cp >> 6) & 0x3F)); out += char(0x80 | (cp & 0x3F));
     }
 }
-// Fast JSON number parser: exact for the common case (<= 18 significant
-// digits and a small exponent), falls back to strtod otherwise. Portable to
-// standard libraries that lack floating-point std::from_chars.
+// Fast JSON number parser: up to 18 significant digits (Haxe writes chart
+// times with 17) and a power of ten up to 22, without strtod. Up to 15 digits
+// the result is exact; beyond, within one unit in the last place, far below
+// anything a chart can show. Other numbers go to strtod. Portable to standard
+// libraries that lack floating-point std::from_chars.
 const char* parseNumber(const char* p, const char* end, double& out) {
     static const double kPow10[23] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
                                       1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
@@ -58,7 +60,7 @@ const char* parseNumber(const char* p, const char* end, double& out) {
         while (e < end && *e >= '0' && *e <= '9') { edig = true; if (ev < 10000) ev = ev * 10 + (*e - '0'); ++e; }
         if (edig) { exp10 += eneg ? -ev : ev; s = e; }
     }
-    if (digits <= 15 && exp10 >= -22 && exp10 <= 22) {
+    if (exp10 >= -22 && exp10 <= 22) {
         double v = double(mant);
         v = exp10 < 0 ? v / kPow10[-exp10] : v * kPow10[exp10];
         out = neg ? -v : v;
@@ -89,22 +91,19 @@ bool Document::fail(const char* msg) {
     return false;
 }
 
-void Document::skipWs() {
-    for (;;) {
-        while (p_ < end_ && (*p_ == ' ' || *p_ == '\n' || *p_ == '\r' || *p_ == '\t')) ++p_;
-        // Lenient: allow // and /* */ comments (some hand-edited charts have them).
-        if (p_ + 1 < end_ && p_[0] == '/' && p_[1] == '/') {
-            while (p_ < end_ && *p_ != '\n') ++p_;
-            continue;
-        }
-        if (p_ + 1 < end_ && p_[0] == '/' && p_[1] == '*') {
-            p_ += 2;
-            while (p_ + 1 < end_ && !(p_[0] == '*' && p_[1] == '/')) ++p_;
-            p_ = (p_ + 1 < end_) ? p_ + 2 : end_;
-            continue;
-        }
-        break;
+bool Document::skipComment() {
+    // Lenient: allow // and /* */ comments (some hand-edited charts have them).
+    if (p_ + 1 < end_ && p_[0] == '/' && p_[1] == '/') {
+        while (p_ < end_ && *p_ != '\n') ++p_;
+        return true;
     }
+    if (p_ + 1 < end_ && p_[0] == '/' && p_[1] == '*') {
+        p_ += 2;
+        while (p_ + 1 < end_ && !(p_[0] == '*' && p_[1] == '/')) ++p_;
+        p_ = (p_ + 1 < end_) ? p_ + 2 : end_;
+        return true;
+    }
+    return false;
 }
 
 bool Document::parseString(uint32_t& start, uint32_t& count) {

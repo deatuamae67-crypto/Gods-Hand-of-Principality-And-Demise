@@ -60,7 +60,19 @@ public:
 private:
     uint32_t parseValue(int depth);
     bool parseString(uint32_t& start, uint32_t& count);
-    void skipWs();
+    // Whitespace (often runs of tabs and newlines: charts are saved indented)
+    // here, inline; comments, which are rare, in skipComment().
+    void skipWs() {
+        while (p_ < end_) {
+            const unsigned char c = (unsigned char)*p_;
+            if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+                ++p_;
+            } else {
+                if (c != '/' || !skipComment()) return;
+            }
+        }
+    }
+    bool skipComment();  // true: one was skipped
     bool fail(const char* msg);
 
     std::vector<Value> vals_;

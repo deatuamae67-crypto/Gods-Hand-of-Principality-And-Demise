@@ -97,11 +97,24 @@ void Chart::finalize(double baseBpm) {
     notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const Note& n) {
         return !std::isfinite(n.time) || n.lane >= keys || n.side > 1;
     }), notes.end());
-    std::stable_sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) {
+    const auto before = [](const Note& a, const Note& b) {
         if (a.time != b.time) return a.time < b.time;
         if (a.side != b.side) return a.side < b.side;
         return a.lane < b.lane;
-    });
+    };
+    // Charts list their notes in time order nearly always: then only notes at
+    // the same time (a chord, both sides at once) can be out of place, and
+    // sorting each such run gives exactly what sorting everything would.
+    bool inTime = true;
+    for (size_t i = 1; i < notes.size() && inTime; ++i) inTime = !(notes[i].time < notes[i - 1].time);
+    if (inTime) {
+        for (size_t i = 0, j; i < notes.size(); i = j) {
+            for (j = i + 1; j < notes.size() && notes[j].time == notes[i].time;) ++j;
+            if (j - i > 1) std::stable_sort(notes.begin() + std::ptrdiff_t(i), notes.begin() + std::ptrdiff_t(j), before);
+        }
+    } else {
+        std::stable_sort(notes.begin(), notes.end(), before);
+    }
 
     // Stacked notes (same side+lane within 1 ms) become one note that counts
     // as all of them: one press hits the whole stack, and the score, combo and
@@ -294,13 +307,14 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
         for (uint64_t c : dataCount) total += c;
         out.notes.reserve(sn ? sn->notes.size() : size_t(total));
     }
-    std::vector<uint16_t> streamTypes;  // StreamedNotes type index -> chart type index
+    // What each type of the streamed notes does to a note (its index, mine,
+    // flags): worked out once per type, not once per note.
+    std::vector<Note> streamTypes(1);
     if (sn) {
-        streamTypes.push_back(0);
         for (const std::string& t : sn->types) {
             Note probe;
             applyNoteType(t, probe, out);
-            streamTypes.push_back(probe.type);
+            streamTypes.push_back(probe);
         }
     }
     // Values past the two sides fold back like Psych/JS Engine: lane = data % keys,
@@ -316,10 +330,13 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
         n.stack = std::max<uint16_t>(1, stack);
         if (v1) n.side = di < keys ? 1 : 0;
         else n.side = ((di < keys) ? must : !must) ? 1 : 0;
-        if (hasTypeName) applyNoteType(typeName, n, out);
-        else if (streamType) {
-            const std::string& tn = out.noteTypes[streamTypes[streamType]];
-            applyNoteType(tn, n, out);
+        if (hasTypeName) {
+            applyNoteType(typeName, n, out);
+        } else if (streamType && streamType < streamTypes.size()) {
+            const Note& p = streamTypes[streamType];
+            n.type = p.type;
+            if (p.kind == kMine) n.kind = kMine;
+            n.flags |= p.flags;
         }
         if (altBool) n.flags |= kFlagAlt;
         if (altSec && n.side == 0) n.flags |= kFlagAlt;

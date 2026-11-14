@@ -719,6 +719,40 @@ void testChartStreaming() {
     const ChartPeek pk = peekChart(path);
     PCHECK(pk.song == "Blocked" && pk.player2 == "bambi" && pk.stage == "farm" && pk.isChart);
 
+    // Sections parsed on worker threads give exactly what one thread gives,
+    // whole or cut in pieces (tiny caps), with comments holding brackets,
+    // note types with brackets and quotes, and events among the notes.
+    {
+        std::string tricky = j;
+        const std::string mark = "\"sectionNotes\": [";
+        const size_t at = tricky.find(mark);
+        PCHECK(at != std::string::npos);
+        tricky.insert(at + mark.size(), "/* a [comment] } with { brackets */ [12.5, 3, 0, \"Odd [type] \\\" ]\"], // and ] here\n");
+        const std::string tpath = (std::filesystem::temp_directory_path() / "gh_stream_threads.json").string();
+        std::ofstream(tpath, std::ios::binary) << tricky;
+        std::string skel0, err0;
+        StreamedNotes one;
+        PCHECK(streamChartSkeleton(tpath, skel0, one, err0, 0));
+        PCHECK(one.types.size() >= 2);  // the odd type and Hurt Note
+        for (size_t cap : {size_t(64), size_t(300), size_t(4096), size_t(1) << 20}) {
+            std::string skel, e;
+            StreamedNotes par;
+            const bool ok = streamChartSkeleton(tpath, skel, par, e, 3, cap);
+            PCHECK(ok);
+            bool same = ok && skel == skel0 && par.notes.size() == one.notes.size() && par.rangeStart == one.rangeStart &&
+                        par.types == one.types && par.dataCount == one.dataCount && par.rawCount == one.rawCount &&
+                        par.maxData == one.maxData;
+            for (size_t i = 0; same && i < one.notes.size(); ++i) {
+                const StreamedNote& a = one.notes[i];
+                const StreamedNote& b = par.notes[i];
+                same = a.time == b.time && a.length == b.length && a.data == b.data && a.stack == b.stack && a.type == b.type;
+            }
+            if (!same) std::printf("  parallel sections differ with cap %zu (%s)\n", cap, e.c_str());
+            PCHECK(same);
+        }
+        std::filesystem::remove(tpath);
+    }
+
     // The chart cache: the first load keeps the notes, the second reads them
     // back (the cache file is not written again) and gives the same chart.
     namespace fs = std::filesystem;

@@ -10,6 +10,7 @@
 #include <random>
 #include <vector>
 
+#include "android_encoder.hpp"
 #include "note_raster.hpp"
 
 using namespace gh;
@@ -149,7 +150,51 @@ void timeBlends() {
 
 }  // namespace
 
+// Rendering mode on Android: the frame's RGBA to YUV 4:2:0 (NEON on ARM)
+// gives exactly the plain formulas, planar (I420) and interleaved (NV12),
+// for widths that leave pixels past the last 16.
+void testYuv() {
+    std::mt19937 rng(77);
+    bool same = true;
+    for (int w : {2, 30, 46, 64, 98}) {
+        const int h = 6;
+        std::vector<uint8_t> rgba(size_t(w) * h * 4);
+        for (uint8_t& b : rgba) b = uint8_t(rng());
+        std::vector<uint8_t> y0(size_t(w) * h), u0(size_t(w / 2) * (h / 2)), v0(u0.size());
+        for (int r = 0; r < h; ++r)
+            for (int x = 0; x < w; ++x) {
+                const uint8_t* s = &rgba[(size_t(h - 1 - r) * w + x) * 4];
+                y0[size_t(r) * w + x] = uint8_t(16 + ((47 * s[0] + 157 * s[1] + 16 * s[2] + 128) >> 8));
+            }
+        for (int r = 0; r < h / 2; ++r)
+            for (int x = 0; x < w / 2; ++x) {
+                const uint8_t* a = &rgba[(size_t(h - 1 - 2 * r) * w + 2 * x) * 4];
+                const uint8_t* b = &rgba[(size_t(h - 2 - 2 * r) * w + 2 * x) * 4];
+                const int R = a[0] + a[4] + b[0] + b[4], G = a[1] + a[5] + b[1] + b[5], B = a[2] + a[6] + b[2] + b[6];
+                u0[size_t(r) * (w / 2) + x] = uint8_t((-26 * R - 86 * G + 112 * B + (128 << 10) + 512) >> 10);
+                v0[size_t(r) * (w / 2) + x] = uint8_t((112 * R - 102 * G - 10 * B + (128 << 10) + 512) >> 10);
+            }
+        // Planar, with a wider stride than the picture.
+        std::vector<uint8_t> y1(size_t(w + 8) * h, 0), u1(size_t(w / 2 + 4) * (h / 2)), v1(u1.size());
+        rgbaToYuv420(rgba.data(), w, h, y1.data(), w + 8, u1.data(), v1.data(), w / 2 + 4, 1);
+        // Interleaved (NV12).
+        std::vector<uint8_t> y2(size_t(w) * h), uv(size_t(w) * (h / 2));
+        rgbaToYuv420(rgba.data(), w, h, y2.data(), w, uv.data(), uv.data() + 1, w, 2);
+        for (int r = 0; r < h; ++r)
+            for (int x = 0; x < w; ++x)
+                same = same && y1[size_t(r) * (w + 8) + x] == y0[size_t(r) * w + x] && y2[size_t(r) * w + x] == y0[size_t(r) * w + x];
+        for (int r = 0; r < h / 2; ++r)
+            for (int x = 0; x < w / 2; ++x) {
+                const uint8_t eu = u0[size_t(r) * (w / 2) + x], ev = v0[size_t(r) * (w / 2) + x];
+                same = same && u1[size_t(r) * (w / 2 + 4) + x] == eu && v1[size_t(r) * (w / 2 + 4) + x] == ev &&
+                       uv[size_t(r) * w + 2 * x] == eu && uv[size_t(r) * w + 2 * x + 1] == ev;
+            }
+    }
+    CHECK(same);
+}
+
 void runRasterTests(bool timings) {
+    testYuv();
     testBlendValues();
     testAsmMatchesC();
     testLayer();

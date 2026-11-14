@@ -7,6 +7,11 @@
 #include <cstring>
 #include <vector>
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define GH_YUV_NEON 1
+#endif
+
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <dlfcn.h>
@@ -19,20 +24,72 @@
 
 namespace gh {
 
+// Phones convert every frame of a recording: NEON does 16 pixels at a time,
+// giving exactly the values of the plain loops (which do the rest).
+static void yRow(const uint8_t* s, uint8_t* yo, int w) {
+    int x = 0;
+#if GH_YUV_NEON
+    for (; x + 16 <= w; x += 16, s += 64) {
+        const uint8x16x4_t p = vld4q_u8(s);  // R, G, B and A of 16 pixels
+        uint16x8_t lo = vmull_u8(vget_low_u8(p.val[0]), vdup_n_u8(47));
+        lo = vmlal_u8(lo, vget_low_u8(p.val[1]), vdup_n_u8(157));
+        lo = vmlal_u8(lo, vget_low_u8(p.val[2]), vdup_n_u8(16));
+        uint16x8_t hi = vmull_u8(vget_high_u8(p.val[0]), vdup_n_u8(47));
+        hi = vmlal_u8(hi, vget_high_u8(p.val[1]), vdup_n_u8(157));
+        hi = vmlal_u8(hi, vget_high_u8(p.val[2]), vdup_n_u8(16));
+        const uint8x8_t ylo = vadd_u8(vshrn_n_u16(vaddq_u16(lo, vdupq_n_u16(128)), 8), vdup_n_u8(16));
+        const uint8x8_t yhi = vadd_u8(vshrn_n_u16(vaddq_u16(hi, vdupq_n_u16(128)), 8), vdup_n_u8(16));
+        vst1q_u8(yo + x, vcombine_u8(ylo, yhi));
+    }
+#endif
+    for (; x < w; ++x, s += 4) yo[x] = uint8_t(16 + ((47 * s[0] + 157 * s[1] + 16 * s[2] + 128) >> 8));
+}
+
+#if GH_YUV_NEON
+// (k0 * R + k1 * G + k2 * B + 128.5 * 1024) >> 10 for 8 blocks of 4 pixels.
+static uint8x8_t chroma8(int16x8_t R, int16x8_t G, int16x8_t B, int16_t k0, int16_t k1, int16_t k2) {
+    int32x4_t lo = vdupq_n_s32((128 << 10) + 512), hi = lo;
+    lo = vmlal_n_s16(lo, vget_low_s16(R), k0);
+    lo = vmlal_n_s16(lo, vget_low_s16(G), k1);
+    lo = vmlal_n_s16(lo, vget_low_s16(B), k2);
+    hi = vmlal_n_s16(hi, vget_high_s16(R), k0);
+    hi = vmlal_n_s16(hi, vget_high_s16(G), k1);
+    hi = vmlal_n_s16(hi, vget_high_s16(B), k2);
+    return vmovn_u16(vcombine_u16(vqshrun_n_s32(lo, 10), vqshrun_n_s32(hi, 10)));
+}
+#endif
+
 void rgbaToYuv420(const uint8_t* src, int w, int h, uint8_t* y, int yStride, uint8_t* u, uint8_t* v, int uvStride, int uvStep) {
     // BT.709 with video levels (Y 16..235, U and V 16..240), in fixed point.
     const size_t row = size_t(w) * 4;
-    for (int r = 0; r < h; ++r) {
-        const uint8_t* s = src + size_t(h - 1 - r) * row;  // the picture is stored bottom row first
-        uint8_t* yo = y + size_t(r) * size_t(yStride);
-        for (int x = 0; x < w; ++x, s += 4) yo[x] = uint8_t(16 + ((47 * s[0] + 157 * s[1] + 16 * s[2] + 128) >> 8));
-    }
+    for (int r = 0; r < h; ++r) yRow(src + size_t(h - 1 - r) * row, y + size_t(r) * size_t(yStride), w);  // stored bottom row first
     for (int r = 0; r < h / 2; ++r) {
         const uint8_t* a = src + size_t(h - 1 - 2 * r) * row;
         const uint8_t* b = src + size_t(h - 2 - 2 * r) * row;
         uint8_t* uo = u + size_t(r) * size_t(uvStride);
         uint8_t* vo = v + size_t(r) * size_t(uvStride);
-        for (int x = 0; x < w / 2; ++x, a += 8, b += 8) {
+        int x = 0;
+#if GH_YUV_NEON
+        const bool planar = uvStep == 1, interleaved = uvStep == 2 && vo == uo + 1;
+        for (; (planar || interleaved) && x + 8 <= w / 2; x += 8, a += 64, b += 64) {
+            const uint8x16x4_t pa = vld4q_u8(a), pb = vld4q_u8(b);
+            // Each 2x2 block added up: pairs along the row, then the two rows.
+            const int16x8_t R = vreinterpretq_s16_u16(vaddq_u16(vpaddlq_u8(pa.val[0]), vpaddlq_u8(pb.val[0])));
+            const int16x8_t G = vreinterpretq_s16_u16(vaddq_u16(vpaddlq_u8(pa.val[1]), vpaddlq_u8(pb.val[1])));
+            const int16x8_t B = vreinterpretq_s16_u16(vaddq_u16(vpaddlq_u8(pa.val[2]), vpaddlq_u8(pb.val[2])));
+            const uint8x8_t cu = chroma8(R, G, B, -26, -86, 112), cv = chroma8(R, G, B, 112, -102, -10);
+            if (planar) {
+                vst1_u8(uo + x, cu);
+                vst1_u8(vo + x, cv);
+            } else {
+                uint8x8x2_t uv;
+                uv.val[0] = cu;
+                uv.val[1] = cv;
+                vst2_u8(uo + size_t(x) * 2, uv);  // NV12: U V U V ...
+            }
+        }
+#endif
+        for (; x < w / 2; ++x, a += 8, b += 8) {
             // The four pixels of the 2x2 block, added up.
             const int R = a[0] + a[4] + b[0] + b[4], G = a[1] + a[5] + b[1] + b[5], B = a[2] + a[6] + b[2] + b[6];
             uo[size_t(x) * size_t(uvStep)] = uint8_t((-26 * R - 86 * G + 112 * B + (128 << 10) + 512) >> 10);

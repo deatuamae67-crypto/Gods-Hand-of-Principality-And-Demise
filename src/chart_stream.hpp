@@ -38,7 +38,12 @@ struct StreamedNotes {
 // the JSON to `skeleton` (with {"__gh_stream": k} where array k was). In a
 // PulseForge chart the top-level "notes" list is streamed the same way, each
 // note stored as lane + 20 * owner (0 player, 1 opponent, 2 girlfriend).
-bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err);
+// threads: worker threads for the sections' notes (-1: one less than the
+// processor's cores, at most 8; 0: all on this thread). sectionCap: sections
+// bigger than this many bytes are parsed on this thread, piece by piece
+// (0: 8 MB). Either way the result is the same.
+bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err,
+                         int threads = -1, size_t sectionCap = 0);
 
 // Big charts read once are kept in this folder (their notes, compact), and
 // the next load reads them back instead of the JSON: a fraction of a second
