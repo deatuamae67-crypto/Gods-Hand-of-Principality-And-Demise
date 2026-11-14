@@ -105,6 +105,7 @@ void PlayState::enter() {
     job_ = std::async(std::launch::async,
                       [copy, diff, mirror, extraKeys] { return app().library.prepare(copy, diff, mirror, extraKeys); });
     loadStart_ = a.now;
+    loadStartReal_ = nowSec();
 }
 
 void PlayState::update(double dt) {
@@ -122,7 +123,12 @@ void PlayState::update(double dt) {
                 phase_ = Phase::Error;
                 error_ = prep_.error;
             } else {
+                const double prepMs = (nowSec() - loadStartReal_) * 1000.0, t0 = nowSec();
                 setup();
+                // godshand --perf: where the loading time went.
+                if (a.perf)
+                    std::printf("[load] chart and audio %.0f ms (in the background), setup %.0f ms (%d pictures in %.0f ms)\n",
+                                prepMs, (nowSec() - t0) * 1000.0, renderer_.lastPreloadCount, renderer_.lastPreloadMs);
             }
         }
         return;

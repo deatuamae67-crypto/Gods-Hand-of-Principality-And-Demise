@@ -295,6 +295,8 @@ int App::run(int argc, char** argv) {
     }
     settings.load(userDir + "settings.cfg");
     scores.load(userDir + "scores.cfg");
+    // Big charts read once load from here afterwards (chart_stream.hpp).
+    setChartCacheDir(userDir + "cache/charts/");
 
     unsigned flags = platform::kAndroid ? 0u : (FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     if (settings.vsync) flags |= FLAG_VSYNC_HINT;

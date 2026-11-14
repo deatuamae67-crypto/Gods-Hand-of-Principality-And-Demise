@@ -20,7 +20,11 @@ class SceneRenderer {
 public:
     ~SceneRenderer();
     // Uploads every texture the scene references so far (call while loading).
+    // The pictures are decoded on every processor core at once and reach the
+    // graphics card here, one after the other, as each is ready.
     void preload(scene::Scene& sc);
+    double lastPreloadMs = 0;  // how long the last preload took
+    int lastPreloadCount = 0;  // pictures it loaded
     // Draws every object on camera `cam` in scene order. Markers call `marker`
     // (gfGroup, hud); built-in characters call `builtin`.
     void drawCamera(scene::Scene& sc, scene::Cam cam,
@@ -57,6 +61,7 @@ private:
     scene::Scene* sc_ = nullptr;
 
     void drawSprite(const scene::Sprite& s, const scene::Camera& c);
+    Texture2D* store(const std::string& file, Image img);  // uploads img (and frees it)
     void drawText(scene::Sprite& s, const scene::Camera& c);
     Font* font(const std::string& file);
     std::map<std::string, Texture2D> tex_;

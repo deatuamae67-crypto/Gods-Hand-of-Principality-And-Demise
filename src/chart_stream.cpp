@@ -8,9 +8,18 @@
 // marker where each note array was) goes through the DOM. Notes stacked in
 // the same lane within 1 ms are merged while streaming, as finalize() would,
 // so memory stays proportional to the playable notes.
+#include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <system_error>
+#include <thread>
 
 #include "chart.hpp"
 #include "chart_stream.hpp"
@@ -23,9 +32,73 @@ namespace {
 
 constexpr size_t kStreamThreshold = 48u << 20;  // bytes
 
+// Reads the file on a thread of its own, a few blocks ahead of the parser, so
+// the disk (or a decompressor writing into a pipe) and the parsing overlap.
+class ReadAhead {
+public:
+    explicit ReadAhead(FILE* f) : f_(f), th_([this] { run(); }) {}
+    ~ReadAhead() {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        th_.join();
+    }
+    // As fread: up to n bytes, fewer only at the end of the file.
+    size_t read(char* dst, size_t n) {
+        size_t done = 0;
+        std::unique_lock<std::mutex> lk(m_);
+        while (done < n) {
+            cv_.wait(lk, [&] { return !q_.empty() || end_; });
+            if (q_.empty()) break;  // the end of the file
+            std::vector<char>& b = q_.front();
+            const size_t take = std::min(n - done, b.size() - pos_);
+            std::memcpy(dst + done, b.data() + pos_, take);
+            done += take;
+            pos_ += take;
+            if (pos_ == b.size()) {
+                q_.pop_front();
+                pos_ = 0;
+                cv_.notify_all();  // room for the reader thread
+            }
+        }
+        return done;
+    }
+
+private:
+    static constexpr size_t kBlock = 4u << 20, kAhead = 4;
+    void run() {
+        for (;;) {
+            std::vector<char> b(kBlock);
+            b.resize(std::fread(b.data(), 1, kBlock, f_));
+            std::unique_lock<std::mutex> lk(m_);
+            if (b.empty()) {
+                end_ = true;
+                cv_.notify_all();
+                return;
+            }
+            cv_.wait(lk, [&] { return q_.size() < kAhead || stop_; });
+            if (stop_) return;
+            q_.push_back(std::move(b));
+            cv_.notify_all();
+        }
+    }
+    FILE* f_;
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::vector<char>> q_;
+    size_t pos_ = 0;
+    bool end_ = false, stop_ = false;
+    std::thread th_;  // last: starts once the rest is ready
+};
+
 class Reader {
 public:
-    explicit Reader(FILE* f) : f_(f), buf_(4u << 20) { refill(); }
+    explicit Reader(FILE* f) : f_(f), buf_(4u << 20) {
+        if (f_) ra_ = std::make_unique<ReadAhead>(f_);
+        refill();
+    }
     bool eof() { return p_ == end_ && !refill(); }
     int peek() { return (p_ < end_ || refill()) ? (unsigned char)*p_ : -1; }
     int get() { return (p_ < end_ || refill()) ? (unsigned char)*p_++ : -1; }
@@ -48,7 +121,7 @@ public:
         std::memmove(buf_.data(), p_, have);
         p_ = buf_.data();
         end_ = p_ + have;
-        const size_t got = std::fread(buf_.data() + have, 1, buf_.size() - have, f_);
+        const size_t got = ra_->read(buf_.data() + have, buf_.size() - have);
         end_ += got;
         total_ += got;
         return size_t(end_ - p_);
@@ -71,13 +144,14 @@ private:
     bool refill() {
         if (!f_) return false;
         if (p_ < end_) return true;
-        const size_t n = std::fread(buf_.data(), 1, buf_.size(), f_);
+        const size_t n = ra_->read(buf_.data(), buf_.size());
         p_ = buf_.data();
         end_ = p_ + n;
         total_ += n;
         return n > 0;
     }
     FILE* f_;
+    std::unique_ptr<ReadAhead> ra_;
     std::vector<char> buf_;
     const char* p_ = nullptr;
     const char* end_ = nullptr;
@@ -532,15 +606,178 @@ uint64_t fileSize(const std::string& path) {
 bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) { err = "cannot open " + path; return false; }
-    Reader r(f);
-    // UTF-8 BOM
-    if (r.peek() == 0xEF) { r.get(); r.get(); r.get(); }
-    Streamer s(r, notes);
-    skeleton.clear();
-    const bool ok = s.run(skeleton, err);
+    bool ok;
+    {
+        Reader r(f);
+        // UTF-8 BOM
+        if (r.peek() == 0xEF) { r.get(); r.get(); r.get(); }
+        Streamer s(r, notes);
+        skeleton.clear();
+        ok = s.run(skeleton, err);
+    }  // the read-ahead thread stops before the file is closed
     std::fclose(f);
     notes.rangeStart.push_back(uint32_t(notes.notes.size()));
     return ok;
+}
+
+// ------------------------------------------------------------- cache ----
+
+namespace {
+
+namespace fs = std::filesystem;
+
+std::mutex g_cacheMtx;
+std::string g_cacheDir;
+constexpr uint32_t kCacheMagic = 0x43434847u;  // "GHCC"
+constexpr uint32_t kCacheVersion = 1;
+constexpr uint64_t kCacheLimit = 4ull << 30;
+
+struct CacheHeader {
+    uint32_t magic = kCacheMagic, version = kCacheVersion, noteSize = uint32_t(sizeof(StreamedNote)), reserved = 0;
+    uint64_t sourceSize = 0;
+    int64_t sourceTime = 0;
+};
+
+fs::path u8(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
+
+// The chart file's size and time: a cache entry is only used for that same file.
+bool sourceStamp(const std::string& path, uint64_t& size, int64_t& time) {
+    std::error_code ec;
+    const fs::path p = u8(path);
+    size = fs::file_size(p, ec);
+    if (ec) return false;
+    time = int64_t(fs::last_write_time(p, ec).time_since_epoch().count());
+    return !ec;
+}
+
+std::string cacheFileFor(const std::string& dir, const std::string& path) {
+    uint64_t h = 1469598103934665603ull;  // FNV-1a of the path
+    for (unsigned char c : path) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    char name[40];
+    std::snprintf(name, sizeof name, "%016llx.ghcc", (unsigned long long)h);
+    return dir + name;
+}
+
+template <class T>
+bool putAll(FILE* f, const T* p, uint64_t n) {
+    return n == 0 || std::fwrite(p, sizeof(T), size_t(n), f) == size_t(n);
+}
+
+// Reads n items of T, if the file still has that many bytes.
+template <class T>
+bool getAll(FILE* f, T* p, uint64_t n, uint64_t& left) {
+    if (n > left / sizeof(T)) return false;
+    left -= n * sizeof(T);
+    return n == 0 || std::fread(p, sizeof(T), size_t(n), f) == size_t(n);
+}
+
+bool readCache(const std::string& file, uint64_t size, int64_t time, std::string& skeleton, StreamedNotes& sn) {
+    std::error_code ec;
+    uint64_t left = fs::file_size(u8(file), ec);
+    if (ec) return false;
+    FILE* f = std::fopen(file.c_str(), "rb");
+    if (!f) return false;
+    CacheHeader h;
+    uint64_t n = 0;
+    bool ok = getAll(f, &h, 1, left) && h.magic == kCacheMagic && h.version == kCacheVersion &&
+              h.noteSize == sizeof(StreamedNote) && h.sourceSize == size && h.sourceTime == time;
+    if (ok && (ok = getAll(f, &n, 1, left) && n <= left)) {
+        skeleton.resize(size_t(n));
+        ok = getAll(f, skeleton.data(), n, left);
+    }
+    if (ok && (ok = getAll(f, &n, 1, left) && n <= left / sizeof(StreamedNote))) {
+        sn.notes.resize(size_t(n));
+        ok = getAll(f, sn.notes.data(), n, left);
+    }
+    if (ok && (ok = getAll(f, &n, 1, left) && n <= left / 4)) {
+        sn.rangeStart.resize(size_t(n));
+        ok = getAll(f, sn.rangeStart.data(), n, left);
+    }
+    if (ok && (ok = getAll(f, &n, 1, left) && n <= 65535)) {
+        sn.types.resize(size_t(n));
+        for (std::string& t : sn.types) {
+            uint64_t len = 0;
+            if (!(ok = getAll(f, &len, 1, left) && len <= left)) break;
+            t.resize(size_t(len));
+            if (!(ok = getAll(f, t.data(), len, left))) break;
+        }
+    }
+    int32_t maxData = -1;
+    if (ok) ok = getAll(f, &maxData, 1, left) && getAll(f, sn.dataCount.data(), sn.dataCount.size(), left) &&
+                 getAll(f, &sn.rawCount, 1, left);
+    sn.maxData = maxData;
+    std::fclose(f);
+    if (!ok) {
+        skeleton.clear();
+        sn = StreamedNotes();
+    }
+    return ok;
+}
+
+void trimCache(const std::string& dir, const fs::path& keep) {
+    std::error_code ec;
+    std::vector<std::pair<fs::file_time_type, fs::path>> files;
+    uint64_t total = 0;
+    for (fs::directory_iterator it(u8(dir), ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->path().extension() != ".ghcc") continue;
+        std::error_code e2;
+        total += it->file_size(e2);
+        files.emplace_back(it->last_write_time(e2), it->path());
+    }
+    std::sort(files.begin(), files.end());
+    for (const auto& f : files) {
+        if (total <= kCacheLimit) break;
+        if (f.second == keep) continue;
+        std::error_code e2;
+        const uint64_t sz = fs::file_size(f.second, e2);
+        if (fs::remove(f.second, e2)) total -= std::min(total, sz);
+    }
+}
+
+void writeCache(const std::string& dir, const std::string& file, uint64_t size, int64_t time, const std::string& skeleton,
+                const StreamedNotes& sn) {
+    std::error_code ec;
+    fs::create_directories(u8(dir), ec);
+    // A name of its own while it is written: another load never reads half a file.
+    const std::string tmp = file + "." + std::to_string(std::hash<std::thread::id>()(std::this_thread::get_id()) & 0xFFFFFF) + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    CacheHeader h;
+    h.sourceSize = size;
+    h.sourceTime = time;
+    const uint64_t counts[4] = {skeleton.size(), sn.notes.size(), sn.rangeStart.size(), sn.types.size()};
+    bool ok = putAll(f, &h, 1) && putAll(f, &counts[0], 1) && putAll(f, skeleton.data(), counts[0]) && putAll(f, &counts[1], 1) &&
+              putAll(f, sn.notes.data(), counts[1]) && putAll(f, &counts[2], 1) && putAll(f, sn.rangeStart.data(), counts[2]) &&
+              putAll(f, &counts[3], 1);
+    for (const std::string& t : sn.types) {
+        const uint64_t len = t.size();
+        ok = ok && putAll(f, &len, 1) && putAll(f, t.data(), len);
+    }
+    const int32_t maxData = sn.maxData;
+    ok = ok && putAll(f, &maxData, 1) && putAll(f, sn.dataCount.data(), sn.dataCount.size()) && putAll(f, &sn.rawCount, 1);
+    ok = (std::fclose(f) == 0) && ok;
+    if (ok) fs::rename(u8(tmp), u8(file), ec);
+    if (!ok || ec) {
+        fs::remove(u8(tmp), ec);
+        return;
+    }
+    trimCache(dir, u8(file));
+}
+
+}  // namespace
+
+void setChartCacheDir(const std::string& dir) {
+    std::lock_guard<std::mutex> lk(g_cacheMtx);
+    g_cacheDir = dir;
+    if (!g_cacheDir.empty() && g_cacheDir.back() != '/' && g_cacheDir.back() != '\\') g_cacheDir += '/';
+}
+
+std::string chartCacheDir() {
+    std::lock_guard<std::mutex> lk(g_cacheMtx);
+    return g_cacheDir;
 }
 
 bool loadChartFile(const std::string& path, const std::string& difficulty, Chart& out, std::string& err,
@@ -555,14 +792,28 @@ bool loadChartFile(const std::string& path, const std::string& difficulty, Chart
     }
     const uint64_t size = fileSize(path);
     if (size == 0 && !fileExistsAt(path)) { err = "cannot read " + path; return false; }
-    if (!vsliceMetadata.empty() || size < (streamThreshold ? streamThreshold : kStreamThreshold)) {
+    // A pipe has no size (gh_tests --chart /dev/stdin, fed by a decompressor):
+    // whatever it holds is streamed.
+    std::error_code ec;
+    const auto kind = std::filesystem::status(std::filesystem::path(std::u8string(path.begin(), path.end())), ec).type();
+    const bool pipe = !ec && (kind == std::filesystem::file_type::fifo || kind == std::filesystem::file_type::character);
+    if (!vsliceMetadata.empty() || (!pipe && size < (streamThreshold ? streamThreshold : kStreamThreshold))) {
         std::string text;
         if (!readTextFile(path, text)) { err = "cannot read " + path; return false; }
         return parseChart(text, difficulty, out, err, vsliceMetadata, extraKeys);
     }
     std::string skeleton;
     StreamedNotes sn;
+    // The cache: the notes of this very file, read before.
+    const std::string dir = pipe ? std::string() : chartCacheDir();
+    uint64_t srcSize = 0;
+    int64_t srcTime = 0;
+    const bool cacheable = !dir.empty() && sourceStamp(path, srcSize, srcTime);
+    const std::string cached = cacheable ? cacheFileFor(dir, path) : std::string();
+    if (cacheable && readCache(cached, srcSize, srcTime, skeleton, sn))
+        return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
     if (!streamChartSkeleton(path, skeleton, sn, err)) return false;
+    if (cacheable) writeCache(dir, cached, srcSize, srcTime, skeleton, sn);
     return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
 }
 

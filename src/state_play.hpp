@@ -272,6 +272,7 @@ private:
     double pausedAt_ = 0;
     Music pauseMusic_{};     // Psych's breakfast, fading in while paused
     float pauseMusicVol_ = 0;
+    double loadStartReal_ = 0;  // nowSec() when loading started (--perf)
     double deadAt_ = 0, loadStart_ = 0, lastHitsound_ = 0, lastMissSfx_ = 0, waitStart_ = 0, endWaitStart_ = 0;
     double lastSplash_[9] = {};
     bool finished_ = false, songStarted_ = false, countdownStarted_ = false, endRequested_ = false;

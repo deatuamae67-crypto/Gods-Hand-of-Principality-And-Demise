@@ -438,6 +438,8 @@ static int benchCharts(int argc, char** argv, int first) {
 int main(int argc, char** argv) {
     bool audio = false;
     const char* wav = nullptr;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--cache")) setChartCacheDir(argv[i + 1]);  // gh_tests --cache dir --chart files
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--chart")) return benchCharts(argc, argv, i + 1);
     for (int i = 1; i < argc; ++i)
