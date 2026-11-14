@@ -104,6 +104,18 @@ def pack(folder_path, folder_name, out_dir):
     return parts
 
 
+NOTES = (
+    "Mod packs for God's Hand. Download the zips you want and put them in the game's mods/ folder: "
+    "the game unpacks them the next time it starts (or press R in Freeplay). Packs split into -part1, "
+    "-part2... must all be downloaded.\n\n"
+    "Not all of these mods are by deatuamae67-crypto: some are, and the others belong to their original "
+    "creators, who keep every right to them. They are shared so they can be played in God's Hand, and "
+    "they are not covered by the game's license.\n\n"
+    "*Nem todos estes mods são de deatuamae67-crypto: alguns são, e os outros pertencem aos seus criadores "
+    "originais, que mantêm todos os direitos sobre eles. Estão aqui para se poderem jogar no God's Hand e "
+    "não estão abrangidos pela licença do jogo.*")
+
+
 def main():
     if len(sys.argv) > 2 and sys.argv[1] == '--local':
         out = sys.argv[3] if len(sys.argv) > 3 else '.'
@@ -115,10 +127,9 @@ def main():
     os.makedirs(work, exist_ok=True)
     if run('gh', 'release', 'view', TAG, check=False) != 0:
         run('gh', 'release', 'create', TAG, '--title', "God's Hand - mod packs", '--latest=false',
-            '--target', os.environ.get('GITHUB_SHA', 'HEAD'),
-            '--notes', 'Mod packs for God\'s Hand. Download the zips you want and put them in the game\'s '
-                       'mods/ folder: the game unpacks them the next time it starts (or press R in Freeplay). '
-                       'Packs split into -part1, -part2... must all be downloaded.')
+            '--target', os.environ.get('GITHUB_SHA', 'HEAD'), '--notes', NOTES)
+    else:
+        run('gh', 'release', 'edit', TAG, '--notes', NOTES)  # the text follows this file
     have = set(run('gh', 'release', 'view', TAG, '--json', 'assets', '-q', '.assets[].name', capture=True).split())
     manifest = {}
     if 'mod-packs.txt' in have:

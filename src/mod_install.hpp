@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Installs mods dropped into mods/ as .zip files: each archive is unpacked
 // into its own folder (a single top-level folder is kept as the mod name) and
 // then moved to mods/.installed/. Entries that would escape the folder are

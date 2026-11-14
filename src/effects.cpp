@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 #include "effects.hpp"
 
 #include <algorithm>
@@ -8,7 +12,9 @@ namespace gh::fx {
 namespace {
 
 // The screen effects of JS Engine's Lua functions (addVCREffect, addBlockedGlitchEffect...),
-// with the GLSL of its Shaders.hx (Apache License 2.0) as it is: they look the same.
+// with the GLSL of its Shaders.hx as it is, so they look the same. That GLSL comes from
+// JS Engine (https://github.com/JordanSantiagoYT/FNF-JS-Engine) and is used under the
+// Apache License 2.0 (licenses/Apache-2.0.txt); the rest of this file is the game's own.
 // The Flixel-style GLSL goes through translateShader like any mod shader.
 
 // ChromaticAberrationShader

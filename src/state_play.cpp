@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
 #include "state_play.hpp"
@@ -1355,11 +1359,15 @@ void PlayState::updateScoreText(bool miss) {
     const bool calls = scripts_ && app().settings.luaNoteCallbacks;
     inScoreUpdate_ = true;
     if (calls && scripts_->callStops("preUpdateScore", {scene::Value(miss)})) {
+        // The script keeps the text as it is: the values it changed so far
+        // must not be written by a silent refresh either.
         inScoreUpdate_ = false;
+        scoreStale_ = false;
+        scoreVetoed_ = true;
         return;
     }
     st->text.text = scoreEngineText_ = psychScoreLine();
-    scoreStale_ = false;
+    scoreStale_ = scoreVetoed_ = false;
     if (calls) scripts_->call("onUpdateScore", {scene::Value(miss)});
     inScoreUpdate_ = false;
 }
@@ -1382,6 +1390,7 @@ void PlayState::refreshScoreLine() {
 void PlayState::recalculateRating() {
     if (!psych_ || inScoreUpdate_) return;
     scoreDirty_ = true;
+    scoreStale_ = false;  // the pending updateScore decides, preUpdateScore included
     if (!cfg_.botplay) scoreBopAt_ = app().now;
 }
 
@@ -1505,7 +1514,8 @@ void PlayState::drawHud() {
                            (ratingNameOverride_.empty() ? session_.rank() : ratingNameOverride_) + ")";
         const std::string cl = ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_;
         if (!cl.empty()) line += "   |   " + cl;
-        if (look && so && scoreStale_) refreshScoreLine();
+        // Not while an updateScore is pending or a script stopped the last one.
+        if (look && so && scoreStale_ && !scoreDirty_ && !scoreVetoed_) refreshScoreLine();
         if (look) line = so ? scoreEngineText_ : psychScoreLine();  // Psych Engine's own score line
         if (so && !so->text.text.empty() && so->text.text != scoreEngineText_) line = so->text.text;  // a script wrote it
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();

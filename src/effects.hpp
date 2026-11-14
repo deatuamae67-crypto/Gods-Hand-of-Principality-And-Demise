@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Ready-made screen effects for scripts: JS Engine's Lua shader functions
 // (addChromaticAbberationEffect, addVCREffect, addWiggleEffect, ...) and the
 // "Rainbow Eyesore" event, with the GLSL of JS Engine's Shaders.hx in the

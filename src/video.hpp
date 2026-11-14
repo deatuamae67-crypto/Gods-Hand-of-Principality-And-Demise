@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Video playback for cutscenes (startVideo) and video sprites
 // (makeVideoSprite). MPEG-1 files (.mpg) play directly through pl_mpeg; other
 // formats (.mp4, .webm, .mov...) are converted once to MPEG-1 with ffmpeg

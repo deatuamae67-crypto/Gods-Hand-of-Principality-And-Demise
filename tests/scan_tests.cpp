@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Finding songs in every mod layout (song_scan.cpp), PulseForge charts, audio
 // lengths and assets shared between mods.
 #include <cmath>

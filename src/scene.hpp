@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Psych-style scene model for mod songs: sprites, texts, characters, cameras,
 // strums, tweens and timers, with Flixel's positioning rules. Pure logic
 // (no rendering), so scripts and stages can be tested headless;

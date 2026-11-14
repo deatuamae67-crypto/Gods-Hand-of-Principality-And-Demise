@@ -1,3 +1,10 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
+// The base game's character offsets and stage layouts below follow Friday Night
+// Funkin' (The Funkin' Crew), used under the Apache License 2.0
+// (licenses/Apache-2.0.txt); the images themselves come from the mods.
 #include "basegame.hpp"
 
 #include <cstring>

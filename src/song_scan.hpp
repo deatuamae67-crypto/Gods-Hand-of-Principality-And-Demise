@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Finding songs on disk: the game's songs/ folder and every mod in mods/, in
 // whatever layout it came in. Psych mods, full game builds (charts in
 // assets/preload/data or assets/shared/data next to assets/songs, the mods/

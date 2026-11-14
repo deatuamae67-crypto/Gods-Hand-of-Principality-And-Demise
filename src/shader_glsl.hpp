@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Psych Engine / Flixel shaders are OpenFL fragment shaders in GLSL ES 1.0
 // style ("#pragma header", bitmap, openfl_TextureCoordv, flixel_texture2D,
 // gl_FragColor). translateShader() turns one into a GLSL 330 fragment shader

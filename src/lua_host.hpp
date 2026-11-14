@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Lua 5.4 scripting with the Psych Engine API (plus Kade Engine modchart
 // helpers). Each script runs in its own sandboxed state: no io/os/package
 // access, scripts only come from the selected song's own content roots, and

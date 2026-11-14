@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Definitions for the original game's weeks 1-6, which older engines (base
 // game, Kade) hard-code instead of shipping as files: character JSONs, stage
 // JSONs and stage scripts written against the Psych Lua API. They are used

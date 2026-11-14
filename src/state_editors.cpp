@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // The editors' menu (main menu: 7), as Psych Engine's Master Editor Menu: the
 // chart editor and the character, stage and event editors. They work on the
 // mods the game found; the menu picks the mod they save into.

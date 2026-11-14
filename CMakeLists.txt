@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 1.6.2 LANGUAGES C CXX)
+project(GodsHand VERSION 1.6.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -272,6 +272,7 @@ if(GH_BUILD_GAME)
     install(TARGETS godshand RUNTIME DESTINATION .)
     install(DIRECTORY assets songs DESTINATION .)
     install(FILES README.md LICENSE DESTINATION .)
+    install(DIRECTORY licenses DESTINATION .)  # third-party license texts (Apache 2.0)
   endif()
 endif()
 

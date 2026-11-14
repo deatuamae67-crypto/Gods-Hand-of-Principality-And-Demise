@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Replays: every key press and release of a run, in song time. Judgement is
 // deterministic, so feeding the same events back reproduces the run exactly.
 #pragma once

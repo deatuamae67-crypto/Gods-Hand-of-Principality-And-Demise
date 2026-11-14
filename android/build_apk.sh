@@ -59,6 +59,10 @@ javac --release 8 -Xlint:-options -cp "$jar" -d "$work/classes" $(find "$here/ja
 
 # ---- files the game copies out of the APK on first launch
 cp "$root"/assets/fonts/*.ttf "$root"/assets/fonts/*.txt "$work/assets/assets/fonts/"
+# The license and the third-party license texts travel with the game.
+mkdir -p "$work/assets/licenses"
+cp "$root/LICENSE" "$work/assets/"
+cp "$root"/licenses/*.txt "$work/assets/licenses/"
 cp "$root"/songs/* "$work/assets/songs/"
 
 # ---- resources, manifest and packaging

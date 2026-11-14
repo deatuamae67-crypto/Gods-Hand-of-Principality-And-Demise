@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // The duel. Built-in songs use the game's own stages and figures; mod songs
 // that ship Psych Engine content (characters, stages, Lua scripts) run in
 // "Psych mode": a Flixel-style scene driven by the scripts, with the same
@@ -276,6 +280,7 @@ private:
     std::string scoreEngineText_, timeEngineText_, botEngineText_;  // what the engine wrote in them
     bool scoreDirty_ = false, scoreDirtyMiss_ = false, scoreBopping_ = false, timeFadeDone_ = false;
     bool scoreStale_ = false, inScoreUpdate_ = false;  // a script changed the values; in preUpdateScore/onUpdateScore
+    bool scoreVetoed_ = false;  // preUpdateScore stopped the last update: no silent refresh until one goes through
     double botplaySine_ = 0;
     size_t eventIdx_ = 0;
     std::deque<DebugLine> debug_;

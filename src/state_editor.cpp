@@ -1,3 +1,7 @@
+// God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
+// Source-available under the God's Hand Source-Available Collaboration License (see LICENSE):
+// collaborators may fork it to work on it; copies and rebrands need written permission.
+
 // Chart editor (Freeplay: 7). A Psych / JS Engine style grid: an event lane,
 // the opponent's lanes, then the player's, time flowing down past a fixed
 // line; tabs on the right edit the song, the section under the line, the
