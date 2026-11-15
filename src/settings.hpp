@@ -62,6 +62,8 @@ struct Settings {
     float healthBarAlpha = 1.0f;
     // Psych Engine's own options (Visuals and UI, Gameplay).
     bool hideHud = false;       // health bar, icons, score line and ratings hidden
+    bool watermark = true;      // "God's Hand (version)" in the bottom-left corner of songs
+    bool visualizer = true;     // the audio visualizer in the top-right corner of songs
     bool scoreZoom = true;      // the score line grows a little on each note you hit
     bool botplayText = true;    // BOTPLAY (or REPLAY) on screen while the game plays by itself
     bool comboStacking = true;  // ratings and combo numbers pile up (OFF: only the latest)

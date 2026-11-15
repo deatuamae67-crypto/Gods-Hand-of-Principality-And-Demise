@@ -24,6 +24,7 @@
 #include "flp_import.hpp"
 #include "common.hpp"
 #include "editor_ui.hpp"
+#include "keys.hpp"
 #include "gfx.hpp"
 #include "raylib.h"
 #include "scene.hpp"
@@ -901,7 +902,7 @@ private:
         flash(TextFormat("Filled section %d", s));
     }
     void setKeys(int k) {
-        k = clampv(k, 1, 9);
+        k = clampv(k, 1, kMaxKeys);
         if (k == keys_) return;
         snapshot();
         std::vector<EdNote> kept;

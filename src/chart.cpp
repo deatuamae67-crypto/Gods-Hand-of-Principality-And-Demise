@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "chart.hpp"
+#include "keys.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -93,7 +94,7 @@ void Chart::finalize(double baseBpm) {
         tempo[i].beat = tempo[i - 1].beat + (tempo[i].timeMs - tempo[i - 1].timeMs) * tempo[i - 1].bpm / 60000.0;
     }
 
-    keys = clampv(keys, 1, 9);
+    keys = clampv(keys, 1, kMaxKeys);
     notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const Note& n) {
         return !std::isfinite(n.time) || n.lane >= keys || n.side > 1;
     }), notes.end());
@@ -173,6 +174,7 @@ void Chart::mirror() {
     for (FocusPoint& f : focus) f.side ^= 1;
     std::swap(player, opponent);
     std::swap(playerNotes, opponentNotes);
+    std::swap(sideKeys[0], sideKeys[1]);
 }
 
 // --------------------------------------------------------------- parsing ---
@@ -220,10 +222,11 @@ static int keysFromMetadata(const json::Document& doc, const json::Value& s, con
                             bool extraKeys) {
     if (!extraKeys) return 4;  // the player turned extra keys off
     int keys = int(json::Document::num(doc.get(s, "keyCount"), 0));  // Leather Engine
-    if (keys >= 1 && keys <= 9) return keys;
+    if (keys >= 1 && keys <= kMaxKeys) return keys;
     // "mania" numbers key counts differently from fork to fork: Dave & Bambi /
     // Kade / Andromeda forks ("options": 0=4K 1=6K 2=7K 3=9K), Psych Extra Keys
-    // (keys = mania + 1) and Shaggy-style multi-key (4, 6, 9, 5, 7, 8, 1, 2, 3).
+    // (keys = mania + 1, up to 18: mania 17) and Shaggy-style multi-key
+    // (4, 6, 9, 5, 7, 8, 1, 2, 3).
     // Psych and JS Engine ignore all of them and play 4 keys, so charts made
     // there often keep a "mania" their notes do not use (Eons: options.mania 3,
     // notes on lanes 0-3 only). Every reading, 4 keys included, is checked
@@ -233,23 +236,27 @@ static int keysFromMetadata(const json::Document& doc, const json::Value& s, con
     const json::Value* opts = doc.get(s, "options");
     const double om = opts ? json::Document::num(doc.get(*opts, "mania"), -1) : -1;
     const double sm = json::Document::num(doc.get(s, "mania"), -1);
-    const bool songMania = sm >= 0 && sm <= 8, optMania = om >= 0 && om <= 3;
-    if (!songMania && !optMania) return 4;
+    // Denpa Engine keeps its Extra Keys "mania" in "options" too: past 3 it
+    // can only be that numbering (keys = mania + 1).
+    const bool songMania = sm >= 0 && sm <= kMaxKeys - 1, optMania = om >= 0 && om <= 3,
+               optEk = om > 3 && om <= kMaxKeys - 1;
+    if (!songMania && !optMania && !optEk) return 4;
     // On a tie the first candidate wins: a song-level "mania" (Extra Keys,
     // Kade, Shaggy) before 4 keys; 4 keys before an "options" one.
     std::vector<int> candidates;
     if (songMania) {
         const int m = int(sm);
-        candidates = {m + 1, m <= 3 ? dnb[m] : 0, shaggy[m]};
+        candidates = {m + 1, m <= 3 ? dnb[m] : 0, m <= 8 ? shaggy[m] : 0};
     }
     candidates.push_back(4);
     if (optMania) candidates.push_back(dnb[int(om)]);
+    if (optEk) candidates.push_back(int(om) + 1);
     uint64_t total = 0;
     for (uint64_t c : dataCount) total += c;
     int best = 0;
     double bestCost = 0;
     for (int k : candidates) {
-        if (k < 1 || k > 9) continue;
+        if (k < 1 || k > kMaxKeys) continue;
         const double cost = keyMisfit(dataCount, total, k);
         if (best == 0 || cost < bestCost - 1e-9) {
             best = k;
@@ -298,6 +305,20 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
         }
     }
     out.keys = keysFromMetadata(doc, s, dataCount, extraKeys);
+    // Leather Engine: a side of its own key count each. A note belongs to the
+    // side the section is on when its value is under that side's key count,
+    // else to the other side; its lane is the value modulo its side's keys.
+    int sideKeys[2] = {0, 0};
+    if (extraKeys) {
+        const double pk = json::Document::num(doc.get(s, "playerKeyCount"), 0), ok = json::Document::num(doc.get(s, "keyCount"), 0);
+        if (pk >= 1 && pk <= kMaxKeys && ok >= 1 && ok <= kMaxKeys && int(pk) != int(ok)) {
+            sideKeys[0] = int(ok);
+            sideKeys[1] = int(pk);
+            out.keys = std::max(sideKeys[0], sideKeys[1]);
+            out.sideKeys[0] = sideKeys[0];
+            out.sideKeys[1] = sideKeys[1];
+        }
+    }
     const int keys = out.keys;
 
     double secStart = 0, curBpm = bpm;
@@ -330,6 +351,12 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
         n.stack = std::max<uint16_t>(1, stack);
         if (v1) n.side = di < keys ? 1 : 0;
         else n.side = ((di < keys) ? must : !must) ? 1 : 0;
+        if (sideKeys[0]) {  // Leather Engine (see above)
+            const bool focusPlayer = must;
+            const bool player = di < sideKeys[focusPlayer ? 1 : 0] ? focusPlayer : !focusPlayer;
+            n.side = player ? 1 : 0;
+            n.lane = uint8_t(di % sideKeys[n.side]);
+        }
         if (hasTypeName) {
             applyNoteType(typeName, n, out);
         } else if (streamType && streamType < streamTypes.size()) {
@@ -586,7 +613,7 @@ static bool parsePulseForge(const json::Document& doc, Chart& out, std::string& 
     out.gf = std::string(doc.strOr(doc.get(m, "girlfriend"), ""));
     out.stage = std::string(doc.strOr(doc.get(m, "stage"), ""));
     const int keys = int(json::Document::num(doc.get(root, "keyCount"), json::Document::num(doc.get(m, "keyCount"), 4)));
-    out.keys = extraKeys && keys >= 1 && keys <= 9 ? keys : 4;
+    out.keys = extraKeys && keys >= 1 && keys <= kMaxKeys ? keys : 4;
     const double speed = json::Document::num(doc.get(root, "scrollSpeed"), json::Document::num(doc.get(m, "scrollSpeed"), 1.0));
     out.speed = clampv(speed > 0 && std::isfinite(speed) ? speed : 1.0, 0.1, 20.0);
     double bpm = 0;

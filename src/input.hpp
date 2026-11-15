@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "settings.hpp"
+#include "keys.hpp"
 
 namespace gh {
 
@@ -24,7 +25,7 @@ struct InputEvent {
 
 class Input {
 public:
-    static constexpr int kMaxCodes = kPadBase + 32;
+    static constexpr int kMaxCodes = kTouchLane + kMaxKeys + 4;
 
     void poll(double now);   // call right after raylib's PollInputEvents()
     void beginFrame(double dt);

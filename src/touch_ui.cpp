@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "touch_ui.hpp"
+#include "keys.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -84,6 +85,10 @@ int TouchUi::buttonAt(Vector2 p, float slop) const {
 
 bool TouchUi::covers(Vector2 p) const { return buttonAt(p, 14 * unit_) >= 0; }
 
+void TouchUi::buttonRects(std::vector<Rectangle>& out) const {
+    for (const Button& b : buttons_) out.push_back(b.r);
+}
+
 void TouchUi::setLayout(Input& in, const TouchLayout& l, double now) {
     const int sw = GetScreenWidth(), sh = GetScreenHeight();
     std::string sig = std::to_string(sw) + "x" + std::to_string(sh) + (l.pad ? "P" : "-") + std::to_string(l.tapCode) + ":" +
@@ -94,7 +99,7 @@ void TouchUi::setLayout(Input& in, const TouchLayout& l, double now) {
     sig_ = sig;
     build(l, sw, sh);
     tapCode_ = l.tapCode;
-    lanes_ = std::clamp(l.lanes, 0, 9);
+    lanes_ = std::clamp(l.lanes, 0, kMaxKeys);
     laneHeld_.assign(size_t(lanes_), false);
     // Fingers already down belong to the old screen: ignore them until lifted.
     for (Finger& f : fingers_) f.kind = kIgnored;

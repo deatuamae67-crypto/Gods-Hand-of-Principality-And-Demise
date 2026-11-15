@@ -7,6 +7,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <map>
 #include <memory>
 #include <thread>
 
@@ -15,6 +17,7 @@
 
 #include "common.hpp"
 #include "gfx.hpp"
+#include "platform.hpp"
 #include "rlgl.h"
 #include "shader_glsl.hpp"
 
@@ -190,6 +193,62 @@ void SceneRenderer::drawFiltered(scene::Scene& sc, const std::vector<scene::Shad
     }
 }
 
+// ------------------------------------------------- pictures kept uploaded --
+
+namespace {
+
+struct KeptTexture {
+    Texture2D tex{};
+    int filter = 1;
+    uintmax_t size = 0;
+    std::filesystem::file_time_type mtime{};
+};
+
+std::map<std::string, KeptTexture>& keptTextures() {
+    static std::map<std::string, KeptTexture> m;
+    return m;
+}
+
+// How much stays uploaded between songs: a phone shares its memory with the
+// graphics, so less there.
+size_t keptBudget() { return platform::kAndroid ? (size_t(640) << 20) : (size_t(2048) << 20); }
+
+size_t texBytes(const Texture2D& t) { return size_t(std::max(0, t.width)) * size_t(std::max(0, t.height)) * 4; }
+
+bool fileStamp(const std::string& f, uintmax_t& size, std::filesystem::file_time_type& mtime) {
+    std::error_code ec;
+    size = std::filesystem::file_size(f, ec);
+    if (ec) return false;
+    mtime = std::filesystem::last_write_time(f, ec);
+    return !ec;
+}
+
+}  // namespace
+
+void SceneRenderer::releaseKept() {
+    if (IsWindowReady())
+        for (auto& kv : keptTextures())
+            if (kv.second.tex.id) UnloadTexture(kv.second.tex);
+    keptTextures().clear();
+}
+
+bool SceneRenderer::takeKept(const std::string& file) {
+    auto& kept = keptTextures();
+    auto it = kept.find(file);
+    if (it == kept.end()) return false;
+    uintmax_t size = 0;
+    std::filesystem::file_time_type mtime{};
+    if (!fileStamp(file, size, mtime) || size != it->second.size || mtime != it->second.mtime) {  // changed since
+        if (it->second.tex.id) UnloadTexture(it->second.tex);
+        kept.erase(it);
+        return false;
+    }
+    tex_[file] = it->second.tex;
+    filter_[file] = it->second.filter;
+    kept.erase(it);
+    return true;
+}
+
 void SceneRenderer::clear() {
     if (!IsWindowReady()) return;
     for (auto& kv : shaders_)
@@ -201,8 +260,28 @@ void SceneRenderer::clear() {
         for (RenderTexture2D& rt : kv.second.rt)
             if (rt.id) UnloadRenderTexture(rt);
     layers_.clear();
-    for (auto& kv : tex_)
-        if (kv.second.id) UnloadTexture(kv.second);
+    // The pictures stay uploaded for whatever loads next (see releaseKept).
+    auto& kept = keptTextures();
+    size_t used = 0;
+    for (const auto& kv : kept) used += texBytes(kv.second.tex);
+    for (auto& kv : tex_) {
+        if (!kv.second.id) continue;
+        if (auto old = kept.find(kv.first); old != kept.end()) {
+            used -= texBytes(old->second.tex);
+            UnloadTexture(old->second.tex);
+            kept.erase(old);
+        }
+        KeptTexture k;
+        k.tex = kv.second;
+        if (auto f = filter_.find(kv.first); f != filter_.end()) k.filter = f->second;
+        const size_t bytes = texBytes(kv.second);
+        if (used + bytes <= keptBudget() && fileStamp(kv.first, k.size, k.mtime)) {
+            kept[kv.first] = k;
+            used += bytes;
+        } else {
+            UnloadTexture(kv.second);
+        }
+    }
     tex_.clear();
     filter_.clear();
     for (auto& kv : fonts_)
@@ -215,6 +294,7 @@ Texture2D* SceneRenderer::texture(const std::string& file) {
     if (file.rfind("video:", 0) == 0) return nullptr;
     auto it = tex_.find(file);
     if (it != tex_.end()) return it->second.id ? &it->second : nullptr;
+    if (takeKept(file)) return &tex_[file];
     std::string bytes;
     Image img{};
     if (scene::readFile(file, bytes) && !bytes.empty())
@@ -252,9 +332,17 @@ Font* SceneRenderer::font(const std::string& file) {
 void SceneRenderer::preload(scene::Scene& sc) {
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<std::string> todo;
-    for (const std::string& f : sc.gfx.pngFiles())
-        if (!tex_.count(f) && !dynamic_.count(f) && f.rfind("video:", 0) != 0) todo.push_back(f);
+    int kept = 0;
+    for (const std::string& f : sc.gfx.pngFiles()) {
+        if (tex_.count(f) || dynamic_.count(f) || f.rfind("video:", 0) == 0) continue;
+        if (takeKept(f)) ++kept;
+        else todo.push_back(f);
+    }
+    // What the last song left and this one does not use goes before the new
+    // pictures take room.
+    releaseKept();
     lastPreloadCount = int(todo.size());
+    lastPreloadKept = kept;
     // Reading and decoding a picture is the slow part and needs no graphics
     // context: every core takes the next one; only the upload stays here.
     struct Slot {

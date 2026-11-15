@@ -18,12 +18,14 @@
 #include "app.hpp"
 #include "characters.hpp"
 #include "gfx.hpp"
+#include "keys.hpp"
 #include "lua_host.hpp"
 #include "raylib.h"
 #include "replay.hpp"
 #include "scene.hpp"
 #include "scene_draw.hpp"
 #include "video.hpp"
+#include "visualizer.hpp"
 #include "stage.hpp"
 
 namespace gh {
@@ -35,6 +37,8 @@ public:
     bool wantsMenuMusic() const override { return false; }
     std::string perfInfo() const override;
     TouchLayout touchLayout() const override;
+    void busyRects(std::vector<Rectangle>& out) const override;
+    bool keepsPictures() const override { return true; }
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
     void openOptions();
@@ -110,6 +114,7 @@ private:
 
     // ---- layout and drawing (state_play.cpp)
     float noteSize() const;
+    float laneWidth(int keys = 0) const;  // 0: the chart's
     void layoutStrums();
     Vector2 strumCenter(int side, int lane) const;
     scene::Strum& strum(int side, int lane);
@@ -129,6 +134,10 @@ private:
     void drawDead();
     void drawLoading();
     void drawDebugLog();
+    void drawWatermark();
+    void updateVisualizer(double dt);
+    void drawVisualizer() const;
+    Rectangle visualizerArea() const;
     bool hudShown(const char* name, float* alpha = nullptr) const;
     // Psych's HUD objects (healthBar, iconP1, iconP2, scoreTxt, timeBar,
     // timeTxt, botplayTxt): they start where Psych 0.7.3 puts them, scripts
@@ -169,7 +178,7 @@ private:
     void psychHoldRefresh();
     void handleBuiltinEvent(const psych::ChartEvent& e);
     scene::Character* charForSide(int side);
-    std::string singAnim(int lane, uint8_t flags) const;
+    std::string singAnim(int side, int lane, uint8_t flags) const;
     void loadIcons();
     void updateSounds(double dt);
     void releaseAudio();
@@ -182,6 +191,7 @@ private:
     bool playVideoOnTop(const std::string& tag, const std::string& name, bool loop) override;
     // JS Engine events: camera twist, fake length, popups, credits, bot energy...
     bool handleJsEngineEvent(const psych::ChartEvent& e);
+    bool handleDekEvent(const psych::ChartEvent& e);
     void updateJsEngine(double dt);
     void drawNotices();
     void drawBotEnergy();
@@ -234,6 +244,7 @@ private:
     Stage stage_;
     CharacterState left_, right_;
     Color leftColor_{}, rightColor_{};
+    AudioVisualizer vis_;  // issue #24: the bars in the top-right corner
     bool playerLeft_ = false;
     double songMs_ = -1e9, leadMs_ = 0, rate_ = 1.0, speedMult_ = 1.0;
     float gameW_ = gfx::W;  // Flixel's FlxG.width (scripts may narrow the picture)
@@ -241,8 +252,8 @@ private:
     int lastBeat_ = -100000, lastStep_ = -100000, lastSection_ = -100000, lastFocus_ = -1;
     float camZoom_ = 1, hudZoom_ = 1, beatPulse_ = 0, minePulse_ = 0, healthShown_ = 1;
     Vector2 camFocus_{640, 370};
-    float confirm_[2][9] = {};
-    int heldCount_[9] = {};
+    float confirm_[2][kMaxKeys] = {};
+    int heldCount_[kMaxKeys] = {};
     std::vector<int> keyLane_ = std::vector<int>(Input::kMaxCodes, -1);
     std::vector<Popup> popups_;
     // Notes per second for the note counter (JS Engine / H-Slice): hits in the last second.
@@ -271,10 +282,14 @@ private:
     float pauseScroll_ = 0;  // the Psych pause menu's items glide to the selection
     double pausedAt_ = 0;
     Music pauseMusic_{};     // Psych's breakfast, fading in while paused
+    // The scene as it stood when the game paused: shown under the pause menu
+    // instead of drawing the whole scene again every frame (nothing moves).
+    Texture2D pauseShot_{};
+    void freePauseShot();
     float pauseMusicVol_ = 0;
     double loadStartReal_ = 0;  // nowSec() when loading started (--perf)
     double deadAt_ = 0, loadStart_ = 0, lastHitsound_ = 0, lastMissSfx_ = 0, waitStart_ = 0, endWaitStart_ = 0;
-    double lastSplash_[9] = {};
+    double lastSplash_[kMaxKeys] = {};
     bool finished_ = false, songStarted_ = false, countdownStarted_ = false, endRequested_ = false;
     double songStartAt_ = -1;  // when the song started (Psych's time bar fades in)
     double scoreBopAt_ = -10;  // last note you hit (Psych's score text zoom)
@@ -316,7 +331,7 @@ private:
     bool hasPsychIcon_[2] = {false, false};
     uint32_t barColor_[2] = {0xFF0000, 0x66FF33};
     bool customBarColors_ = false;
-    double holdRefresh_[2][9] = {};
+    double holdRefresh_[2][kMaxKeys] = {};
     RenderTexture2D hudRt_{};
     std::string ratingNameOverride_, ratingFcOverride_;
     double speedTweenFrom_ = 1, speedTweenTo_ = 1, speedTweenT_ = 0, speedTweenDur_ = 0;
@@ -327,6 +342,11 @@ private:
     // JS Engine events
     bool camTwist_ = false, twisted_ = false;
     double twistIntensity_ = 0;
+    // Dek Engine's "Camera rotate on": the game camera sways, value 2 degrees
+    // each way, value 1 how fast (radians a second of song), until "Camera rotate off".
+    bool camRotate_ = false;
+    double camRotateSpeed_ = 1, camRotateAngle_ = 0, camRotatePhase_ = 0;
+    std::vector<std::string> scriptedEvents_;  // events with a custom_events script of their own
     double fakeLenMs_ = -1, fakeLenFrom_ = 0, fakeLenTo_ = 0, fakeLenT_ = 0, fakeLenDur_ = 0;
     std::string songNameShown_;  // "Change Song Name" ("" = the chart's title)
     int rainbowEndStep_ = -1;
@@ -341,8 +361,8 @@ private:
     bool botEnergyOn_ = false, noEnergy_ = false, usingBotEnergy_ = false;
     double botEnergy_ = 1, energyDrain_ = 1, energyRefill_ = 1, energyCooldown_ = 0;
     float energyAlpha_ = 0;
-    bool prevKeys_[9] = {};
-    bool keyNow_[9] = {};
+    bool prevKeys_[kMaxKeys] = {};
+    bool keyNow_[kMaxKeys] = {};
     bool prevMouse_[3] = {}, mouseNow_[3] = {};
     long long lastCombo_ = 0;
     bool backdrop_ = false;
@@ -351,7 +371,7 @@ private:
     Replay record_, playback_;
     bool replaying_ = false;
     size_t replayIdx_ = 0;
-    bool touchDown_[9] = {};
+    bool touchDown_[kMaxKeys] = {};
     void laneDown(int lane, double t);
     void laneUp(int lane, double t);
     void handleTouch();

@@ -78,8 +78,8 @@ Options → DEBUG → **Lua note callbacks** OFF stops these four note callbacks
 
 | Callback | When |
 |---|---|
-| `onTimerCompleted(tag, loops, loopsLeft)` | A `runTimer` timer fires (every loop). |
-| `onTweenCompleted(tag)` | A tween (`doTweenX`, `startTween`, `noteTweenAlpha`...) has finished. |
+| `onTimerCompleted(tag, loops, loopsLeft)` | A `runTimer` timer fires (every loop). A timer started with a `nil` tag gives `nil`. |
+| `onTweenCompleted(tag)` | A tween (`doTweenX`, `startTween`, `noteTweenAlpha`...) has finished. A tween started with a `nil` tag gives `nil`. |
 | `onSoundFinished(tag)` | A sound played with a tag has finished. |
 | `onVideoFinished(tag)` | A video has finished: its tag, or `'cutscene'` for `startVideo`. |
 

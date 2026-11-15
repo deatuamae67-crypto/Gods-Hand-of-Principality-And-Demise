@@ -14,7 +14,11 @@ See also: [Editors](Editors.md), [Mods](Mods.md).
 | God's Hand binary | `.ghc` (below) |
 | Audio only | a folder with a song and no chart: AutoChart makes one for every track of 30 s or more |
 
-Charts can have 1 to 9 keys: `keyCount`, or `mania` (Dave & Bambi, Kade, Andromeda, Psych Extra Keys, Shaggy). The notes decide which numbering a chart uses; a chart without either has 4 keys, as in Psych. Options → GAMEPLAY → Extra keys OFF plays everything with 4 keys.
+Charts can have 1 to 18 keys a side: `keyCount`, or `mania` (Dave & Bambi, Kade, Andromeda, Psych Extra Keys up to `mania` 17 for 18 keys, Shaggy), or Denpa Engine's `options.mania`. The notes decide which numbering a chart uses; a chart without either has 4 keys, as in Psych. Options → GAMEPLAY → Extra keys OFF plays everything with 4 keys.
+
+- **10 to 18 keys** use the lane widths, arrow directions and keys of the extra keys scripts of JS Engine mods (18 keys: `Q W E R A S D F V N H J K L U I O P`).
+- **Leather Engine** charts can give each side its own key count: `keyCount` is the opponent's and `playerKeyCount` the player's. A note's value belongs to the side the section is on when it is under that side's key count, and to the other side otherwise; its lane is the value modulo its side's keys, as in Leather.
+- **Scripts that fake extra keys** in a 4-key engine (the "Extra Keys Script" of JS Engine mods, which builds its own arrows) do not run: the game plays the chart's keys itself.
 
 ## Huge charts
 
@@ -40,3 +44,11 @@ The file layout is described at the top of `src/chart_binary.cpp`.
 ## Events
 
 Events come from the chart's own `events` list and from `events.json` beside it. Psych's events, JS Engine's (Set/Tween Camera Zoom, Camera Bopping, Camera Twist, Change Note Multiplier, Rainbow Eyesore...) and V-Slice's (FocusCamera, ZoomCamera, SetCameraBop) are built in. Any other event runs the mod's `custom_events/<name>.lua` (see [Callbacks](Callbacks.md#events)).
+
+Dek Engine (Vs Dek V2) builds some events into its executable, so its songs use them with no script. God's Hand plays these, unless the mod has a `custom_events` script of the same name:
+
+| Event | Value 1 | Value 2 |
+|---|---|---|
+| Camera rotate on | how fast the game camera sways (radians a second, in song time) | how far it sways each way, in degrees |
+| Camera rotate off | - | - (the camera goes straight again) |
+| Flash | how long a white flash over everything lasts, in seconds | how strong it is (1 = full) |

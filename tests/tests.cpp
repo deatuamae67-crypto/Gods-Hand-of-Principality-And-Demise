@@ -16,7 +16,9 @@
 #include "common.hpp"
 #include "composer.hpp"
 #include "json.hpp"
+#include "keys.hpp"
 #include "session.hpp"
+#include "spectrum.hpp"
 
 using namespace gh;
 
@@ -203,6 +205,131 @@ static void testPsychV1AndExtraKeys() {
     CHECK(s.opponentHits == expect);
     CHECK(s.totalPlayerNotes == 65535 && s.totalOpponentNotes == 65535);
     CHECK(fmtThousands(expect) == "6,553,500,000");
+}
+
+// Psych Extra Keys up to 18 keys (mania 17), Denpa's "options" mania and
+// Leather Engine's own key count for each side.
+static void testExtraKeys18() {
+    // Notes on every value 0-35, in sections on both sides.
+    auto ekChart = [](const std::string& fields, int values, bool alsoOpponentSection = true) {
+        std::string j = R"({"song": {"song": "EK", "bpm": 150, )" + fields + R"(, "notes": [)";
+        for (int sec = 0; sec < (alsoOpponentSection ? 2 : 1); ++sec) {
+            j += std::string(sec ? "," : "") + R"({"mustHitSection": )" + (sec ? "false" : "true") + R"(, "sectionNotes": [)";
+            for (int i = 0; i < values * 3; ++i)
+                j += (i ? "," : "") + std::string("[") + std::to_string(sec * 2000 + i * 10) + "," + std::to_string(i % values) + ",0]";
+            j += "]}";
+        }
+        return j + "]}}";
+    };
+    Chart c;
+    std::string err;
+    // slidenoteification 9 (Normal): "mania": 17 and values up to 35.
+    CHECK(parseChart(ekChart(R"("mania": 17)", 36), "Normal", c, err) && c.keys == 18);
+    CHECK(c.notes.size() == 216 && c.playerNotes == 108 && c.opponentNotes == 108);
+    CHECK(c.keysOf(0) == 18 && c.keysOf(1) == 18);
+    {
+        bool lanes[2][18] = {};
+        for (const Note& n : c.notes) lanes[n.side][n.lane] = true;
+        int used = 0;
+        for (auto& side : lanes)
+            for (bool b : side) used += b;
+        CHECK(used == 36);  // every lane of both sides
+    }
+    // Its Nerfed chart keeps "mania": 17 but is a 4-key chart (values 0-7, most
+    // on the section's own side): 4 keys, every note kept.
+    CHECK(parseChart(ekChart(R"("mania": 17)", 8), "Nerfed", c, err) && c.keys == 4 && c.notes.size() == 48);
+    // Extra keys off: 4 keys whatever the chart says.
+    CHECK(parseChart(ekChart(R"("mania": 17)", 36), "Normal", c, err, {}, false) && c.keys == 4);
+    CHECK(c.notes.size() == 216);
+    // A "keyCount" (Leather Engine) of 1 to 18.
+    CHECK(parseChart(ekChart(R"("keyCount": 14)", 28), "Hard", c, err) && c.keys == 14 && c.notes.size() == 168);
+    CHECK(parseChart(ekChart(R"("keyCount": 19)", 8), "Hard", c, err) && c.keys == 4);  // out of range: ignored
+
+    // Denpa Engine: Extra Keys' "mania" in "options" (7 = 8 keys).
+    CHECK(parseChart(ekChart(R"("options": {"mania": 7})", 16), "Insanity", c, err) && c.keys == 8);
+    CHECK(c.playerNotes == 48 && c.opponentNotes == 48);
+    CHECK(parseChart(ekChart(R"("options": {"mania": 17})", 36), "Insanity", c, err) && c.keys == 18);
+
+    // Leather Engine: "keyCount" is the opponent's and "playerKeyCount" the
+    // player's. A value under the section side's key count is that side's,
+    // the rest the other side's; the lane is the value modulo that side's keys.
+    const char* leather = R"({"song": {"song": "L", "bpm": 120, "keyCount": 4, "playerKeyCount": 6, "notes": [
+      {"mustHitSection": true, "sectionNotes": [[0, 0, 0], [10, 5, 0], [20, 6, 0], [30, 9, 0]]},
+      {"mustHitSection": false, "sectionNotes": [[2000, 3, 0], [2010, 4, 0], [2020, 9, 0]]}]}})";
+    CHECK(parseChart(leather, "Hard", c, err));
+    CHECK(c.keys == 6 && c.keysOf(0) == 4 && c.keysOf(1) == 6);
+    CHECK(c.notes.size() == 7 && c.playerNotes == 4 && c.opponentNotes == 3);
+    if (c.notes.size() == 7) {
+        CHECK(c.notes[0].side == 1 && c.notes[0].lane == 0);
+        CHECK(c.notes[1].side == 1 && c.notes[1].lane == 5);
+        CHECK(c.notes[2].side == 0 && c.notes[2].lane == 2);  // 6 % 4
+        CHECK(c.notes[3].side == 0 && c.notes[3].lane == 1);  // 9 % 4
+        CHECK(c.notes[4].side == 0 && c.notes[4].lane == 3);
+        CHECK(c.notes[5].side == 1 && c.notes[5].lane == 4);  // 4 % 6
+        CHECK(c.notes[6].side == 1 && c.notes[6].lane == 3);  // 9 % 6
+    }
+    c.mirror();  // playing as the opponent swaps the sides' key counts too
+    CHECK(c.keysOf(0) == 6 && c.keysOf(1) == 4);
+    // Both sides the same: a plain key count.
+    CHECK(parseChart(ekChart(R"("keyCount": 7, "playerKeyCount": 7)", 14), "Hard", c, err));
+    CHECK(c.keys == 7 && c.sideKeys[0] == 0 && c.sideKeys[1] == 0);
+    CHECK(parseChart(leather, "Hard", c, err, {}, false) && c.keys == 4 && c.sideKeys[0] == 0);
+
+    // The bot plays every lane of an 18-key chart, holds included.
+    CHECK(parseChart(ekChart(R"("mania": 17)", 36, false), "Normal", c, err) && c.keys == 18);
+    Note hold;
+    hold.time = 1500;
+    hold.length = 400;
+    hold.lane = 17;
+    hold.side = 1;
+    c.notes.push_back(hold);
+    c.finalize(150);
+    Session s;
+    SessionConfig bot;
+    bot.botplay = true;
+    s.init(c, bot);
+    CHECK(s.keys() == 18);
+    s.update(3000);
+    CHECK(s.misses == 0 && s.judged() == (long long)s.totalPlayerNotes && s.accuracy() > 0.999);
+    // By hand: lane 17 is the eighteenth key.
+    s.init(c, SessionConfig{});
+    s.press(17, 1500);
+    s.update(1700);
+    CHECK(s.isHolding(1, 17));
+    s.release(17, 1950);
+    s.update(2000);
+    CHECK(!s.isHolding(1, 17));
+
+    // The tables for 10 to 18 keys: one key and one direction per lane.
+    for (int k = 10; k <= kMaxKeys; ++k) {
+        const char* keysRow = ek::kControls[k - 10];
+        CHECK(int(std::strlen(keysRow)) == k);
+        for (int a = 0; a < k; ++a) {
+            CHECK(ek::kDirs[k - 10][a] >= 0 && ek::kDirs[k - 10][a] <= 4);
+            for (int b = a + 1; b < k; ++b) CHECK(keysRow[a] != keysRow[b]);
+        }
+        CHECK(ek::kLaneWidth[k] <= ek::kLaneWidth[k - 1]);
+        CHECK(ek::kLaneWidth[k] * float(k) <= 640.0f);  // a side fits on half the screen
+    }
+}
+
+// The audio visualizer's bars: a tone lights the bar of its pitch, silence lets
+// every bar fall.
+static void testSpectrum() {
+    Spectrum sp(40, 4096);
+    CHECK(sp.fftSize() == 4096 && sp.bars() == 40);
+    std::vector<float> tone(4096), quiet(4096, 0.0f);
+    for (int i = 0; i < 4096; ++i) tone[size_t(i)] = 0.5f * float(std::sin(2.0 * 3.14159265358979 * 1000.0 * i / 44100.0));
+    for (int k = 0; k < 10; ++k) sp.analyse(tone.data(), 0.016);
+    const auto& t = sp.target();
+    const int best = int(std::max_element(t.begin(), t.end()) - t.begin());
+    CHECK(std::fabs(std::log2(sp.centreHz(best) / 1000.0)) < 0.15);  // the bar of 1 kHz
+    CHECK(t[size_t(best)] > 0.8f && sp.levels()[size_t(best)] > 0.7f && sp.peaks()[size_t(best)] >= sp.levels()[size_t(best)]);
+    for (int b = 0; b < sp.bars(); ++b)
+        if (std::fabs(std::log2(sp.centreHz(b) / 1000.0)) > 2.0) CHECK(t[size_t(b)] < 0.1f);  // two octaves off: dark
+    for (int k = 0; k < 40; ++k) sp.analyse(quiet.data(), 0.05);
+    CHECK(*std::max_element(sp.levels().begin(), sp.levels().end()) < 0.01f && sp.energy() < 0.01f);
+    CHECK(*std::max_element(sp.peaks().begin(), sp.peaks().end()) < 0.01f);
 }
 
 static void testVSlice() {
@@ -475,6 +602,8 @@ int main(int argc, char** argv) {
     testJson();
     testLegacyChart();
     testPsychV1AndExtraKeys();
+    testExtraKeys18();
+    testSpectrum();
     testVSlice();
     testSession();
     runPsychTests();

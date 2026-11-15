@@ -24,7 +24,7 @@ void Session::init(const Chart& chart, const SessionConfig& cfg) {
         if (!(w > 0)) w = 1.0;
     keys_ = chart.keys;
     for (int s = 0; s < 2; ++s)
-        for (int l = 0; l < 9; ++l) {
+        for (int l = 0; l < kMaxKeys; ++l) {
             lanes_[s][l].clear();
             cursor_[s][l] = 0;
             activeHold_[s][l] = -1;

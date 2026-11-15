@@ -26,7 +26,7 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Opponent strums | Light up the opponent's receptors when they sing. | on / off |
 | Note splashes | Bursts of light on DIVINE hits. | on / off |
 | Touch controls | Tap the lanes on a touchscreen (a mouse click counts as a tap). | on / off |
-| Extra keys | Charts made for 5 to 9 keys keep them. OFF: every chart has 4 keys, like Psych and JS Engine. | on / off |
+| Extra keys | Charts made for 1 to 18 keys keep them, as in Psych Extra Keys. OFF: every chart has 4 keys, like Psych and JS Engine. | on / off |
 
 ## Controls  (4 keys)
 
@@ -70,6 +70,8 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Time bar | The bar at the top of the screen, as in Psych. | Time left, Time elapsed, Song name, Off |
 | Health bar opacity | The health bar and the icons. | 0 to 1 |
 | Hide HUD | Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD. | on / off |
+| Watermark | "God's Hand" and its version in the bottom-left corner of songs, as JS Engine shows its own. | on / off |
+| Audio visualizer | Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it is, how thick the notes are, your hits and misses, and your health. | on / off |
 | Score text zoom on hit | The score line grows a little on each note you hit, as in Psych. | on / off |
 | Botplay text | BOTPLAY (or REPLAY) on screen while the game plays by itself. | on / off |
 | Combo stacking | Ratings and combo numbers pile up. OFF: only the latest one, easier to read. | on / off |

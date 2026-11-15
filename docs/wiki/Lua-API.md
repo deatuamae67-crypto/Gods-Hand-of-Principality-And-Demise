@@ -95,6 +95,8 @@ See also: [Callbacks](Callbacks.md), [HScript](HScript.md), [Shaders](Shaders.md
 
 ## Tweens and timers
 
+Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new one stops the one with the same tag first, even when its object is not found, and `nil` and `""` are tags like any other (so tweens started every frame with a `nil` tag replace each other instead of piling up).
+
 | Function | What it does |
 |---|---|
 | `cancelTimer(tag)` | Stops a timer. |

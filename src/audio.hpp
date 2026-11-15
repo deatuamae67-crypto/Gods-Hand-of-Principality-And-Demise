@@ -89,6 +89,13 @@ public:
     bool offline() const { return offline_.load(); }
     void mixOffline(float* out, unsigned frames);  // the next `frames` stereo frames
 
+    // The song as it was last mixed (the tracks in mono, before the music
+    // volume), for the audio visualizer: copies the `n` samples that end
+    // `behind` samples before the newest one. Any thread.
+    static constexpr size_t kScopeSize = 16384;  // a power of two
+    void scope(float* out, size_t n, size_t behind = 0) const;
+    uint64_t scopeWritten() const { return scopeWrite_.load(std::memory_order_acquire); }
+
 private:
     double estimate(double now) const;
 
@@ -128,6 +135,8 @@ private:
     // streamed track has not decoded that part yet (silence, pos kept).
     bool mixTracks(float* out, unsigned frames, double& pos);
     std::atomic<double> loopStart_{0}, loopEnd_{0};
+    std::unique_ptr<std::atomic<float>[]> scopeBuf_{new std::atomic<float>[kScopeSize]()};
+    std::atomic<uint64_t> scopeWrite_{0};  // samples written so far
     float curVol_[kTrackCount] = {1, 1, 1};
     float fadeGain_ = 1.0f;
     bool audioOk_ = false;

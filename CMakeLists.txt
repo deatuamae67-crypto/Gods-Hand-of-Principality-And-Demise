@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 1.9.0 LANGUAGES C CXX)
+project(GodsHand VERSION 1.10.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -106,6 +106,7 @@ add_library(gh_core STATIC
   src/autochart.cpp
   src/note_raster.cpp
   src/frame_pacer.cpp
+  src/spectrum.cpp
   src/android_encoder.cpp
 )
 target_include_directories(gh_core PUBLIC src)
@@ -287,6 +288,7 @@ if(GH_BUILD_GAME)
     src/note_renderer.cpp
     src/sysinfo.cpp
     src/touch_ui.cpp
+    src/visualizer.cpp
   )
   if(ANDROID)
     # NativeActivity loads libgodshand.so; raylib's android_main() calls main().

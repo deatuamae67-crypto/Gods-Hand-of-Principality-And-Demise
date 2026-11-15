@@ -339,6 +339,17 @@ void Mixer::mixOffline(float* out, unsigned frames) {
     pos_.store(pos);
 }
 
+void Mixer::scope(float* out, size_t n, size_t behind) const {
+    const uint64_t w = scopeWrite_.load(std::memory_order_acquire);
+    behind = std::min(behind, kScopeSize / 2);
+    n = std::min(n, kScopeSize - behind);
+    const uint64_t end = w > behind ? w - behind : 0;
+    for (size_t i = 0; i < n; ++i) {
+        const uint64_t at = end - n + i;  // may wrap below 0: before the first sample
+        out[i] = end >= n - i ? scopeBuf_[at & (kScopeSize - 1)].load(std::memory_order_relaxed) : 0.0f;
+    }
+}
+
 void Mixer::hitAt(double songSec, int side, float volume) {
     side = side ? 1 : 0;
     if (volume <= 0) return;
@@ -496,6 +507,7 @@ bool Mixer::mixTracks(float* out, unsigned frames, double& posInOut) {
         }
     }
     unsigned f = 0;
+    uint64_t sw = scopeWrite_.load(std::memory_order_relaxed);
     for (; f < frames && !stalled; ++f) {
         float l = 0, r = 0;
         for (int t = 0; t < kTrackCount; ++t) curVol_[t] += (tv[t] - curVol_[t]) * 0.004f;
@@ -532,6 +544,7 @@ bool Mixer::mixTracks(float* out, unsigned frames, double& posInOut) {
             }
             if (stalled) break;
         }
+        scopeBuf_[sw++ & (kScopeSize - 1)].store(0.5f * (l + r), std::memory_order_relaxed);
         if (fadeGain_ < fTarget) fadeGain_ = std::min(fTarget, fadeGain_ + fStep);
         else if (fadeGain_ > fTarget) fadeGain_ = std::max(fTarget, fadeGain_ - fStep);
         const float g = vol * fadeGain_;
@@ -541,6 +554,7 @@ bool Mixer::mixTracks(float* out, unsigned frames, double& posInOut) {
         if (loop && le > ls && pos >= le) pos -= (le - ls);
     }
     if (stalled) std::memset(out + 2 * size_t(f), 0, size_t(frames - f) * 2 * sizeof(float));
+    scopeWrite_.store(sw, std::memory_order_release);
     if (any) {
         audioReadEnd();
         const size_t at = pos > 0 ? size_t(pos) : 0;  // the decoders work from here

@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "app.hpp"
+#include "scene_draw.hpp"
 #include "psych_ui.hpp"
 
 #include <chrono>
@@ -441,6 +442,7 @@ int App::run(int argc, char** argv) {
     VideoRenderer::waitIdle(120);
     state_.reset();
     next_.reset();
+    SceneRenderer::releaseKept();
     waitForBackgroundJobs();
     mixer.shutdown();
     psychUi().unload();
@@ -481,6 +483,7 @@ void App::frame() {
         if (fade_ >= 1.0f) {
             fade_ = 1.0f;
             state_ = std::move(next_);
+            if (!state_->keepsPictures()) SceneRenderer::releaseKept();  // a menu: the last song's pictures go
             input.clear();
             state_->enter();
             logScreen(*state_);
@@ -640,7 +643,7 @@ void App::drawFpsPanel() {
                              (memPeak_ ? "  (peak " + sysinfo::formatBytes(memPeak_) + ")" : std::string()),
                          dim});
     if (s.fpsFrameTimes)
-        lines.push_back({TextFormat("Frame %.2f ms  (update %.2f, draw %.2f, worst %.1f)", dt * 1000.0, updateMs, drawMs, worstFrameMs), dim});
+        lines.push_back({TextFormat("Frame %.2f ms  update %.2f  draw %.2f  worst %.1f", dt * 1000.0, updateMs, drawMs, worstFrameMs), dim});
     const sysinfo::Hardware& hw = sysinfo::hardware();
     if (s.fpsUsage) {
         std::string l = TextFormat("CPU %.0f%% of %d threads", cpuUse_, hw.threads);
@@ -663,31 +666,94 @@ void App::drawFpsPanel() {
         if (!hw.gl.empty()) lines.push_back({"OpenGL " + hw.gl, dim});
         if (!hw.os.empty()) lines.push_back({hw.os, dim});
     }
-    const float size = 17, lineH = 20;
-    float w = 0;
-    for (auto& l : lines) w = std::max(w, gfx::measure(gfx::FontId::Ui, l.first, size).x);
-    const float graphH = s.fpsFrameTimes ? 44.0f : 0.0f;
-    if (s.fpsFrameTimes) w = std::max(w, 240.0f);
+    // Small and narrow, so that it fits in a corner of a song's HUD: the FPS
+    // in 18 pixels, the rest in 14, lines cut at 330 pixels.
+    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = 330;
+    const bool fpsFirst = s.showFps;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        std::string& t = lines[i].first;
+        const float sz = i == 0 && fpsFirst ? firstSize : size;
+        if (gfx::measure(gfx::FontId::Ui, t, sz).x <= maxW) continue;
+        while (t.size() > 4 && gfx::measure(gfx::FontId::Ui, t + "...", sz).x > maxW) {
+            t.pop_back();
+            while (!t.empty() && (static_cast<unsigned char>(t.back()) & 0xC0) == 0x80) t.pop_back();  // whole characters
+        }
+        t += "...";
+    }
+    float w = 0, textH = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const bool first = i == 0 && fpsFirst;
+        w = std::max(w, gfx::measure(gfx::FontId::Ui, lines[i].first, first ? firstSize : size).x);
+        textH += first ? firstH : lineH;
+    }
+    const float graphW = 200, graphH = s.fpsFrameTimes ? 36.0f : 0.0f;
+    if (graphH > 0) w = std::max(w, graphW);
     const bool panel = lines.size() > 1 || graphH > 0;
-    if (panel) DrawRectangleRec({2, 2, w + 14, lines.size() * lineH + graphH + 8}, gfx::fade(BLACK, 0.55f));
-    float y = 5;
-    for (auto& l : lines) {
-        gfx::text(gfx::FontId::Ui, l.first, 8, y, l.first == lines.front().first && s.showFps ? 20.0f : size, l.second, gfx::Align::Left, 1.5f);
-        y += lineH;
+    const float pw = w + 12, ph = textH + graphH + 6;
+    // Where: the top left corner, unless the screen has something there (a
+    // song's arrows, health bar, score, time bar, the touch buttons): then the
+    // first corner that is clear, or the one least in the way. Checked twice a
+    // second, and it only moves when where it is gets covered.
+    std::vector<Rectangle> busy;
+    if (state_) state_->busyRects(busy);
+    if (touchMode) {
+        std::vector<Rectangle> keys;
+        touch.buttonRects(keys);
+        for (const Rectangle& r : keys) {
+            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
+            busy.push_back({a.x, a.y, b.x - a.x, b.y - a.y});
+        }
+    }
+    const float W = float(gfx::W), H = float(gfx::H);
+    const Vector2 spots[6] = {{2, 2}, {2, H - ph - 28}, {W - pw - 2, 2}, {W - pw - 2, H - ph - 2}, {2, (H - ph) * 0.5f},
+                              {W - pw - 2, (H - ph) * 0.5f}};
+    auto covered = [&](int k) {
+        const Rectangle r{spots[k].x, spots[k].y, pw, ph};
+        float area = 0;
+        for (const Rectangle& b : busy) {
+            const float ix = std::min(r.x + r.width, b.x + b.width) - std::max(r.x, b.x);
+            const float iy = std::min(r.y + r.height, b.y + b.height) - std::max(r.y, b.y);
+            if (ix > 0 && iy > 0) area += ix * iy;
+        }
+        return area;
+    };
+    if (busy.empty()) {
+        fpsSpot_ = 0;
+    } else if (now - fpsSpotAt_ >= 0.5) {
+        fpsSpotAt_ = now;
+        const float here = covered(fpsSpot_);
+        if (here > 0) {
+            int best = 0;
+            float bestArea = covered(0);
+            for (int k = 1; k < 6 && bestArea > 0; ++k) {
+                const float a = covered(k);
+                if (a < bestArea) { best = k; bestArea = a; }
+            }
+            if (bestArea < here) fpsSpot_ = best;
+        }
+    }
+    const float px = spots[fpsSpot_].x, py = spots[fpsSpot_].y;
+    if (panel) DrawRectangleRec({px, py, pw, ph}, gfx::fade(BLACK, 0.55f));
+    float y = py + 3;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const bool first = i == 0 && fpsFirst;
+        gfx::text(gfx::FontId::Ui, lines[i].first, px + 6, y, first ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
+        y += first ? firstH : lineH;
     }
     if (graphH > 0) {
-        // One bar per frame (oldest on the left), 0 to 50 ms high; green under
-        // 17 ms (60 FPS), yellow under 34, red above.
-        const float gx = 8, gy = y + 4, gh = graphH - 8;
-        DrawRectangleRec({gx, gy, 240, gh}, gfx::fade(BLACK, 0.4f));
-        DrawLineEx({gx, gy + gh - gh * 16.7f / 50.0f}, {gx + 240, gy + gh - gh * 16.7f / 50.0f}, 1, gfx::fade(WHITE, 0.25f));
+        // One bar per frame (the newest on the right), 0 to 50 ms high; green
+        // under 17 ms (60 FPS), yellow under 34, red above.
+        const float gx = px + 6, gy = y + 2, gh = graphH - 6;
+        DrawRectangleRec({gx, gy, graphW, gh}, gfx::fade(BLACK, 0.4f));
+        DrawLineEx({gx, gy + gh - gh * 16.7f / 50.0f}, {gx + graphW, gy + gh - gh * 16.7f / 50.0f}, 1, gfx::fade(WHITE, 0.25f));
         const size_t n = frameHist_.size();
-        for (size_t i = 0; i < n; ++i) {
+        const size_t skip = n > size_t(graphW) ? n - size_t(graphW) : 0;  // the last 200 frames
+        for (size_t i = skip; i < n; ++i) {
             const float ms = frameHist_[(frameHistPos_ + i) % n];
             if (ms <= 0) continue;
             const float hgt = std::min(gh, gh * ms / 50.0f);
             const Color c = ms < 17.5f ? Color{110, 230, 120, 255} : (ms < 34.0f ? Color{255, 210, 90, 255} : Color{255, 90, 90, 255});
-            DrawRectangleRec({gx + float(i), gy + gh - hgt, 1, hgt}, c);
+            DrawRectangleRec({gx + float(i - skip), gy + gh - hgt, 1, hgt}, c);
         }
     }
 }

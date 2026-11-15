@@ -259,6 +259,7 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
                 fr.rotated = a.rotated;
                 letters_.push_back({a.name, fr});
             }
+            letterKnown_.fill(false);  // the cached letters pointed into the old list
             if (alphabet_.id) ++found;
         }
     }
@@ -325,6 +326,7 @@ void PsychUi::unload() {
     unloadTex(timeBar_);
     unloadTex(alphabet_);
     letters_.clear();
+    letterKnown_.fill(false);
     pauseMusic_.clear();
     teaTime_.clear();
     fontScale_ = fontAscent_ = 1.0f;
@@ -602,6 +604,16 @@ float PsychUi::lineHeight(float size) const { return size * fontScale_; }
 // instance 10000" in Psych 0.7 and later; symbols go by the character itself
 // ("& bold") or by name ("question bold", "question mark bold"...).
 const PsychUi::Frame* PsychUi::letter(char c) const {
+    const unsigned char u = (unsigned char)c;
+    if (u >= letterOf_.size()) return findLetter(c);
+    if (!letterKnown_[u]) {
+        letterOf_[u] = findLetter(c);
+        letterKnown_[u] = true;
+    }
+    return letterOf_[u];
+}
+
+const PsychUi::Frame* PsychUi::findLetter(char c) const {
     std::vector<std::string> wants;
     if (std::isalpha((unsigned char)c)) {
         wants = {std::string(1, char(std::toupper((unsigned char)c))) + " bold",

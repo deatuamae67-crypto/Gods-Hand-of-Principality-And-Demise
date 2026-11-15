@@ -25,6 +25,12 @@ public:
     void preload(scene::Scene& sc);
     double lastPreloadMs = 0;  // how long the last preload took
     int lastPreloadCount = 0;  // pictures it loaded
+    int lastPreloadKept = 0;   // pictures it found uploaded already (kept from the last song)
+    // clear() keeps the pictures uploaded (up to a budget) for whatever loads
+    // next: a retry, a restart from the pause menu, or the next song with the
+    // same stage or characters takes them as they are, without decoding them
+    // again. The next preload frees what it does not use; so does this.
+    static void releaseKept();
     // Draws every object on camera `cam` in scene order. Markers call `marker`
     // (gfGroup, hud); built-in characters call `builtin`.
     void drawCamera(scene::Scene& sc, scene::Cam cam,
@@ -34,6 +40,7 @@ public:
     // World point -> canvas point for a camera and scroll factor.
     static Vector2 toScreen(const scene::Camera& c, float x, float y, float sfx, float sfy);
     Texture2D* texture(const std::string& file);
+    bool takeKept(const std::string& file);  // a kept picture of this file, if it has not changed
     // Textures owned elsewhere (video frames), drawn for graphics whose file is `key`.
     void setDynamicTexture(const std::string& key, const Texture2D& t) { dynamic_[key] = t; }
     void removeDynamicTexture(const std::string& key) { dynamic_.erase(key); }

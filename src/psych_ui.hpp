@@ -8,6 +8,7 @@
 // the game's own look.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -124,6 +125,11 @@ private:
     Texture2D alphabet_{};
     std::vector<std::pair<std::string, Frame>> letters_;  // alphabet frames ("A bold0000"...)
     const Frame* letter(char c) const;
+    const Frame* findLetter(char c) const;
+    // letter() for each character, found once: the pause menu draws its
+    // letters every frame, and the atlas holds hundreds of frames.
+    mutable std::array<const Frame*, 128> letterOf_{};
+    mutable std::array<bool, 128> letterKnown_{};
     std::vector<std::pair<int, std::string>> sounds_;  // Sfx id -> file
     std::string menuMusic_, pauseMusic_, teaTime_;
 };

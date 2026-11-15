@@ -120,6 +120,24 @@ std::string str(lua_State* L, int i, const char* def = "") {
     return def;
 }
 
+// Lua tweens and timers are kept by tag as in Psych 0.4 to 0.7.3 and JS
+// Engine: a new one stops the one with the same tag first, and nil and ""
+// are tags like any other (each its own). The game's own untagged tweens use
+// an empty tag, so these two get stand-ins.
+const std::string kNilTag = "\x01nil", kEmptyTag = "\x01";
+std::string tagArg(lua_State* L, int i) {
+    const int t = lua_type(L, i);
+    if (t == LUA_TNIL || t == LUA_TNONE) return kNilTag;
+    std::string s = str(L, i);
+    return s.empty() ? kEmptyTag : s;
+}
+// The tag scripts get back in onTweenCompleted and onTimerCompleted.
+Value tagValue(const std::string& tag) {
+    if (tag == kNilTag) return Value();
+    if (tag == kEmptyTag) return Value(std::string());
+    return Value(tag);
+}
+
 double num(lua_State* L, int i, double def = 0) {
     const int t = lua_type(L, i);
     if (t == LUA_TNUMBER) return lua_tonumber(L, i);
@@ -749,6 +767,7 @@ bool tweenTargetExists(lua_State* L, const std::string& target, const char* fiel
 
 void startFieldTween(lua_State* L, const std::string& tag, const std::string& target, const char* field, double to,
                      double dur, const std::string& ease) {
+    SC(L).cancelTween(tag);  // Psych stops the tag's tween first, found or not
     if (!tweenTargetExists(L, target, field)) {
         warn(L, "tween target not found: " + target);
         return;
@@ -764,7 +783,7 @@ void startFieldTween(lua_State* L, const std::string& tag, const std::string& ta
 }
 
 int tweenField(lua_State* L, const char* field) {
-    startFieldTween(L, str(L, 1), str(L, 2), field, num(L, 3), num(L, 4, 1), str(L, 5, "linear"));
+    startFieldTween(L, tagArg(L, 1), str(L, 2), field, num(L, 3), num(L, 4, 1), str(L, 5, "linear"));
     return 0;
 }
 int l_doTweenX(lua_State* L) { return tweenField(L, "x"); }
@@ -777,10 +796,11 @@ int l_doTweenScaleY(lua_State* L) { return tweenField(L, "scale.y"); }
 
 int l_doTweenColor(lua_State* L) {
     const std::string target = str(L, 2);
+    SC(L).cancelTween(tagArg(L, 1));
     Value cur;
     if (!getAny(L, target + ".color", cur)) { warn(L, "tween target not found: " + target); return 0; }
     scene::Tween tw;
-    tw.tag = str(L, 1);
+    tw.tag = tagArg(L, 1);
     tw.target = target;
     tw.isColor = true;
     tw.c0 = uint32_t(int64_t(scene::toNum(cur))) & 0xFFFFFF;
@@ -800,8 +820,9 @@ std::string strumPath(lua_State* L, int note) {
 }
 
 int noteTween(lua_State* L, const char* field) {
-    const std::string p = strumPath(L, int(num(L, 2)));
-    if (!p.empty()) startFieldTween(L, str(L, 1), p, field, num(L, 3), num(L, 4, 1), str(L, 5, "linear"));
+    const std::string tag = tagArg(L, 1), p = strumPath(L, int(num(L, 2)));
+    SC(L).cancelTween(tag);
+    if (!p.empty()) startFieldTween(L, tag, p, field, num(L, 3), num(L, 4, 1), str(L, 5, "linear"));
     return 0;
 }
 int l_noteTweenX(lua_State* L) { return noteTween(L, "x"); }
@@ -814,7 +835,8 @@ int l_noteTweenScaleY(lua_State* L) { return noteTween(L, "scale.y"); }
 
 int l_startTween(lua_State* L) {
     scene::Tween tw;
-    tw.tag = str(L, 1);
+    tw.tag = tagArg(L, 1);
+    SC(L).cancelTween(tw.tag);
     tw.target = str(L, 2);
     tw.dur = num(L, 4, 1);
     tw.script = S(L).index;
@@ -852,11 +874,11 @@ int l_startTween(lua_State* L) {
     return 0;
 }
 
-int l_cancelTween(lua_State* L) { SC(L).cancelTween(str(L, 1)); return 0; }
+int l_cancelTween(lua_State* L) { SC(L).cancelTween(tagArg(L, 1)); return 0; }
 
 int l_runTimer(lua_State* L) {
     scene::Timer t;
-    t.tag = str(L, 1);
+    t.tag = tagArg(L, 1);
     t.time = num(L, 2, 1);
     t.loops = int(num(L, 3, 1));
     t.script = S(L).index;
@@ -864,7 +886,7 @@ int l_runTimer(lua_State* L) {
     return 0;
 }
 
-int l_cancelTimer(lua_State* L) { SC(L).cancelTimer(str(L, 1)); return 0; }
+int l_cancelTimer(lua_State* L) { SC(L).cancelTimer(tagArg(L, 1)); return 0; }
 
 // ------------------------------------------------------------------- camera --
 
@@ -1760,7 +1782,8 @@ int l_require(lua_State* L) {
 }
 
 int l_doTweenScale(lua_State* L) {
-    const std::string tag = str(L, 1), target = str(L, 2);
+    const std::string tag = tagArg(L, 1), target = str(L, 2);
+    SC(L).cancelTween(tag);
     if (!tweenTargetExists(L, target, "scale.x")) { warn(L, "doTweenScale: object not found: " + target); return 0; }
     scene::Tween tw;
     tw.tag = tag;
@@ -2703,11 +2726,11 @@ void ScriptHost::dispatchCompletions() {
                 continue;
             }
             if (c.timer) {
-                call("onTimerCompleted", {Value(c.tag), Value(double(c.loops)), Value(double(c.left))});
+                call("onTimerCompleted", {tagValue(c.tag), Value(double(c.loops)), Value(double(c.left))});
             } else if (!c.fn.empty()) {
-                call(c.fn.c_str(), {Value(c.tag)});
+                call(c.fn.c_str(), {tagValue(c.tag)});
             } else if (c.tag.rfind("__kade", 0) != 0) {
-                call("onTweenCompleted", {Value(c.tag)});
+                call("onTweenCompleted", {tagValue(c.tag)});
             }
         }
     }

@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "settings.hpp"
+#include "keys.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -66,6 +67,8 @@ bool Settings::load(const std::string& path) {
         else if (k == "timeBar") timeBar = clampv(int(d), 0, 3);
         else if (k == "healthBarAlpha") healthBarAlpha = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hideHud") hideHud = b;
+        else if (k == "watermark") watermark = b;
+        else if (k == "visualizer") visualizer = b;
         else if (k == "scoreZoom") scoreZoom = b;
         else if (k == "botplayText") botplayText = b;
         else if (k == "comboStacking") comboStacking = b;
@@ -128,7 +131,7 @@ bool Settings::save(const std::string& path) const {
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
-      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nscoreZoom=" << scoreZoom
+      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
       << "\nbotplayText=" << botplayText << "\ncomboStacking=" << comboStacking << "\nopponentNotes=" << opponentNotes
       << "\npauseMusic=" << pauseMusic << "\nsickWindow=" << sickWindow << "\ngoodWindow=" << goodWindow << "\nbadWindow=" << badWindow
       << "\nsafeFrames=" << safeFrames << "\nratingOffset=" << ratingOffset << "\nautoPause=" << autoPause << "\nnoReset=" << noReset
@@ -167,6 +170,10 @@ std::vector<std::vector<int>> Settings::laneKeys(int keys) const {
         {KEY_A, KEY_S, KEY_D, KEY_F, KEY_H, KEY_J, KEY_K, KEY_L},
         {KEY_A, KEY_S, KEY_D, KEY_F, KEY_SPACE, KEY_H, KEY_J, KEY_K, KEY_L},
     };
+    if (keys > 9) {  // the extra keys scripts' keys: two rows of the keyboard
+        for (const char* k = ek::kControls[clampv(keys, 10, kMaxKeys) - 10]; *k; ++k) r.push_back({int((unsigned char)*k)});
+        return r;
+    }
     const auto& p = presets[size_t(clampv(keys, 1, 9) - 1)];
     for (int k : p) r.push_back({k});
     return r;

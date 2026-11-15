@@ -14,6 +14,10 @@
 #include "common.hpp"
 #include "rlgl.h"
 
+#ifndef GH_VERSION
+#define GH_VERSION "dev"  // set by CMake from project(VERSION)
+#endif
+
 namespace gh {
 
 using gfx::Align;
@@ -67,6 +71,7 @@ PlayState::~PlayState() {
     stopRendering();
     if (uiFromMod_) app().psychUiForSong({});  // the interface as it was
     stopPauseMusic();
+    freePauseShot();
     scripts_.reset();
     releaseAudio();
     if (hudRt_.id && IsWindowReady()) UnloadRenderTexture(hudRt_);
@@ -127,8 +132,9 @@ void PlayState::update(double dt) {
                 setup();
                 // godshand --perf: where the loading time went.
                 if (a.perf)
-                    std::printf("[load] chart and audio %.0f ms (in the background), setup %.0f ms (%d pictures in %.0f ms)\n",
-                                prepMs, (nowSec() - t0) * 1000.0, renderer_.lastPreloadCount, renderer_.lastPreloadMs);
+                    std::printf("[load] chart and audio %.0f ms (in the background), setup %.0f ms (%d pictures in %.0f ms, %d kept from the last song)\n",
+                                prepMs, (nowSec() - t0) * 1000.0, renderer_.lastPreloadCount, renderer_.lastPreloadMs,
+                                renderer_.lastPreloadKept);
             }
         }
         return;
@@ -261,6 +267,7 @@ void PlayState::update(double dt) {
         if (phase_ != Phase::Playing) return;
     }
     updateJsEngine(dt);
+    updateVisualizer(dt);
     beatPulse_ = std::max(0.0f, beatPulse_ - float(dt) * 4.0f);
     minePulse_ = std::max(0.0f, minePulse_ - float(dt) * 3.0f);
     for (auto& side : confirm_)
@@ -294,7 +301,15 @@ void PlayState::draw() {
         drawLoading();
         return;
     }
-    if (psych_) {
+    // Paused: the game stands still, so the scene is drawn once and its
+    // picture shown under the menu - a phone keeps its frame rate in the
+    // pause menu however heavy the stage, characters and shaders are.
+    const bool shotFits = pauseShot_.id && pauseShot_.width == int(GetScreenWidth() * GetWindowScaleDPI().x) &&
+                          pauseShot_.height == int(GetScreenHeight() * GetWindowScaleDPI().y);
+    if (phase_ == Phase::Paused && !rendering_ && shotFits) {
+        DrawTexturePro(pauseShot_, {0, 0, float(pauseShot_.width), float(pauseShot_.height)},
+                       {0, 0, float(GetScreenWidth()), float(GetScreenHeight())}, {0, 0}, 0, WHITE);
+    } else if (psych_) {
         gfx::setViewWidth(gameW_);
         psychDraw();
         gfx::beginCanvas();
@@ -330,8 +345,16 @@ void PlayState::draw() {
         drawBotEnergy();
         gfx::endCanvas();
     }
+    if (phase_ == Phase::Paused && !rendering_ && !shotFits) {  // the first paused frame (or a new window size)
+        freePauseShot();
+        Image shot = LoadImageFromScreen();
+        if (shot.data) pauseShot_ = LoadTextureFromImage(shot);
+        UnloadImage(shot);
+    }
 
     gfx::beginCanvas();
+    drawVisualizer();
+    drawWatermark();
     if (phase_ == Phase::Paused) drawPause();
     if (phase_ == Phase::Dead) drawDead();
     drawDebugLog();
@@ -378,11 +401,11 @@ void PlayState::setup() {
     rightColor_ = charColor(CharId::Herald);
     stage_.init(entry_->builtin ? entry_->def->stage : 3, gfx::rgb(entry_->color), a.settings.lowDetail, a.settings.flashing);
     keyLane_.assign(Input::kMaxCodes, -1);
-    const auto lk = a.settings.laneKeys(chart_.keys);
+    const auto lk = a.settings.laneKeys(chart_.keysOf(1));  // the player's keys (Leather Engine: its own count)
     for (int l = 0; l < int(lk.size()); ++l)
         for (int code : lk[size_t(l)])
             if (code > 0 && code < Input::kMaxCodes) keyLane_[size_t(code)] = l;
-    for (int l = 0; l < chart_.keys && l < 9; ++l) keyLane_[size_t(kTouchLane + l)] = l;  // on-screen lanes
+    for (int l = 0; l < chart_.keysOf(1) && l < kMaxKeys; ++l) keyLane_[size_t(kTouchLane + l)] = l;  // on-screen lanes
 
     // Script note ids: every note in chart order.
     noteOrder_.clear();
@@ -417,10 +440,13 @@ void PlayState::layoutStrums() {
     scene::Scene& sc = *scene_;
     sc.keys = K;
     sc.strums.assign(size_t(2 * K), scene::Strum{});
-    const float w = std::min(112.0f, 500.0f / float(K));
-    for (int side = 0; side < 2; ++side)
+    for (int side = 0; side < 2; ++side) {
+        // Each side's own lanes (Leather Engine charts: a key count per side).
+        const int Ks = chart_.keysOf(side);
+        const float w = laneWidth(Ks);
         for (int lane = 0; lane < K; ++lane) {
             scene::Strum& st = strum(side, lane);
+            st.visible = lane < Ks;
             st.downScroll = s.downscroll;
             float cx, cy = s.downscroll ? gfx::H - 112.0f : 112.0f;
             if (psych_ && K == 4) {
@@ -436,16 +462,16 @@ void PlayState::layoutStrums() {
                 if (s.middlescroll && side == 0) st.alpha = 0.35f;
             } else {
                 if (s.middlescroll) {
-                    if (side == 1) cx = 640.0f + (float(lane) - (K - 1) * 0.5f) * w;
+                    if (side == 1) cx = 640.0f + (float(lane) - (Ks - 1) * 0.5f) * w;
                     else {
-                        const int half = (K + 1) / 2;
-                        cx = lane < half ? 90.0f + lane * w * 0.8f : gfx::W - 90.0f - float(K - 1 - lane) * w * 0.8f;
+                        const int half = (Ks + 1) / 2;
+                        cx = lane < half ? 90.0f + lane * w * 0.8f : gfx::W - 90.0f - float(Ks - 1 - lane) * w * 0.8f;
                         st.alpha = 0.35f;
                         st.scaleX = st.scaleY = 0.7f * 0.8f;
                     }
                 } else {
                     const bool left = (side == 1) == playerLeft_;
-                    cx = (left ? 320.0f : 960.0f) + (float(lane) - (K - 1) * 0.5f) * w;
+                    cx = (left ? 320.0f : 960.0f) + (float(lane) - (Ks - 1) * 0.5f) * w;
                 }
                 st.x = cx - 56.0f;
                 st.y = cy - 56.0f;
@@ -457,6 +483,7 @@ void PlayState::layoutStrums() {
             st.defX = st.x;
             st.defY = st.y;
         }
+    }
 }
 
 scene::Strum& PlayState::strum(int side, int lane) { return scene_->strums[size_t(side == 0 ? lane : chart_.keys + lane)]; }
@@ -469,7 +496,14 @@ Vector2 PlayState::strumCenter(int side, int lane) const {
     return {s.x + 56.0f, s.y + 56.0f};
 }
 
-float PlayState::noteSize() const { return std::min(112.0f, 500.0f / float(chart_.keys)) * 0.94f; }
+// One lane's width: up to 9 keys the lanes share 500 pixels a side; from 10
+// keys on, the widths of the extra keys scripts (18 keys: 33 pixels).
+float PlayState::laneWidth(int keys) const {
+    const int K = std::clamp(keys > 0 ? keys : chart_.keys, 1, kMaxKeys);
+    return K >= 10 ? ek::kLaneWidth[K] : std::min(112.0f, 500.0f / float(K));
+}
+
+float PlayState::noteSize() const { return laneWidth() * 0.94f; }
 
 double PlayState::scrollSpeed() const {
     const App& a = app();
@@ -619,7 +653,7 @@ TouchLayout PlayState::touchLayout() const {
     }
     t.keys = {{"PAUSE", KEY_ESCAPE}};
     if (botEnergyOn_ && !cfg_.botplay) t.keys.push_back({"BOT", KEY_LEFT_CONTROL});
-    if (!replaying_ && !cfg_.botplay) t.lanes = chart_.keys;
+    if (!replaying_ && !cfg_.botplay) t.lanes = chart_.keysOf(1);
     return t;
 }
 
@@ -630,9 +664,9 @@ void PlayState::onResume() {
 
 // Touch controls option (desktop): each player lane is a full-height column around its strum.
 void PlayState::handleTouch() {
-    bool want[9] = {};
-    const int K = chart_.keys;
-    const float half = std::min(112.0f, 500.0f / float(K)) * 0.5f + 4.0f;
+    bool want[kMaxKeys] = {};
+    const int K = chart_.keysOf(1);
+    const float half = laneWidth(K) * 0.5f + 4.0f;
     for (const TouchPoint& tp : touchPoints()) {  // fingers, or the mouse while clicked
         const float x = gfx::toCanvas(tp.pos).x;
         int best = -1;
@@ -682,7 +716,7 @@ void PlayState::popup(const std::string& text, Color c, const std::string& timin
 }
 
 void PlayState::splash(int side, int lane) {
-    const Color c = gfx::dirColor(gfx::laneDir(chart_.keys, lane));
+    const Color c = gfx::dirColor(gfx::laneDir(chart_.keysOf(side), lane));
     const Vector2 p = strumCenter(side, lane);
     gfx::Particle ring{};
     ring.p = p;
@@ -712,11 +746,12 @@ void PlayState::handleNoteEvents() {
     std::vector<GameEvent> evs;
     evs.swap(session_.events);
     for (const GameEvent& ev : evs) {
-        const int dir = singDir(chart_.keys, ev.lane);
+        const int dir = singDir(chart_.keysOf(ev.type == GameEvent::OpponentHit ? 0 : 1), ev.lane);
         if (ev.type == GameEvent::PlayerHit || ev.type == GameEvent::OpponentHit) zoomingOn_ = true;
         switch (ev.type) {
             case GameEvent::PlayerHit: {
                 confirm_[1][ev.lane] = 1.0f;
+                vis_.hit(int(ev.rating));
                 if (!(ev.flags & kFlagNoAnim)) charOf(1).sing(dir, now, ev.length / 1000.0 / rate_);
                 a.mixer.setTrackVolume(Mixer::kVoicePlayer, 1.0f);
                 const RatingInfo& ri = ratingInfo(ev.rating);
@@ -740,6 +775,7 @@ void PlayState::handleNoteEvents() {
             case GameEvent::HoldDrop:
             case GameEvent::GhostMiss:
                 charOf(1).miss(dir, now);
+                vis_.miss();
                 a.mixer.setTrackVolume(Mixer::kVoicePlayer, 0.0f);
                 if (now - lastMissSfx_ > 0.05) {
                     sfxPlay(Sfx::Miss, 0.55f, gfx::randf(0.9f, 1.1f));
@@ -751,6 +787,7 @@ void PlayState::handleNoteEvents() {
                 break;
             case GameEvent::PlayerMine:
                 charOf(1).miss(dir, now);
+                vis_.miss();
                 sfxPlay(Sfx::Mine);
                 minePulse_ = 1.0f;
                 popup("CURSED", kMissColor, "");
@@ -758,6 +795,7 @@ void PlayState::handleNoteEvents() {
                 break;
             case GameEvent::OpponentHit:
                 confirm_[0][ev.lane] = 1.0f;
+                vis_.opponentHit();
                 if (!(ev.flags & kFlagNoAnim)) charOf(0).sing(dir, now, ev.length / 1000.0 / rate_);
                 if (psych_) psychNoteHit(ev, true);
                 break;
@@ -791,6 +829,7 @@ void PlayState::onBeat(int b) {
     right_.beat(a.now);
     stage_.onBeat(b);
     beatPulse_ = 1.0f;
+    if (b >= 0) vis_.beat();
     if (psych_) {
         psychBeat(b);
         return;
@@ -866,17 +905,23 @@ void PlayState::stopPauseMusic() {
     pauseMusic_ = Music{};
 }
 
+void PlayState::freePauseShot() {
+    if (pauseShot_.id && IsWindowReady()) UnloadTexture(pauseShot_);
+    pauseShot_ = Texture2D{};
+}
+
 void PlayState::resume() {
     App& a = app();
     stopPauseMusic();
+    freePauseShot();
     platform::log("resumed");
     a.mixer.resume();
     for (auto& kv : sounds_)
         if (kv.second.started && !kv.second.paused) ResumeMusicStream(kv.second.mus);
     phase_ = Phase::Playing;
     a.input.clear();
-    const auto lk = a.settings.laneKeys(chart_.keys);
-    for (int l = 0; l < chart_.keys; ++l) {
+    const auto lk = a.settings.laneKeys(chart_.keysOf(1));
+    for (int l = 0; l < chart_.keysOf(1); ++l) {
         if (heldCount_[l] <= 0) continue;
         bool down = a.input.isDown(kTouchLane + l);
         for (int code : lk[size_t(l)]) down |= a.input.isDown(code);
@@ -1096,7 +1141,6 @@ void PlayState::drawLanes() {
     App& a = app();
     const Settings& s = a.settings;
     const PsychUi& ui = psychUi();
-    const int K = chart_.keys;
     const float ns = noteSize();
     const double pxPerMs = 0.45 * scrollSpeed() / rate_;
     const double reach = (gfx::H * 1.5 + ns) / pxPerMs;
@@ -1117,13 +1161,13 @@ void PlayState::drawLanes() {
     };
     for (int side = 0; side < 2; ++side) {
         if (side == 0 && !s.opponentNotes) continue;  // Options: opponent notes (Psych hides their receptors and notes)
-        for (int lane = 0; lane < K; ++lane) {
+        for (int lane = 0; lane < chart_.keysOf(side); ++lane) {
             const scene::Strum& st = strum(side, lane);
             const Vector2 c = strumCenter(side, lane);
             const float sc = st.scaleX / 0.7f;
             const float size = ns * std::fabs(sc);
             const float alphaStrum = st.alpha;
-            const int dir = gfx::laneDir(K, lane);
+            const int dir = gfx::laneDir(chart_.keysOf(side), lane);
             const Color col = gfx::dirColor(dir);
             const bool rotated = std::fabs(st.direction - 90.0f) > 0.01f;
             if (rotated) {
@@ -1648,10 +1692,10 @@ void PlayState::drawHud() {
                       Align::Center, 2.0f);
     }
     if (s.touchControls && !a.touchMode && !replaying_) {
-        const float half = std::min(112.0f, 500.0f / float(chart_.keys)) * 0.5f;
-        for (int l = 0; l < chart_.keys; ++l) {
+        const float half = laneWidth(chart_.keysOf(1)) * 0.5f;
+        for (int l = 0; l < chart_.keysOf(1); ++l) {
             const Vector2 c = strumCenter(1, l);
-            const Color col = gfx::dirColor(gfx::laneDir(chart_.keys, l));
+            const Color col = gfx::dirColor(gfx::laneDir(chart_.keysOf(1), l));
             DrawRectangleRec({c.x - half, gfx::H * 0.55f, half * 2 - 4, gfx::H * 0.45f}, fade(col, touchDown_[l] ? 0.28f : 0.09f));
         }
     }
@@ -1850,6 +1894,102 @@ void PlayState::drawPsychPause() {
         const float al = i == pauseSel_ ? 1.0f : 0.6f;
         if (ui.alphabet(items[i], x, y, 70, al) < 0) ui.text(items[i], x, y, 64, fade(WHITE, al), -1, 2.0f);
     }
+}
+
+// The engine's watermark in the bottom-left corner, as JS Engine shows its
+// own: the engine and its version (Options: Watermark; hidden with the HUD).
+// What the FPS panel keeps clear of: the arrows where they start, the health
+// bar with its icons, the score, the time bar and the watermark.
+void PlayState::busyRects(std::vector<Rectangle>& out) const {
+    if (!scene_ || phase_ == Phase::Loading || phase_ == Phase::Error) return;
+    const Settings& s = app().settings;
+    const float W = float(gfx::W), H = float(gfx::H);
+    for (int side = 0; side < 2; ++side) {
+        const int K = chart_.keysOf(side);
+        const float w = laneWidth(K);
+        for (int l = 0; l < K; ++l) {
+            const scene::Strum& st = strum(side, l);
+            if (!st.visible || st.alpha < 0.05f) continue;
+            const bool home = st.defX != 0 || st.defY != 0;  // scripts may be moving it: its place
+            out.push_back({(home ? st.defX : st.x) + 56 - w * 0.5f, home ? st.defY : st.y, w, 112});
+        }
+    }
+    if (!s.hideHud) {
+        const Vector2 hbs = psychUi().healthBarSize();
+        Rectangle bar = hbs.x > 0 ? Rectangle{(W - hbs.x) * 0.5f, H * (s.downscroll ? 0.11f : 0.89f), hbs.x, hbs.y}
+                                  : Rectangle{335, s.downscroll ? 77.0f : 635.0f, 610, 28};
+        const Vector2 moved = hudMoved("healthBar");
+        bar.x += moved.x;
+        bar.y += moved.y;
+        out.push_back({bar.x - 75, bar.y - 75, bar.width + 150, bar.height + 150});  // with the icons
+        out.push_back({W * 0.5f - 360, bar.y + 36, 720, 52});                       // score and note counter
+        if (s.watermark) out.push_back({0, H - 26, 200, 26});
+    }
+    if (s.timeBar != 3) out.push_back({W * 0.5f - 220, s.downscroll ? H - 48 : 14, 440, 40});
+    if (s.visualizer && !s.hideHud) {
+        const Rectangle v = visualizerArea();
+        out.push_back({v.x - 8, v.y - 5, v.width + 16, v.height + 11});
+    }
+}
+
+// ------------------------------------------------------- audio visualizer --
+
+// The top-right corner, 280 pixels wide: as high as the room over the arrows
+// there allows (more in downscroll), 30 to 56 pixels.
+Rectangle PlayState::visualizerArea() const {
+    const float w = 280, x = gfx::W - 14 - w, top = 8;
+    float bottom = top + 56;
+    if (scene_) {
+        for (int side = 0; side < 2; ++side) {
+            const int K = chart_.keysOf(side);
+            const float lw = laneWidth(K);
+            for (int l = 0; l < K; ++l) {
+                const scene::Strum& st = strum(side, l);
+                if (!st.visible || st.alpha < 0.05f) continue;
+                const bool home = st.defX != 0 || st.defY != 0;
+                const float sx = (home ? st.defX : st.x) + 56 - lw * 0.5f, sy = home ? st.defY : st.y;
+                if (sx < x + w && sx + lw > x && sy < bottom && sy + 112 > top) bottom = std::min(bottom, sy + 6);
+            }
+        }
+    }
+    return {x, top, w, std::max(30.0f, bottom - top)};
+}
+
+void PlayState::updateVisualizer(double dt) {
+    App& a = app();
+    if (!a.settings.visualizer) return;
+    AudioVisualizer::State st;
+    st.side[0] = playerLeft_ ? rightColor_ : leftColor_;
+    st.side[1] = playerLeft_ ? leftColor_ : rightColor_;
+    st.focus = chart_.focusAt(songMs_) == 1 ? 1 : 0;
+    // Notes a second: those within half a second either side of now.
+    const auto at = [&](double ms) {
+        return std::lower_bound(chart_.notes.begin(), chart_.notes.end(), ms, [](const Note& n, double t) { return n.time < t; });
+    };
+    st.nps = float(std::distance(at(songMs_ - 500), at(songMs_ + 500)));
+    st.health = float(session_.health);
+    st.playing = phase_ == Phase::Playing && a.mixer.playing() && !a.mixer.paused();
+    // The bars show what is heard: the newest mixed sound is still ahead, in the device's buffer.
+    const double ahead = std::clamp(a.mixer.rawTime() - songMs_ / 1000.0, 0.0, 0.25);
+    vis_.update(dt, a.mixer, size_t(ahead * Mixer::kRate / std::max(0.05, rate_)), st);
+}
+
+void PlayState::drawVisualizer() const {
+    const App& a = app();
+    const Settings& s = a.settings;
+    if (!s.visualizer || s.hideHud || phase_ == Phase::Paused || phase_ == Phase::Dead || cutscene_) return;
+    float alpha = 1;
+    if (psych_ && scene_) alpha = scene_->camHud.visible ? std::clamp(scene_->camHud.alpha, 0.0f, 1.0f) : 0.0f;
+    vis_.draw(visualizerArea(), alpha);
+}
+
+void PlayState::drawWatermark() {
+    const Settings& s = app().settings;
+    if (!s.watermark || s.hideHud) return;
+    static const std::string text = "God's Hand (" GH_VERSION ")";
+    const PsychUi& ui = psychUi();
+    if (psych_ && ui.active() && ui.font()) ui.text(text, 2, gfx::H - 22, 16, fade(WHITE, 0.85f), -1, 1.0f);
+    else gfx::text(FontId::Ui, text, 8, gfx::H - 26, 18, fade(kIvory, 0.75f), Align::Left, 1.2f);
 }
 
 void PlayState::drawDead() {

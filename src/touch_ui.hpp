@@ -43,6 +43,7 @@ public:
     void update(Input& in, double now);
     void draw() const;
     bool covers(Vector2 screenPos) const;  // on one of the buttons
+    void buttonRects(std::vector<Rectangle>& out) const;  // where the buttons are, in window pixels
     void releaseAll(Input& in, double now);
 
 private:

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "chart.hpp"
+#include "keys.hpp"
 
 namespace gh {
 
@@ -116,11 +117,11 @@ private:
 
     SessionConfig cfg_;
     int keys_ = 4;
-    std::vector<LaneNote> lanes_[2][9];
-    size_t cursor_[2][9]{};
-    long long activeHold_[2][9];
-    double maxSus_[2][9]{};
-    bool held_[9]{};
+    std::vector<LaneNote> lanes_[2][kMaxKeys];
+    size_t cursor_[2][kMaxKeys]{};
+    long long activeHold_[2][kMaxKeys];
+    double maxSus_[2][kMaxKeys]{};
+    bool held_[kMaxKeys]{};
     double lastMs_ = -1e18;
     double accSum_ = 0;
     unsigned autoLanes_ = 0;

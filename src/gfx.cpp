@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "gfx.hpp"
+#include "keys.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -311,8 +312,10 @@ int laneDir(int keys, int lane) {
         {kLeft, kDown, kUp, kRight, kLeft, kDown, kUp, kRight},
         {kLeft, kDown, kUp, kRight, kCenter, kLeft, kDown, kUp, kRight},
     };
-    keys = clampv(keys, 1, 9);
-    return dirs[keys][clampv(lane, 0, keys - 1)];
+    keys = clampv(keys, 1, kMaxKeys);
+    lane = clampv(lane, 0, keys - 1);
+    if (keys > 9) return ek::kDirs[keys - 10][lane];
+    return dirs[keys][lane];
 }
 
 Color dirColor(int dir) {

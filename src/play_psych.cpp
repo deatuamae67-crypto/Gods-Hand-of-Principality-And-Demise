@@ -125,9 +125,9 @@ Character* PlayState::charForSide(int side) {
     return humanIsDad ? sc.bf.get() : sc.dad.get();
 }
 
-std::string PlayState::singAnim(int lane, uint8_t flags) const {
+std::string PlayState::singAnim(int side, int lane, uint8_t flags) const {
     static const char* names[4] = {"singLEFT", "singDOWN", "singUP", "singRIGHT"};
-    int d = gfx::laneDir(chart_.keys, lane);
+    int d = gfx::laneDir(chart_.keysOf(side), lane);
     if (d == gfx::kCenter) d = 2;
     std::string a = names[clampv(d, 0, 3)];
     if (flags & kFlagAlt) a += "-alt";
@@ -240,6 +240,9 @@ void PlayState::setScriptGlobals() {
     set("luaDeprecatedWarnings", true);
     set("inChartEditor", false);
     set("version", std::string("0.7.3"));
+    // JS Engine's own version: its mods check it before using what it added
+    // (extra keys charts ask for 1.45 or later).
+    set("jsVersion", std::string("1.50.0"));
     set("curBpm", bpm);
     set("bpm", bpm);
     set("scrollSpeed", chart_.speed);
@@ -286,7 +289,7 @@ void PlayState::setScriptGlobals() {
     set("instakillOnMiss", false);
     set("botPlay", cfg_.botplay);
     set("practice", cfg_.practice);
-    for (int i = 0; i < chart_.keys && i < 9; ++i) {
+    for (int i = 0; i < chart_.keys && i < kMaxKeys; ++i) {
         const scene::Strum& p = strum(1, i);
         const scene::Strum& o = strum(0, i);
         set(TextFormat("defaultPlayerStrumX%d", i), double(p.x));
@@ -373,31 +376,57 @@ void PlayState::updateStatGlobals() {
     h.setGlobal("ratingFC", ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_);
 }
 
+// Scripts that build extra keys themselves inside a 4-key engine (JS Engine
+// mods' "Extra Keys Script" and the like: their own strums, notes and keys).
+// The game plays the chart's keys itself, so they would draw a second set.
+static bool extraKeysScript(const std::string& path) {
+    std::string head;
+    if (FILE* f = std::fopen(path.c_str(), "rb")) {
+        head.resize(16384);
+        head.resize(std::fread(head.data(), 1, head.size(), f));
+        std::fclose(f);
+    }
+    return head.find("Extra Keys Script") != std::string::npos ||
+           (head.find("maniaData") != std::string::npos && head.find("swagWidth") != std::string::npos);
+}
+
 void PlayState::loadScripts(bool afterHud) {
     scene::Scene& sc = *scene_;
     ScriptHost& h = *scripts_;
+    struct Loader {
+        ScriptHost& h;
+        void load(const std::string& f) const {
+            if (extraKeysScript(f)) {
+                platform::log("not run (the game plays the chart's extra keys itself): " + f);
+                return;
+            }
+            h.load(f);
+        }
+    } L{h};
     if (!afterHud) {
         for (const char* ext : {".lua", ".hx", ".hscript", ".hxs"})
-            for (const std::string& f : sc.files.list("scripts", ext)) h.load(f);
+            for (const std::string& f : sc.files.list("scripts", ext)) L.load(f);
         const auto stageScripts = scriptsNamed(sc.files, "stages/" + stageName_);
-        for (const std::string& f : stageScripts) h.load(f);
+        for (const std::string& f : stageScripts) L.load(f);
         if (stageScripts.empty() && baseStage_) h.loadString("stages/" + stageName_ + ".lua", basegame::stageLua(stageName_));
         for (Character* c : {sc.gf.get(), sc.dad.get(), sc.bf.get()}) {
             if (!c || c->builtin) continue;
             for (const std::string& f : scriptsNamed(sc.files, "characters/" + c->name))
-                if (!h.isLoaded(f)) h.load(f);
+                if (!h.isLoaded(f)) L.load(f);
         }
         return;
     }
     for (size_t i = 1; i < chart_.noteTypes.size(); ++i)
-        for (const std::string& f : scriptsNamed(sc.files, "custom_notetypes/" + chart_.noteTypes[i])) h.load(f);
+        for (const std::string& f : scriptsNamed(sc.files, "custom_notetypes/" + chart_.noteTypes[i])) L.load(f);
     std::vector<std::string> seen;
     for (const psych::ChartEvent& e : chart_.events) {
         if (std::find(seen.begin(), seen.end(), e.name) != seen.end()) continue;
         seen.push_back(e.name);
-        for (const std::string& f : scriptsNamed(sc.files, "custom_events/" + e.name)) h.load(f);
+        const auto files = scriptsNamed(sc.files, "custom_events/" + e.name);
+        if (!files.empty()) scriptedEvents_.push_back(e.name);
+        for (const std::string& f : files) L.load(f);
     }
-    for (const std::string& f : luaFilesIn(entry_->dataDir)) h.load(f);
+    for (const std::string& f : luaFilesIn(entry_->dataDir)) L.load(f);
 }
 
 bool PlayState::setupPsych() {
@@ -622,7 +651,7 @@ void PlayState::loadIcons() {
 void PlayState::psychUpdate(double dt) {
     App& a = app();
     scene::Scene& sc = *scene_;
-    for (int l = 0; l < 9; ++l) {
+    for (int l = 0; l < kMaxKeys; ++l) {
         prevKeys_[l] = keyNow_[l];
         keyNow_[l] = heldCount_[l] > 0;
     }
@@ -636,6 +665,10 @@ void PlayState::psychUpdate(double dt) {
     for (int l = 0; l < chart_.keys; ++l)
         holding |= heldCount_[l] > 0 || (session_.botplay() && session_.isHolding(1, l));
     sc.update(dt, chart_.stepMs(std::max(0.0, songMs_)), holding);
+    if (camRotate_) {
+        camRotatePhase_ += dt * rate_ * camRotateSpeed_;
+        sc.camGame.angle = float(camRotateAngle_ * std::sin(camRotatePhase_));
+    }
     scripts_->dispatchCompletions();
     updateSounds(dt);
     if (scripts_->kadeMode) scripts_->call("update", {Value(dt)});
@@ -656,8 +689,8 @@ void PlayState::psychHoldRefresh() {
             const LaneNote& n = session_.lane(side, l)[size_t(h)];
             Character* ch = (n.flags & kFlagGF) && scene_->gf ? scene_->gf.get() : charForSide(side);
             if (ch && !(n.flags & kFlagNoAnim)) {
-                std::string anim = singAnim(l, n.flags);
-                if ((n.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(l, 0);
+                std::string anim = singAnim(side, l, n.flags);
+                if ((n.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(side, l, 0);
                 ch->playAnim(anim, true);
                 ch->holdTimer = 0;
             }
@@ -672,8 +705,8 @@ void PlayState::psychNoteHit(const GameEvent& ev, bool opponent) {
     const int side = opponent ? 0 : 1;
     Character* ch = (ev.flags & kFlagGF) && sc.gf ? sc.gf.get() : charForSide(side);
     if (ch && !(ev.flags & kFlagNoAnim)) {
-        std::string anim = singAnim(ev.lane, ev.flags);
-        if ((ev.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(ev.lane, 0);
+        std::string anim = singAnim(side, ev.lane, ev.flags);
+        if ((ev.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(side, ev.lane, 0);
         ch->playAnim(anim, true);
         ch->holdTimer = 0;
         if (ev.flags & kFlagHey) {
@@ -705,7 +738,7 @@ void PlayState::psychMiss(const GameEvent& ev, bool ghost) {
     scene::Scene& sc = *scene_;
     Character* ch = (ev.flags & kFlagGF) && sc.gf ? sc.gf.get() : charForSide(1);
     if (ghost) {
-        if (ch && ch->hasMiss) ch->playAnim(singAnim(ev.lane, 0) + "miss", true);
+        if (ch && ch->hasMiss) ch->playAnim(singAnim(1, ev.lane, 0) + "miss", true);
         if (app().settings.luaNoteCallbacks) scripts_->call("noteMissPress", {Value(double(ev.lane))});
         return;
     }
@@ -715,7 +748,7 @@ void PlayState::psychMiss(const GameEvent& ev, bool ghost) {
             ch->specialAnim = true;
         }
     } else if (ch && ch->hasMiss && !(ev.flags & kFlagNoMissAnim)) {
-        ch->playAnim(singAnim(ev.lane, 0) + "miss", true);
+        ch->playAnim(singAnim(1, ev.lane, 0) + "miss", true);
     }
     if (lastCombo_ > 5 && sc.gf && ch != sc.gf.get() && sc.gf->hasAnim("sad")) {
         sc.gf->playAnim("sad", true);
@@ -827,6 +860,7 @@ void PlayState::handleBuiltinEvent(const psych::ChartEvent& e) {
     }
     if (handleJsEngineEvent(e)) return;
     if (!psych_) return;
+    if (handleDekEvent(e)) return;
     scene::Scene& sc = *scene_;
     if (n == "Hey!") {
         const std::string l = toLower(trim(e.v1));
@@ -898,6 +932,37 @@ void PlayState::handleBuiltinEvent(const psych::ChartEvent& e) {
         bopEvery_ = std::max(1, int(numOr(e.v1, 4)));
         sc.camZoomingMult = numOr(e.v2, 1.0);
     }
+}
+
+// ------------------------------------------------------ Dek Engine events --
+
+// Events built into Dek Engine (Vs Dek V2), which its songs use without a
+// script: Aguacate, Frustration, Invencible, Techy, Reviro. A mod's own
+// custom_events script of the same name runs instead.
+bool PlayState::handleDekEvent(const psych::ChartEvent& e) {
+    const std::string& n = e.name;
+    if (n != "Camera rotate on" && n != "Camera rotate off" && n != "Flash") return false;
+    if (std::find(scriptedEvents_.begin(), scriptedEvents_.end(), n) != scriptedEvents_.end()) return false;
+    scene::Scene& sc = *scene_;
+    const std::string v1 = trim(e.v1), v2 = trim(e.v2);
+    if (n == "Camera rotate on") {
+        // The camera sways v2 degrees each way, v1 radians a second (in song
+        // time, so 1 second a second): a new one only changes how much and how
+        // fast, without a jump in the swing.
+        if (!camRotate_) camRotatePhase_ = 0;
+        camRotate_ = true;
+        camRotateSpeed_ = numOr(v1, 1.0);
+        camRotateAngle_ = numOr(v2, 0.0);
+    } else if (n == "Camera rotate off") {
+        camRotate_ = false;
+        sc.camGame.angle = 0;
+    } else if (app().settings.flashing) {
+        // A white flash over everything: v1 seconds, v2 how strong (1 = full).
+        const double alpha = clampv(numOr(v2, 1.0), 0.0, 1.0);
+        sc.camOther.flashColor = (uint32_t(std::lround(alpha * 255)) << 24) | 0xFFFFFFu;
+        sc.camOther.flashDur = sc.camOther.flashTime = float(std::max(0.05, numOr(v1, 1.0)));
+    }
+    return true;
 }
 
 // ------------------------------------------------------ JS Engine events --
@@ -1086,7 +1151,7 @@ void PlayState::updateJsEngine(double dt) {
     usingBotEnergy_ = key && !noEnergy_;
     unsigned mask = 0;
     int held = 0;
-    for (int l = 0; l < chart_.keys && l < 9; ++l)
+    for (int l = 0; l < chart_.keys && l < kMaxKeys; ++l)
         if (heldCount_[l] > 0) {
             mask |= 1u << l;
             ++held;
@@ -1626,6 +1691,10 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     auto num = [&](double v) { out = v; return true; };
     auto flag = [&](bool v) { out = v; return true; };
     if (path == "health") return num(session_.health);
+    // The health bar's fill, 0 to 100 (Psych's Bar / Flixel's FlxBar.percent):
+    // icon scripts swap to the losing face under 20.
+    if (path == "healthBar.percent" || path == "healthBar.value")
+        return num(path == "healthBar.percent" ? std::clamp(session_.health / 2.0 * 100.0, 0.0, 100.0) : session_.health);
     if (path == "songScore") return num(double(session_.score));
     if (path == "songMisses") return num(session_.misses);
     if (path == "songHits") return num(session_.judged());
@@ -1825,7 +1894,7 @@ void PlayState::setGameWidth(float w) {
     // Psych lays the strums out when the countdown starts, from FlxG.width.
     layoutStrums();
     if (!scripts_) return;
-    for (int i = 0; i < chart_.keys && i < 9; ++i) {
+    for (int i = 0; i < chart_.keys && i < kMaxKeys; ++i) {
         const scene::Strum& p = strum(1, i);
         const scene::Strum& o = strum(0, i);
         scripts_->setGlobal(TextFormat("defaultPlayerStrumX%d", i), double(p.x));
@@ -1897,7 +1966,7 @@ void PlayState::startAndEnd() {
 bool PlayState::keyState(std::string_view action, int mode) {
     App& a = app();
     auto laneState = [&](int lane) {
-        if (lane < 0 || lane >= 9) return false;
+        if (lane < 0 || lane >= kMaxKeys) return false;
         if (mode == 0) return keyNow_[lane];
         if (mode == 1) return keyNow_[lane] && !prevKeys_[lane];
         return !keyNow_[lane] && prevKeys_[lane];

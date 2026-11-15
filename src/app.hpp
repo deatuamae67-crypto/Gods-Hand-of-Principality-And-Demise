@@ -37,6 +37,11 @@ public:
     virtual bool keyReserved(int key) const { return false; }
     // More for godshand --perf (a song: how its notes were drawn).
     virtual std::string perfInfo() const { return {}; }
+    // Canvas areas the FPS panel keeps clear of (a song's HUD and arrows).
+    virtual void busyRects(std::vector<Rectangle>& out) const {}
+    // A song: the pictures of the last one may stay uploaded for it (other
+    // screens free them; see SceneRenderer::releaseKept).
+    virtual bool keepsPictures() const { return false; }
 };
 
 struct Modifiers {
@@ -177,6 +182,8 @@ private:
     // processor use, hardware), sampled twice a second.
     void drawFpsPanel();
     double statsAt_ = -10, cpuAt_ = 0, cpuSecs_ = 0;
+    int fpsSpot_ = 0;          // which corner the FPS panel is in (see drawFpsPanel)
+    double fpsSpotAt_ = -10;   // when that was last checked
     float cpuUse_ = 0;
     unsigned long long memNow_ = 0, memPeak_ = 0, sysUsed_ = 0;
     double gpuBusy_ = -1;  // the graphics card's use (-1: the system does not say)

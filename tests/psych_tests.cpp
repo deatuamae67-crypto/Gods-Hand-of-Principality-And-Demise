@@ -1335,6 +1335,44 @@ void testLuaExtras() {
     }
     PCHECK(fs::exists(root / "saves" / "mymod" / "progress.json"));
     fs::remove_all(root, ec);
+
+    // Psych 0.4-0.7.3 keep Lua tweens and timers by tag, and nil and "" are
+    // tags too: a new tween under one stops the last (Aguacate starts nil-tagged
+    // tweens every frame; only the last of each frame ever runs, as in Psych).
+    {
+        scene::Scene sc;
+        sc.keys = 4;
+        sc.strums.resize(8);
+        StubGame game;
+        ScriptHost host(sc, game);
+        PCHECK(host.loadString("tags.lua", R"LUA(
+            function onCreate()
+                makeLuaSprite('a', '', 0, 0); makeLuaSprite('b', '', 0, 0)
+                doTweenX(nil, 'a', 100, 1)
+                doTweenX(nil, 'b', 100, 1)
+                doTweenY('', 'a', 50, 1)
+                doTweenY('', 'b', 50, 1)
+                doTweenAlpha('k', 'a', 0, 1)
+                doTweenAngle(nil, 'nothing', 90, 1)
+                noteTweenAlpha(missingGlobal, 2, 0.5, 1)
+                runTimer(nil, 0.5)
+                runTimer(nil, 0.2)
+            end
+            function onTweenCompleted(tag) debugPrint('tween ' .. tostring(tag)) end
+            function onTimerCompleted(tag) debugPrint('timer ' .. tostring(tag)) end)LUA"));
+        PCHECK(sc.tweens.size() == 3 && sc.timers.size() == 1);  // the missing target still stopped b's nil tween
+        for (int i = 0; i < 12; ++i) {
+            sc.update(0.1, 100, false);
+            host.dispatchCompletions();
+        }
+        const scene::Sprite& a = *sc.objects["a"];
+        const scene::Sprite& b = *sc.objects["b"];
+        PCHECK(pnear(a.x, 0) && pnear(b.x, 0) && pnear(a.y, 0) && pnear(b.y, 50) && pnear(a.alpha, 0));
+        PCHECK(pnear(sc.strums[2].alpha, 0.5));  // the last nil tween wins
+        auto printed = [&](const char* line) { return std::find(game.prints.begin(), game.prints.end(), line) != game.prints.end(); };
+        PCHECK(printed("tween nil") && printed("tween ") && printed("tween k") && printed("timer nil"));
+        PCHECK(std::count(game.prints.begin(), game.prints.end(), std::string("timer nil")) == 1);
+    }
 }
 
 void testZipInstall() {
