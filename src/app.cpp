@@ -547,7 +547,14 @@ void App::frame() {
             std::printf("[auto] screenshot %zu at %.2fs\n", shotIndex_, t);
             ++shotIndex_;
         }
-        if (autoRun.quitAfter > 0 && t >= autoRun.quitAfter) quit = true;
+        // A recording from the command line (--render) gets --quit-after
+        // seconds of video, however long the song takes to load first (on a
+        // slow phone the loading alone can take that long). If it cannot
+        // start (no ffmpeg) or never does, the time counts from the start.
+        double tq = t;
+        if (renderCli && renderT0_ >= 0) tq = now - renderT0_;
+        else if (renderCli && !renderTried_ && t < autoRun.quitAfter + 300) tq = -1;
+        if (autoRun.quitAfter > 0 && tq >= autoRun.quitAfter) quit = true;
     }
     // While recording, the window only needs a preview: showing ~30 frames a
     // second leaves the rest of the time to drawing and encoding.
@@ -691,6 +698,7 @@ bool App::wantsRender() const { return settings.renderMode || renderCli; }
 
 bool App::startRender(const std::string& title, const std::string& diff) {
     if (renderer.active()) return true;
+    renderTried_ = true;
     if (!ffmpegProbed_ && !platform::kAndroid) {  // Android uses the phone's own encoders
         ffmpegPath_ = findProgram(base, "ffmpeg", "-version");
         ffmpegProbed_ = true;
@@ -723,6 +731,7 @@ bool App::startRender(const std::string& title, const std::string& diff) {
     }
     mixer.setOffline(true);
     renderClock_ = now;
+    renderT0_ = now;
     renderStartReal_ = nowSec();
     lastSwap_ = 0;
     platform::log("rendering " + title + " " + diff + TextFormat(" at %dx%d, %d fps", o.width, o.height, o.fps));

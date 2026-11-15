@@ -32,8 +32,8 @@ A `.ghc` file holds a Psych chart in a fraction of its JSON size and loads faste
 - **How much smaller**: a spam chart of 3.42 million notes went from 201.1 MB of JSON to 2.4 MB (84.6× smaller, converted in 0.31 s) and loads in 150 ms instead of 240 ms. A small chart of 1,400 notes went from 34.5 KB to 2.6 KB (13.4× smaller).
 - **Making one**:
   - main menu `7` → **Chart Converter**: pick a mod, then convert one chart or all of them. Each line shows how much smaller its file got.
-  - the chart editor's Song tab: **Also save as .ghc** writes a `.ghc` beside the JSON on every save. It is already on for charts loaded from a `.ghc`.
-- **Which file plays**: when a song has both `<chart>.json` and `<chart>.ghc`, Freeplay lists the song once and plays the `.ghc`. Keep the JSON if other engines should still read the song; they do not know `.ghc`.
+  - the chart editor's Song tab, **Save as**: *Psych JSON*, *Binary .ghc* or *Both*. The `.ghc` is written straight from the notes, without writing the JSON first, so a chart too big to keep as JSON can be edited and saved as `.ghc` alone. A chart opens with the choice that matches its files (a `.ghc` alone saves as `.ghc`). Saving as Psych JSON while a `.ghc` is beside it moves the old `.ghc` aside (to `.ghc.bak`, or deletes it when the original is already kept there), because the game would otherwise go on playing the old one.
+- **Which file plays**: a `.ghc` alone is a chart like any JSON. When a song has both `<chart>.json` and `<chart>.ghc`, Freeplay lists the song once and plays the `.ghc`. Keep the JSON if other engines should still read the song; they do not know `.ghc`.
 
 The file layout is described at the top of `src/chart_binary.cpp`.
 

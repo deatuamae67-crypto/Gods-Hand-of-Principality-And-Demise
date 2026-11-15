@@ -45,6 +45,26 @@ struct StreamedNotes {
 bool streamChartSkeleton(const std::string& path, std::string& skeleton, StreamedNotes& notes, std::string& err,
                          int threads = -1, size_t sectionCap = 0);
 
+// What streamChartSkeleton reads from a chart's JSON, built from notes that
+// are already in memory: the chart editor saves a .ghc this way, without
+// writing the JSON first. Each sectionNotes array starts with beginArray(),
+// whose marker goes in the skeleton where the array would be; add() takes
+// the notes of the array one by one, in the file's order, and stacks them as
+// reading does (the same noteData within 1 ms, up to 255 on one note);
+// finish() closes the last array.
+class StreamedNotesBuilder {
+public:
+    explicit StreamedNotesBuilder(StreamedNotes& out);
+    std::string beginArray();
+    void add(double time, int noteData, double length, const std::string& type = {});
+    void finish();
+
+private:
+    StreamedNotes& out_;
+    std::vector<double> lastT_;
+    size_t arrays_ = 0;
+};
+
 // Big charts read once are kept in this folder (their notes, compact), and
 // the next load reads them back instead of the JSON: a fraction of a second
 // for any size. Empty (the default): no cache. The folder is created when

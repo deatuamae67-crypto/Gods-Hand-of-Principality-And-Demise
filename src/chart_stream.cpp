@@ -994,6 +994,46 @@ private:
 
 }  // namespace
 
+StreamedNotesBuilder::StreamedNotesBuilder(StreamedNotes& out) : out_(out), lastT_(64, -1e300) {}
+
+std::string StreamedNotesBuilder::beginArray() {
+    out_.rangeStart.push_back(uint32_t(out_.notes.size()));
+    std::fill(lastT_.begin(), lastT_.end(), -1e300);
+    return "[{\"__gh_stream\":" + std::to_string(arrays_++) + "}]";
+}
+
+// The reader's addStreamed, step for step (a note the reader would not take
+// as a note, with a noteData outside 0..63, is left out).
+void StreamedNotesBuilder::add(double time, int noteData, double length, const std::string& type) {
+    if (!std::isfinite(time) || noteData < 0 || noteData >= 64 || out_.rangeStart.empty()) return;
+    StreamedNote n;
+    n.time = time;
+    n.length = std::isfinite(length) && length > 0 ? float(length) : 0.0f;
+    const int data = noteData;
+    n.data = uint8_t(data);
+    if (!type.empty()) n.type = out_.typeIndex(type);
+    out_.maxData = std::max(out_.maxData, data);
+    ++out_.dataCount[size_t(data)];
+    ++out_.rawCount;
+    double& last = lastT_[size_t(data)];
+    if (std::fabs(n.time - last) < 1.0 && !out_.notes.empty()) {
+        for (size_t i = out_.notes.size(); i-- > out_.rangeStart.back();) {
+            StreamedNote& k = out_.notes[i];
+            if (k.noteData() == data && std::fabs(k.time - n.time) < 1.0 && k.stack < 255) {
+                k.length = std::max(k.length, n.length);
+                if (n.type && !k.type) k.type = n.type;
+                ++k.stack;
+                return;
+            }
+            if (out_.notes.size() - i > 64) break;
+        }
+    }
+    last = n.time;
+    out_.notes.push_back(n);
+}
+
+void StreamedNotesBuilder::finish() { out_.rangeStart.push_back(uint32_t(out_.notes.size())); }
+
 uint16_t StreamedNotes::typeIndex(const std::string& name) {
     for (size_t i = 0; i < types.size(); ++i)
         if (types[i] == name) return uint16_t(i + 1);

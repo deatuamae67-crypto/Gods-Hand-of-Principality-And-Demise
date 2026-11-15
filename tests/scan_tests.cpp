@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "chart.hpp"
+#include "chart_binary.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
@@ -494,7 +495,43 @@ int printFlp(int argc, char** argv, int first) {
     return 0;
 }
 
+// Binary charts (.ghc) in a mod: one kept alone, without its JSON (a chart
+// too big to keep as JSON), is a chart like any other - not an audio-only
+// song for AutoChart; one beside its JSON is offered once, as the .ghc.
+void testBinaryChartsInMods() {
+    const fs::path base = fs::temp_directory_path() / "gh_scan_ghc";
+    fs::remove_all(base);
+    const fs::path mod = base / "mods" / "ghcpack";
+    put(mod / "songs" / "alone" / "Inst.ogg", "x");
+    put(mod / "songs" / "paired" / "Inst.ogg", "x");
+    put(base / "alone.json", legacyChart("Alone", 8));
+    put(mod / "data" / "paired" / "paired.json", legacyChart("Paired", 8));
+    put(mod / "data" / "paired" / "paired-hard.json", legacyChart("Paired", 12));
+    std::string err;
+    fs::create_directories(mod / "data" / "alone");
+    SCHECK(convertChartToBinary(str(base / "alone.json"), str(mod / "data" / "alone" / "alone.ghc"), err));
+    SCHECK(convertChartToBinary(str(mod / "data" / "paired" / "paired.json"), str(mod / "data" / "paired" / "paired.ghc"), err));
+    SongScan s;
+    scanModsDir(str(base / "mods"), s);
+    const SongEntry* alone = nullptr;
+    const SongEntry* paired = nullptr;
+    for (const SongEntry& e : s.songs) {
+        if (e.songKey == "alone") alone = &e;
+        if (e.songKey == "paired") paired = &e;
+    }
+    SCHECK(alone && !alone->autoChart && alone->diffs.size() == 1 && alone->diffs[0] == "Normal" &&
+           endsWithI(alone->chartPaths[0], ".ghc"));
+    SCHECK(paired && paired->diffs.size() == 2 && paired->diffs[0] == "Normal" && endsWithI(paired->chartPaths[0], ".ghc") &&
+           paired->diffs[1] == "Hard" && endsWithI(paired->chartPaths[1], "paired-hard.json"));
+    if (alone && !alone->chartPaths.empty()) {
+        Chart c;
+        SCHECK(loadChartFile(alone->chartPaths[0], "Normal", c, err) && c.title == "Alone" && !c.notes.empty());
+    }
+    fs::remove_all(base);
+}
+
 void runScanTests() {
+    testBinaryChartsInMods();
     testFlStudio();
     testPulseForgeCharts();
     testAudioSeconds();

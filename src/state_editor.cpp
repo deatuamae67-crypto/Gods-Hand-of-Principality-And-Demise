@@ -44,6 +44,10 @@ std::string pathStr(const fs::path& p) {
 
 const char* kBaseNoteTypes[] = {"", "Alt Animation", "Hurt Note", "GF Sing", "No Animation", "Hey!"};
 const int kSnaps[] = {4, 8, 12, 16, 24, 32, 48, 64, 96, 192};
+const std::string kNoType;
+
+// Song tab, "Save as": what a save writes (issue #22).
+enum SaveFormat { kSaveJson = 0, kSaveGhc = 1, kSaveBoth = 2 };
 
 // Built-in events (Psych Engine and JS Engine), with what their values do.
 struct EventInfo {
@@ -383,8 +387,17 @@ private:
                 if (equalsI(pathStr(f.path().filename()), "events.json")) eventsFile_ = pathStr(f.path());
         }
         scanNames(c);
+        // Saved as it was found: a .ghc alone stays a .ghc (a chart of a
+        // billion notes is not written out as JSON), a .ghc with its JSON
+        // keeps both.
+        saveFormat_ = kSaveJson;
         for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
-            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kBinaryChartExt)) saveBinary_ = true;
+            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kBinaryChartExt)) {
+                std::error_code ec;
+                const std::string& g = entry_->chartPaths[i];
+                saveFormat_ = fs::exists(toPath(g.substr(0, g.size() - std::strlen(kBinaryChartExt)) + ".json"), ec) ? kSaveBoth
+                                                                                                                       : kSaveGhc;
+            }
         loaded_ = true;
         App& a = app();
         a.mixer.setTracks(inst_, voiceP_, voiceO_);
@@ -1122,7 +1135,10 @@ private:
         return o + (events_.empty() ? "]" : "\n  ]");
     }
 
-    std::string buildJson(bool withEvents) {
+    // The chart as Psych JSON. With `bin`, the skeleton of a binary chart
+    // instead: the same JSON with each section's notes sent to `bin`, as
+    // reading that JSON would give them (a .ghc saved without the JSON).
+    std::string buildJson(bool withEvents, StreamedNotesBuilder* bin = nullptr) {
         // Sections up to the last note or event (at least one).
         int last = 0;
         if (!notes_.empty()) last = sectionAt(notes_.back().t);
@@ -1130,7 +1146,7 @@ private:
         std::string o;
         long long total = 0;
         for (const EdNote& n : notes_) total += n.stack;
-        o.reserve(size_t(total) * 28 + 4096);
+        o.reserve(bin ? size_t(last + 1) * 200 + 4096 : size_t(total) * 28 + 4096);
         o += "{\"song\": {\n  \"song\": " + jsonStr(title_) + ",\n  \"bpm\": " + num(sections_.empty() ? 120 : sections_[0].bpm) +
              ",\n  \"speed\": " + num(speed_) + ",\n  \"needsVoices\": " + (needsVoices_ ? "true" : "false") +
              ",\n  \"player1\": " + jsonStr(player_) + ",\n  \"player2\": " + jsonStr(opponent_);
@@ -1151,7 +1167,7 @@ private:
             prevBpm = sec.bpm;
             o += std::string(", \"altAnim\": ") + (sec.altAnim ? "true" : "false");
             o += std::string(", \"gfSection\": ") + (sec.gf ? "true" : "false");
-            o += ", \"sectionNotes\": [";
+            o += ", \"sectionNotes\": " + (bin ? bin->beginArray() : std::string("["));
             bool first = true;
             while (ni < notes_.size() && (notes_[ni].t < b - 0.5 || s == last)) {
                 const EdNote& n = notes_[ni++];
@@ -1160,6 +1176,13 @@ private:
                 const bool player = n.col >= keys_;
                 const int lane = player ? n.col - keys_ : n.col;
                 const int data = (player == sec.mustHit) ? lane : lane + keys_;
+                if (bin) {
+                    // As num() writes them (6 decimals), so both files hold the same chart.
+                    const double t6 = std::round(n.t * 1e6) / 1e6, l6 = std::round(n.len * 1e6) / 1e6;
+                    const std::string& type = n.type ? typeNames_[n.type] : kNoType;
+                    for (uint32_t k = 0; k < std::max<uint32_t>(1, n.stack); ++k) bin->add(t6, data, l6, type);
+                    continue;
+                }
                 std::string one = "[" + num(n.t) + ", " + std::to_string(data) + ", " + num(n.len);
                 if (n.type) one += ", " + jsonStr(typeNames_[n.type]);
                 one += "]";
@@ -1168,9 +1191,10 @@ private:
                     first = false;
                 }
             }
-            o += "]}";
+            o += bin ? "}" : "]}";
         }
         o += "\n  ]\n}}\n";
+        if (bin) bin->finish();
         return o;
     }
 
@@ -1231,15 +1255,21 @@ private:
 
     bool save(bool playtest) {
         App& a = app();
-        const std::string path = savePath();
+        const std::string path = savePath();  // the JSON's place (the .ghc goes beside it)
         std::error_code ec;
         const fs::path p = toPath(path);
         fs::create_directories(p.parent_path(), ec);
-        if (fs::exists(p, ec) && !backedUp_) {
-            const fs::path bak = toPath(path + ".bak");
-            if (!fs::exists(bak, ec)) fs::copy_file(p, bak, ec);
-            backedUp_ = true;
-        }
+        const std::string ghcPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kBinaryChartExt;
+        const fs::path gp = toPath(ghcPath);
+        const bool wantJson = saveFormat_ != kSaveGhc, wantGhc = saveFormat_ != kSaveJson;
+        const bool hadJson = fs::exists(p, ec), hadGhc = fs::exists(gp, ec);
+        // Each file as it was is kept once, as .bak.
+        auto backUp = [&](const fs::path& f, bool& done) {
+            if (done || !fs::exists(f, ec)) return;
+            const fs::path bak = toPath(pathStr(f) + ".bak");
+            if (!fs::exists(bak, ec)) fs::copy_file(f, bak, ec);
+            done = true;
+        };
         // Audio for charts that had none on disk.
         if (entry_->builtin) {
             if (inst_) writeWav(pathStr(p.parent_path() / "Inst.wav"), *inst_);
@@ -1252,18 +1282,41 @@ private:
                 if (!fs::exists(dst, ec)) fs::copy_file(audio, dst, ec);
             }
         }
-        if (!writeText(p, buildJson(eventsInChart()))) {
-            flash("Could not save " + path);
-            return false;
+        if (wantJson) {
+            backUp(p, backedUp_);
+            if (!writeText(p, buildJson(eventsInChart()))) {
+                flash("Could not save " + path);
+                return false;
+            }
         }
-        // The binary chart (.ghc) beside it, when there is one or it is asked
-        // for: made from the JSON just written, so the two never differ.
-        const std::string ghcPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kBinaryChartExt;
+        // The binary chart, straight from the notes: what reading the JSON
+        // would give, without writing the JSON first.
+        std::string note;
         bool wroteGhc = false;
-        if (saveBinary_ || fs::exists(toPath(ghcPath), ec)) {
+        if (wantGhc) {
+            backUp(gp, backedUpGhc_);
+            StreamedNotes sn;
+            StreamedNotesBuilder bin(sn);
+            const std::string skeleton = buildJson(eventsInChart(), &bin);
             std::string err;
-            wroteGhc = convertChartToBinary(path, ghcPath, err);
-            if (!wroteGhc) flash("Saved the JSON; the .ghc failed: " + err);
+            wroteGhc = writeBinaryChart(ghcPath, skeleton, sn, 3, err);
+            if (!wroteGhc && !wantJson) {
+                flash("Could not save the .ghc: " + err);
+                return false;
+            }
+            if (!wroteGhc) note = "; the .ghc failed: " + err;
+            else if (!wantJson && hadJson) note = "; the .json beside it was left as it was";
+        } else if (hadGhc) {
+            // Saved as Psych JSON only: the old .ghc would still be what the
+            // game plays, so it steps aside (as .ghc.bak, unless the original
+            // is already kept there; the JSON just written holds the chart).
+            const fs::path bak = toPath(ghcPath + ".bak");
+            const bool keptBefore = fs::exists(bak, ec);
+            if (!keptBefore) fs::rename(gp, bak, ec);
+            else fs::remove(gp, ec);
+            note = fs::exists(gp, ec) ? "; the old .ghc beside it could not be moved, and the game still plays it"
+                   : keptBefore       ? "; the old .ghc was removed (its original is in .ghc.bak)"
+                                      : "; the old .ghc is now .ghc.bak";
         }
         if (!eventsInChart()) {
             const fs::path ep = toPath(eventsFile_);
@@ -1273,20 +1326,26 @@ private:
         dirty_ = false;
         long long total = 0;
         for (const EdNote& n : notes_) total += n.stack;
-        flash("Saved " + pathStr(p.filename()) + (wroteGhc ? " and .ghc" : "") + " (" + fmtThousands(total) + " notes, " +
-              std::to_string(events_.size()) + " events)");
-        // New files: rescan so Freeplay (and the playtest) see the chart.
+        const bool hasGhc = fs::exists(gp, ec), hasJson = fs::exists(p, ec);
+        const std::string stem = pathStr(p.stem());
+        const std::string wrote = wantJson && wroteGhc ? stem + ".json and .ghc" : wroteGhc ? stem + kBinaryChartExt : pathStr(p.filename());
+        flash("Saved " + wrote + " (" + fmtThousands(total) + " notes, " + std::to_string(events_.size()) + " events)" + note);
+        // New files, or a .ghc gone: rescan so Freeplay (and the playtest)
+        // see the chart the game will now play.
         std::string id = songId_;
-        if (entry_->builtin || entry_->autoChart) {
+        if (entry_->builtin || entry_->autoChart || hasGhc != hadGhc || hasJson != hadJson) {
+            auto ours = [&](const std::string& cp) {
+                return !cp.empty() && (fs::equivalent(toPath(cp), p, ec) || fs::equivalent(toPath(cp), gp, ec));
+            };
             a.library.scan(a.base);
             for (const SongEntry& s : a.library.songs())
                 for (const std::string& cp : s.chartPaths)
-                    if (!cp.empty() && fs::equivalent(toPath(cp), p, ec)) id = s.id;
+                    if (ours(cp)) id = s.id;
             entry_ = a.library.find(id);
             if (!entry_) return false;
             songId_ = id;
             for (size_t i = 0; i < entry_->chartPaths.size(); ++i)
-                if (fs::equivalent(toPath(entry_->chartPaths[i]), p, ec)) diff_ = entry_->diffs[i];
+                if (ours(entry_->chartPaths[i])) diff_ = entry_->diffs[i];
         }
         if (playtest) {
             stopPlay();
@@ -1566,7 +1625,7 @@ private:
                 if (ui_.stepper(row(), "Keys", k, 1, 1, 9, "%.0f")) setKeys(int(k));
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
-                ui_.check(row(), "Also save as .ghc (binary, much smaller)", saveBinary_);
+                ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both"}, saveFormat_);
                 y += 6;
                 if (ui_.button(half(0), "Save (F2)")) save(false);
                 if (ui_.button(half(1), "Save and play")) {
@@ -1979,7 +2038,8 @@ private:
     double hitVolPlayer_ = 0.6, hitVolOpponent_ = 0.6, schedUpTo_ = 0;  // hitsound volumes; scheduled up to (ms)
     double rangeFrom_ = 0, rangeTo_ = 0;  // Section tab: a range of sections to copy
     bool audioOnly_ = false, reloadArmed_ = false, preview_ = true;
-    bool saveBinary_ = false;  // Song tab: a .ghc beside the JSON (on by itself for charts loaded from one)
+    int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, or both (as the chart was found)
+    bool backedUpGhc_ = false;
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)
     bool ezMode_ = false;

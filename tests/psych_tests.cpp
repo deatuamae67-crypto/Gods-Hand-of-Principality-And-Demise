@@ -968,6 +968,88 @@ void testChartStreaming() {
                fromBin.noteTypes == fromJson.noteTypes && std::fabs(fromBin.speed - fromJson.speed) < 1e-9);
         const ChartPeek pb = peekChart(ghc);
         PCHECK(pb.song == "Blocked" && pb.player2 == "bambi" && pb.isChart);
+
+        // The chart editor's .ghc without a JSON (StreamedNotesBuilder): the
+        // notes it builds are exactly what reading the same chart's JSON
+        // gives - stacks past 255, notes under 1 ms apart, exactly 1 ms
+        // apart, types joining an untyped stack, times with many decimals.
+        {
+            struct N { double t; int d; double l; const char* type; int copies; };
+            const std::vector<std::vector<N>> secs = {
+                {{0, 0, 0, "", 1}, {150.25, 1, 120.5, "", 1}, {500, 2, 0, "", 300}, {600, 3, 0, "", 1}, {600.4, 3, 30, "", 1}},
+                {{700, 0, 0, "", 1}, {701, 0, 0, "", 1}, {800, 5, 0, "Hurt Note", 1}, {900, 6, 0, "", 1}, {900.2, 6, 0, "Alt Note", 1},
+                 {1234.56789012, 7, 0.0000004, "", 1}},
+                {},
+                {{3000, 4, 999.9999996, "Hurt Note", 2}, {3000, 1, 0, "", 600}},
+            };
+            auto fmt = [](double v) {  // as the editor writes numbers
+                char b[40];
+                if (v == std::floor(v) && std::fabs(v) < 1e15) std::snprintf(b, sizeof b, "%.1f", v);
+                else std::snprintf(b, sizeof b, "%.6f", v);
+                std::string o = b;
+                while (o.size() > 1 && o.back() == '0' && o[o.size() - 2] != '.') o.pop_back();
+                return o;
+            };
+            std::string json = "{\"song\": {\"song\": \"Built\", \"bpm\": 150, \"speed\": 2.5, \"player1\": \"bf\", \"player2\": \"dad\", "
+                               "\"events\": [[100, [[\"Hey!\", \"BF\", \"0.6\"]]]], \"notes\": [";
+            std::string skeleton = json;
+            StreamedNotes built;
+            StreamedNotesBuilder b(built);
+            for (size_t k = 0; k < secs.size(); ++k) {
+                const std::string head = std::string(k ? "," : "") + "{\"sectionBeats\": 4, \"mustHitSection\": " + (k % 2 ? "false" : "true") +
+                                         ", \"sectionNotes\": ";
+                json += head + "[";
+                skeleton += head + b.beginArray();
+                bool first = true;
+                for (const N& n : secs[k])
+                    for (int c = 0; c < n.copies; ++c) {
+                        json += std::string(first ? "" : ", ") + "[" + fmt(n.t) + ", " + std::to_string(n.d) + ", " + fmt(n.l) +
+                                (*n.type ? std::string(", \"") + n.type + "\"" : std::string()) + "]";
+                        first = false;
+                        b.add(std::round(n.t * 1e6) / 1e6, n.d, std::round(n.l * 1e6) / 1e6, n.type);
+                    }
+                json += "]}";
+                skeleton += "}";
+            }
+            json += "]}}";
+            skeleton += "]}}";
+            b.finish();
+            const std::string jpath = (fs::temp_directory_path() / "gh_builder_chart.json").string();
+            std::ofstream(jpath, std::ios::binary | std::ios::trunc) << json;
+            for (int threads : {0, 3}) {
+                std::string skel, err2;
+                StreamedNotes read;
+                PCHECK(streamChartSkeleton(jpath, skel, read, err2, threads, threads ? 64 : 0));
+                bool same = read.notes.size() == built.notes.size() && read.rangeStart == built.rangeStart &&
+                            read.types == built.types && read.dataCount == built.dataCount && read.rawCount == built.rawCount &&
+                            read.maxData == built.maxData;
+                for (size_t i = 0; same && i < read.notes.size(); ++i) {
+                    const StreamedNote& x = read.notes[i];
+                    const StreamedNote& y = built.notes[i];
+                    same = x.time == y.time && x.length == y.length && x.data == y.data && x.stack == y.stack && x.type == y.type;
+                }
+                if (!same) std::printf("  builder notes differ from the JSON's (%d threads)\n", threads);
+                PCHECK(same);
+            }
+            PCHECK(built.rawCount == 304 + 6 + 602 && built.types.size() == 2);
+            // Its .ghc loads as the same chart as the JSON.
+            const std::string bpath = (fs::temp_directory_path() / "gh_builder_chart.ghc").string();
+            std::string err2;
+            PCHECK(writeBinaryChart(bpath, skeleton, built, 3, err2));
+            Chart cj, cb;
+            PCHECK(loadChartFile(jpath, "Normal", cj, err2, {}, 1) && loadChartFile(bpath, "Normal", cb, err2));
+            bool same = cj.notes.size() == cb.notes.size() && cj.events.size() == cb.events.size() && cj.title == cb.title &&
+                        cj.noteTypes == cb.noteTypes && cj.notes.size() > 5;
+            for (size_t i = 0; same && i < cj.notes.size(); ++i) {
+                const Note& x = cj.notes[i];
+                const Note& y = cb.notes[i];
+                same = std::fabs(x.time - y.time) < 1e-5 && std::fabs(x.length - y.length) < 1e-2 && x.lane == y.lane && x.side == y.side &&
+                       x.stack == y.stack && x.type == y.type && x.flags == y.flags;
+            }
+            PCHECK(same);
+            fs::remove(jpath);
+            fs::remove(bpath);
+        }
         // Damaged: cut short, or a byte changed in the notes.
         std::string bytes;
         {
