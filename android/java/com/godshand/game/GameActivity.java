@@ -132,43 +132,57 @@ public class GameActivity extends NativeActivity {
     public void askText(final String title, final String initial) {
         textResult = "";
         textState = 1;
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                final EditText input = new EditText(GameActivity.this);
-                input.setSingleLine(true);
-                input.setInputType(InputType.TYPE_CLASS_TEXT);
-                input.setText(initial);
-                input.setSelection(input.getText().length());
-                AlertDialog dialog = new AlertDialog.Builder(GameActivity.this)
-                        .setTitle(title)
-                        .setView(input)
-                        .setPositiveButton("OK", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int which) {
-                                textResult = input.getText().toString();
-                                textState = 2;
-                            }
-                        })
-                        .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int which) {
-                                textState = 3;
-                            }
-                        })
-                        .setOnCancelListener(new DialogInterface.OnCancelListener() {
-                            @Override
-                            public void onCancel(DialogInterface d) {
-                                textState = 3;
-                            }
-                        })
-                        .create();
-                if (dialog.getWindow() != null)
-                    dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
-                dialog.show();
-                input.requestFocus();
+        runOnUiThread(new TextBox(this, title, initial));
+    }
+
+    // The text box, as a named class: build-tools 34's d8 stops with an
+    // internal error on anonymous classes nested in an anonymous class.
+    private static final class TextBox implements Runnable, DialogInterface.OnClickListener, DialogInterface.OnCancelListener {
+        private final GameActivity activity;
+        private final String title;
+        private final String initial;
+        private EditText input;
+
+        TextBox(GameActivity activity, String title, String initial) {
+            this.activity = activity;
+            this.title = title;
+            this.initial = initial;
+        }
+
+        @Override
+        public void run() {
+            input = new EditText(activity);
+            input.setSingleLine(true);
+            input.setInputType(InputType.TYPE_CLASS_TEXT);
+            input.setText(initial);
+            input.setSelection(input.getText().length());
+            AlertDialog dialog = new AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setView(input)
+                    .setPositiveButton("OK", this)
+                    .setNegativeButton("Cancel", this)
+                    .setOnCancelListener(this)
+                    .create();
+            if (dialog.getWindow() != null)
+                dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+            dialog.show();
+            input.requestFocus();
+        }
+
+        @Override
+        public void onClick(DialogInterface d, int which) {
+            if (which == DialogInterface.BUTTON_POSITIVE) {
+                textResult = input.getText().toString();
+                textState = 2;
+            } else {
+                textState = 3;
             }
-        });
+        }
+
+        @Override
+        public void onCancel(DialogInterface d) {
+            textState = 3;
+        }
     }
 
     /** Called from the game thread. */
