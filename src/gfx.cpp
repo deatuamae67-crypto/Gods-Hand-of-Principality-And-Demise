@@ -313,7 +313,10 @@ void capsule(Vector2 a, Vector2 b, float r, Color col) {
     DrawCircleV(a, r, col);
     DrawCircleV(b, r, col);
 }
-void gradientRect(Rectangle r, Color top, Color bottom) { DrawRectangleGradientEx(r, top, bottom, top, bottom); }
+// raylib 5.5's DrawRectangleGradientEx takes its corners as top-left,
+// bottom-left, bottom-right, top-right (whatever its parameters are called):
+// its own DrawRectangleGradientV passes (top, bottom, bottom, top).
+void gradientRect(Rectangle r, Color top, Color bottom) { DrawRectangleGradientEx(r, top, bottom, bottom, top); }
 
 Texture2D& glowTexture() { return g_glow; }
 

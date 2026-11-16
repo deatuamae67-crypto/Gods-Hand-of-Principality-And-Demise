@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 1.12.0 LANGUAGES C CXX)
+project(GodsHand VERSION 1.12.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -265,6 +265,7 @@ if(GH_BUILD_GAME)
   set(GH_GAME_SOURCES
     src/main.cpp
     src/app.cpp
+    src/app_icon.cpp
     src/audio.cpp
     src/audio_decode.cpp
     src/input.cpp
@@ -312,6 +313,13 @@ if(GH_BUILD_GAME)
     else()
       target_sources(godshand PRIVATE src/windows/godshand.rc)
     endif()
+    # The program's icon (Explorer, the taskbar and the window: GLFW gives the
+    # window the GLFW_ICON resource). Written with the .ico's full path, which
+    # both windres and rc.exe find from the build folder.
+    set(GH_ICON_RC "${CMAKE_BINARY_DIR}/godshand_icon.rc")
+    file(CONFIGURE OUTPUT "${GH_ICON_RC}" CONTENT "GLFW_ICON ICON \"${CMAKE_SOURCE_DIR}/src/windows/godshand.ico\"\n")
+    target_sources(godshand PRIVATE "${GH_ICON_RC}")
+    set_source_files_properties("${GH_ICON_RC}" PROPERTIES OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/src/windows/godshand.ico")
   endif()
   target_link_libraries(godshand PRIVATE gh_core raylib)
   target_compile_definitions(godshand PRIVATE GH_VERSION="${PROJECT_VERSION}")

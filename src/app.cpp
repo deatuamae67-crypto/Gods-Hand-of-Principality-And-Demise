@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "app.hpp"
+#include "app_icon.hpp"
 #include "check_scripts.hpp"
 #include "performance.hpp"
 #include "scene_draw.hpp"
@@ -244,6 +245,7 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--list-songs")) listSongs = true;
         else if (!std::strcmp(a, "--check-charts")) checkCharts = true;
         else if (!std::strcmp(a, "--check-scripts")) checkScriptsDir = next();
+        else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
         else if (!std::strcmp(a, "--render")) renderCli = true;  // record the --autoplay song to renders/
@@ -352,6 +354,13 @@ int App::run(int argc, char** argv) {
     sfxInit();
     applyVolumes();
     gfx::init(base);
+    if (!makeIconDir.empty()) {  // godshand --make-icon <folder>
+        const bool ok = appicon::exportAll(makeIconDir);
+        CloseAudioDevice();
+        CloseWindow();
+        return ok ? 0 : 1;
+    }
+    appicon::applyToWindow();  // the window's and the Dock's icon, in the game's own look
     library.scan(base, [](const std::string& zip, double f) {
         // Unpacking a big mod pack takes a while: keep the window alive.
         BeginDrawing();
