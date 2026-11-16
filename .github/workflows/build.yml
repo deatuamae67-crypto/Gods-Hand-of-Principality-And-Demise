@@ -204,7 +204,14 @@ jobs:
           tag="$RELEASE_TAG"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"; fi
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Release tags look like v1.2.3, not '$tag'."; exit 1; }
-          gh release create "$tag" "${files[@]}" --target "$GITHUB_SHA" --title "God's Hand $tag" --notes-file notes.md
+          # A run for a release that already exists (one platform found no
+          # runner the first time) completes it: its packages are added or
+          # replaced, and the notes and the tag stay as they are.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --target "$GITHUB_SHA" --title "God's Hand $tag" --notes-file notes.md
+          fi
       - name: Keep only the newest release and the mod packs
         # Older releases are removed with their tags (and so with the source code
         # GitHub attaches to every tag); push builds no longer publish a
