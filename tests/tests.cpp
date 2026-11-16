@@ -480,7 +480,7 @@ static void testSession() {
     for (double t = 0; t <= 8000; t += 16.6) s.update(t);
     CHECK(s.misses == 0 && s.counts[kDivine] == 5);
     CHECK(near(s.accuracy(), 1.0));
-    CHECK(s.rank() == "S+" && s.clearLabel() == "SANCTIFIED");
+    CHECK(s.rank() == "S+" && s.clearLabel() == "SFC");
 
     // Playback rate widens windows in song time (constant in real time).
     SessionConfig fast;

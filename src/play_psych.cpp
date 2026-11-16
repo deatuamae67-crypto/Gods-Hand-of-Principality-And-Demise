@@ -30,8 +30,8 @@ using gfx::fade;
 
 namespace {
 namespace fs = std::filesystem;
-const Color kGold{255, 214, 120, 255};
-const Color kIvory{246, 236, 214, 255};
+const Color kGold{255, 222, 64, 255};   // the accent: a bright, cartoon yellow
+const Color kIvory{242, 244, 255, 255};  // text: a cool white
 
 fs::path toPath(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
 std::string pathStr(const fs::path& p) {

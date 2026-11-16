@@ -148,11 +148,11 @@ endif()
 
 # ---- the game ----------------------------------------------------------------
 if(GH_BUILD_GAME)
-  # Fonts (SIL OFL) ship in assets/fonts; copies of the source without them
+  # Fonts (SIL OFL, Apache 2.0) ship in assets/fonts; copies of the source without them
   # fetch the exact same files here. The game falls back to a built-in font.
   set(GH_FONT_COMMIT 5bb28733cec313b63fbd415b574b5ae35c8aa8b8)
   set(GH_FONTS
-    "CinzelDecorative-Bold.ttf|ofl/cinzeldecorative/CinzelDecorative-Bold.ttf|e854e68a388aa50d742a4415c1ae5c17a617ef7956c95a70021d0a4a44f20518"
+    "LuckiestGuy-Regular.ttf|apache/luckiestguy/LuckiestGuy-Regular.ttf|cfbdd68a039f92df51cf3721506af6242e64594c6325fe0bedbeff3fe385d980"
     "Rajdhani-Bold.ttf|ofl/rajdhani/Rajdhani-Bold.ttf|691470dd3286a14e9677940d0bf75796179841ba5215cbda1a2c8910a3226afd")
   foreach(entry IN LISTS GH_FONTS)
     string(REPLACE "|" ";" parts "${entry}")

@@ -22,8 +22,8 @@ using gfx::FontId;
 using gfx::fade;
 
 namespace {
-const Color kGold{255, 214, 120, 255};
-const Color kIvory{246, 236, 214, 255};
+const Color kGold{255, 222, 64, 255};   // the accent: a bright, cartoon yellow
+const Color kIvory{242, 244, 255, 255};  // text: a cool white
 
 struct Row {
     enum Kind { Header, Bool, Number, Choice, Action, Key } kind;
@@ -54,10 +54,10 @@ public:
             {Row::Bool, "Disable reset button", "OFF: R during a song makes you lose at once, as in Psych.", &s.noReset},
             {Row::Number, "Rating offset", "How late or early you hit for a Sick!. Higher: you have to hit later (Psych's Rating Offset).",
              nullptr, &s.ratingOffset, -30, 30, 1},
-            {Row::Number, "Sick! hit window", "The time you have for the best rating (DIVINE), either side of the note.", nullptr,
+            {Row::Number, "Sick! hit window", "The time you have for the best rating (SICK!), either side of the note.", nullptr,
              &s.sickWindow, 15, 45, 1},
-            {Row::Number, "Good hit window", "The time you have for a Good (GRACE).", nullptr, &s.goodWindow, 15, 90, 1},
-            {Row::Number, "Bad hit window", "The time you have for a Bad (MORTAL).", nullptr, &s.badWindow, 15, 135, 1},
+            {Row::Number, "Good hit window", "The time you have for a GOOD.", nullptr, &s.goodWindow, 15, 90, 1},
+            {Row::Number, "Bad hit window", "The time you have for a BAD.", nullptr, &s.badWindow, 15, 135, 1},
             {Row::Number, "Safe frames", "How many frames (of 1/60 s) early or late a note can still be hit (Psych's Safe Frames).",
              nullptr, &s.safeFrames, 2, 10, 0.1f},
             {Row::Number, "Scroll speed", "0 = use each chart's own speed.", nullptr, &s.scrollSpeed, 0, 6, 0.1f},
@@ -70,7 +70,7 @@ public:
             {Row::Bool, "Show timing (ms)", "Shows how early or late each hit was.", &s.showTimings},
             {Row::Bool, "Opponent notes", "OFF hides the opponent's receptors and notes, as Psych's Opponent Notes.", &s.opponentNotes},
             {Row::Bool, "Opponent strums", "Light up the opponent's receptors when they sing.", &s.opponentStrums},
-            {Row::Bool, "Note splashes", "Bursts of light on DIVINE hits.", &s.noteSplashes},
+            {Row::Bool, "Note splashes", "Bursts of light on SICK! hits.", &s.noteSplashes},
             {Row::Bool, "Touch controls", "Tap the lanes on a touchscreen (a mouse click counts as a tap).", &s.touchControls},
             {Row::Bool, "Extra keys", "Charts made for 1 to 18 keys keep them, as in Psych Extra Keys. OFF: every chart has 4 keys, like Psych and JS Engine.",
              &s.extraKeys},

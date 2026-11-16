@@ -27,8 +27,8 @@ using gfx::fade;
 
 namespace {
 
-const Color kGold{255, 214, 120, 255};
-const Color kIvory{246, 236, 214, 255};
+const Color kGold{255, 222, 64, 255};   // the accent: a bright, cartoon yellow
+const Color kIvory{242, 244, 255, 255};  // text: a cool white
 
 Color diffColor(const std::string& d) {
     const std::string l = toLower(d);
@@ -302,8 +302,8 @@ public:
             drawCharacter(c, {x, 370}, i == 2 ? 0.62f : 0.68f, now, false);
             gfx::text(FontId::Ui, charDisplayName(ids[i]), x, 372, 24, charColor(ids[i]), Align::Center, 1.5f);
         }
-        gfx::text(FontId::Title, "WEEK I", 60, 14, 40, kGold, Align::Left, 2.0f);
-        gfx::text(FontId::Title, "THE ASCENSION", gfx::W - 60, 14, 40, kIvory, Align::Right, 2.0f);
+        gfx::text(FontId::Title, "WEEK 1", 60, 14, 40, kGold, Align::Left, 2.0f);
+        gfx::text(FontId::Title, "THE BIG SHOW", gfx::W - 60, 14, 40, kIvory, Align::Right, 2.0f);
         gfx::text(FontId::Ui, "TRACKS", 120, 440, 28, kGold);
         const char* tracks[3] = {"Principality", "Godshand", "Demise"};
         for (int i = 0; i < 3; ++i) gfx::text(FontId::Ui, tracks[i], 120, 478.0f + i * 40, 34, kIvory, Align::Left, 1.5f);
@@ -316,7 +316,7 @@ public:
         const ScoreEntry* best = a.scores.get(Scores::key("week:ascension", d));
         gfx::text(FontId::Ui, best ? ("WEEK SCORE: " + fmtThousands(best->score)) : std::string("WEEK SCORE: -"), 960, 560,
                   28, kIvory, Align::Center, 1.5f);
-        hints("LEFT/RIGHT difficulty   ENTER begin the ascension   ESC back");
+        hints("LEFT/RIGHT difficulty   ENTER start the week   ESC back");
         gfx::endCanvas();
     }
 
@@ -750,7 +750,7 @@ public:
             "raylib 5.5 by Ramon Santamaria (zlib license)",
             "",
             "@FONTS",
-            "Cinzel Decorative by Natanael Gama (SIL Open Font License)",
+            "Luckiest Guy by Astigmatic (Apache License 2.0)",
             "Rajdhani by Indian Type Foundry (SIL Open Font License)",
             "",
             "@LICENSE",
@@ -759,10 +759,10 @@ public:
             "No forks, copies or rebrands: contribute through issues",
             "",
             "@THE CAST",
-            "The Herald - a mortal voice",
-            "The Principality - keeper of the first gate",
-            "The Hand - author of the world",
-            "Demise - the end of all principalities",
+            "Hype - the hype man with the mic",
+            "Principal P - no rapping in the halls",
+            "DJ Hand - the hand on the decks",
+            "D-Mize - king of the underground",
             "",
             "Thank you for playing.",
         };

@@ -22,50 +22,50 @@ static std::vector<SongDef> makeSongs() {
     {
         SongDef s;
         s.id = "vigil"; s.title = "Vigil"; s.opponent = "principality";
-        s.blurb = "A gentle first hymn. Learn to answer the heavens.";
+        s.blurb = "A warm-up after class. Learn to answer the beat.";
         s.bpm = 96; s.root = 50; s.scale = {0, 2, 4, 5, 7, 9, 11}; s.seed = 0x5161u; s.style = 0;
         s.progressions = {{0, 4, 5, 3}, {0, 3, 4, 4}, {5, 3, 0, 4}};
         s.parts = {{P::Intro, 4, 0}, {P::Call, 4, 1}, {P::Answer, 4, 1}, {P::Call, 4, 1}, {P::Answer, 4, 1},
                    {P::Break, 2, 0}, {P::Call, 4, 2}, {P::Answer, 4, 2}, {P::Duet, 4, 2}, {P::Outro, 4, 0}};
         s.diffs = {"Easy", "Normal", "Hard"};
-        s.color = 0xF4C76B; s.stage = 0;
+        s.color = 0xFFA040; s.stage = 0;
         v.push_back(s);
     }
     {
         SongDef s;
         s.id = "principality"; s.title = "Principality"; s.opponent = "principality";
-        s.blurb = "The angel of the first gate tests your voice.";
+        s.blurb = "Principal P caught you rapping in class. Out-rap detention.";
         s.bpm = 118; s.root = 52; s.scale = {0, 2, 4, 6, 7, 9, 11}; s.seed = 0xA11E1u; s.style = 1;
         s.progressions = {{0, 1, 5, 4}, {0, 4, 5, 1}, {3, 4, 0, 0}};
         s.parts = {{P::Intro, 8, 1}, {P::Call, 8, 1}, {P::Answer, 8, 1}, {P::Call, 8, 2}, {P::Answer, 8, 2},
                    {P::Break, 4, 0}, {P::Call, 8, 3}, {P::Answer, 8, 3}, {P::Duet, 8, 3}, {P::Outro, 4, 1}};
         s.diffs = {"Easy", "Normal", "Hard"};
-        s.color = 0xFFE6A8; s.stage = 0;
+        s.color = 0xA464FF; s.stage = 0;
         v.push_back(s);
     }
     {
         SongDef s;
         s.id = "godshand"; s.title = "Godshand"; s.opponent = "hand";
-        s.blurb = "The Hand that wrote the world keeps time.";
+        s.blurb = "DJ Hand runs the club and never drops a beat.";
         s.bpm = 146; s.root = 50; s.scale = {0, 2, 3, 5, 7, 9, 10}; s.seed = 0x60D5u; s.style = 2;
         s.progressions = {{0, 6, 5, 6}, {0, 3, 6, 4}, {0, 5, 3, 4}};
         s.parts = {{P::Intro, 4, 1}, {P::Call, 8, 2}, {P::Answer, 8, 2}, {P::Duet, 8, 2}, {P::Break, 4, 1},
                    {P::Call, 8, 3}, {P::Answer, 8, 3}, {P::Call, 8, 3}, {P::Answer, 8, 3}, {P::Outro, 4, 1}};
         s.diffs = {"Easy", "Normal", "Hard", "Infernal"};
-        s.color = 0x7FB8FF; s.stage = 1;
+        s.color = 0x46AAFF; s.stage = 1;
         v.push_back(s);
     }
     {
         SongDef s;
         s.id = "demise"; s.title = "Demise"; s.opponent = "demise";
-        s.blurb = "The end of all principalities. Sing, or be unmade.";
+        s.blurb = "D-Mize rules the underground. Sing, or get booed off the stage.";
         s.bpm = 176; s.root = 49; s.scale = {0, 1, 4, 5, 7, 8, 10}; s.seed = 0xDE315Eu; s.style = 3;
         s.progressions = {{0, 1, 0, 6}, {0, 5, 1, 0}, {0, 3, 1, 0}};
         s.oppOctave = -1;
         s.parts = {{P::Intro, 8, 1}, {P::Call, 8, 2}, {P::Answer, 8, 2}, {P::Call, 8, 3}, {P::Answer, 8, 3},
                    {P::Break, 4, 1}, {P::Duet, 16, 3}, {P::Call, 8, 3}, {P::Answer, 8, 3}, {P::Outro, 4, 1}};
         s.diffs = {"Easy", "Normal", "Hard", "Infernal"};
-        s.color = 0xFF3B3B; s.stage = 2;
+        s.color = 0xFF3054; s.stage = 2;
         v.push_back(s);
     }
     return v;
@@ -85,7 +85,7 @@ const SongDef* findBuiltin(const std::string& id) {
 const SongDef& menuTheme() {
     static const SongDef def = [] {
         SongDef s;
-        s.id = "hymn"; s.title = "Hymn of the Gate";
+        s.id = "hymn"; s.title = "Rooftop Groove";
         s.bpm = 100; s.root = 50; s.scale = {0, 2, 4, 6, 7, 9, 11}; s.seed = 0x4E11u; s.style = 1;
         s.progressions = {{0, 1, 5, 4}};
         s.parts = {{PartKind::Intro, 4, 0}, {PartKind::Call, 8, 2}, {PartKind::Break, 4, 1}};

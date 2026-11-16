@@ -848,26 +848,75 @@ float menuPulse() {
     return float(std::exp(-frac * 6.0));
 }
 
+namespace {
+
+constexpr Color rgb3(int r, int g, int b) { return Color{(unsigned char)r, (unsigned char)g, (unsigned char)b, 255}; }
+
+}  // namespace
+
+// The menus' backdrop, retro: a night sky of twinkling stars over a striped
+// sun, a grid floor running at you on the beat, and glassy cubes turning in
+// the air, mirrored in the floor. tintHex colours the whole scene.
 void drawMenuBackground(double now, unsigned tintHex, float pulse) {
     const Color tint = gfx::rgb(tintHex);
-    gfx::gradientRect({-20, -20, gfx::W + 40, gfx::H + 40}, gfx::mix(Color{14, 10, 34, 255}, tint, 0.18f),
-                      gfx::mix(Color{40, 20, 60, 255}, tint, 0.35f));
     const float t = float(now);
-    BeginBlendMode(BLEND_ADDITIVE);
-    for (int i = 0; i < 12; ++i) {
-        const float a = t * 0.04f + i * 6.2831853f / 12.0f;
-        const Vector2 c{640, 820};
-        gfx::tri(c, {c.x + std::cos(a - 0.06f) * 1400, c.y + std::sin(a - 0.06f) * 1400},
-                 {c.x + std::cos(a + 0.06f) * 1400, c.y + std::sin(a + 0.06f) * 1400}, gfx::fade(tint, 0.05f));
-    }
-    EndBlendMode();
-    gfx::glow({640, 760}, 520 + 40 * pulse, gfx::fade(tint, 0.35f + 0.15f * pulse));
+    constexpr float kHorizon = 468.0f;
+    const Color skyTop = gfx::mix(rgb3(6, 4, 22), tint, 0.10f), skyLow = gfx::mix(rgb3(70, 18, 86), tint, 0.40f);
+    gfx::gradientRect({-20, -20, gfx::W + 40, kHorizon + 22}, skyTop, skyLow);
+
+    // Stars: a round centre and a ray along each axis, twinkling.
     Rng rng(77);
-    for (int i = 0; i < 90; ++i) {
-        const float x = float(rng.uniform() * gfx::W);
-        const float sp = float(10 + rng.uniform() * 30);
-        const float y = std::fmod(float(rng.uniform() * gfx::H) - t * sp + gfx::H * 4, gfx::H + 40) - 20;
-        DrawCircleV({x, y}, float(1 + rng.uniform() * 2), gfx::fade(WHITE, float(0.2 + 0.5 * rng.uniform())));
+    for (int i = 0; i < 44; ++i) {
+        const float x = float(rng.uniform() * gfx::W), y = float(rng.uniform() * (kHorizon - 70));
+        const float u = float(rng.uniform());
+        const float r = 1.6f + u * u * 7.5f;
+        const float phase = float(rng.uniform() * 6.2831853), speed = float(0.8 + rng.uniform() * 2.4);
+        const float tw = 0.5f + 0.5f * std::sin(t * speed + phase);
+        const Color c = i % 5 == 0 ? gfx::mix(WHITE, tint, 0.45f) : WHITE;
+        gfx::star({x, y}, r * (0.7f + 0.3f * tw + 0.25f * pulse), gfx::fade(c, 0.3f + 0.7f * tw));
+    }
+
+    // The sun on the horizon, cut by stripes near its base.
+    const Vector2 sun{640, kHorizon - 34};
+    const float sunR = 150 + 6 * pulse;
+    gfx::glow(sun, sunR * 1.9f, gfx::fade(gfx::mix(Color{255, 120, 170, 255}, tint, 0.3f), 0.35f));
+    DrawCircleGradient(int(sun.x), int(sun.y), sunR, gfx::fade(Color{255, 226, 90, 255}, 0.85f),
+                       gfx::fade(gfx::mix(Color{255, 70, 150, 255}, tint, 0.25f), 0.85f));
+    for (int k = 0; k < 6; ++k) {
+        const float y = sun.y + 18 + k * 22 + std::fmod(t * 8.0f, 22.0f);
+        const float h = 3 + k * 2.2f;
+        DrawRectangleRec({sun.x - sunR - 4, y, sunR * 2 + 8, h}, gfx::mix(skyTop, skyLow, saturate(y / kHorizon)));
+    }
+
+    // The floor: a grid running toward you, a little faster on the beat.
+    gfx::gradientRect({-20, kHorizon, gfx::W + 40, gfx::H - kHorizon + 20}, gfx::mix(rgb3(24, 6, 36), tint, 0.22f),
+                      rgb3(4, 2, 12));
+    const Color line = gfx::mix(Color{255, 80, 200, 255}, tint, 0.35f);
+    BeginBlendMode(BLEND_ADDITIVE);
+    const float run = std::fmod(t * 0.55f, 1.0f);
+    for (int i = 0; i < 16; ++i) {
+        const float z = float(i) + 1.0f - run;  // depth: the lines come closer and spread apart
+        const float y = kHorizon + 260.0f / z - 6.0f;
+        if (y < kHorizon || y > gfx::H + 4) continue;
+        DrawLineEx({-20, y}, {gfx::W + 20, y}, 1.5f + 1.5f / z, gfx::fade(line, std::min(0.75f, 0.12f + 0.9f / z) * (0.8f + 0.4f * pulse)));
+    }
+    for (int i = -16; i <= 16; ++i)
+        DrawLineEx({640.0f + i * 34.0f, kHorizon}, {640.0f + i * 300.0f, gfx::H + 20.0f}, 1.6f, gfx::fade(line, 0.32f + 0.2f * pulse));
+    DrawLineEx({-20, kHorizon}, {gfx::W + 20, kHorizon}, 2.5f, gfx::fade(line, 0.9f));
+    EndBlendMode();
+
+    // Cubes turning in the air, each with its reflection in the floor.
+    static const Color kCubeColors[5] = {{255, 79, 163, 255}, {40, 220, 255, 255}, {130, 255, 90, 255}, {170, 100, 255, 255},
+                                         {255, 222, 64, 255}};
+    for (int i = 0; i < 6; ++i) {
+        const float fi = float(i);
+        const float x = std::fmod(90.0f + fi * 223.0f + t * (9.0f + fi * 2.0f), gfx::W + 200.0f) - 100.0f;
+        const float y = 150.0f + std::fmod(fi * 97.0f, 230.0f) + std::sin(t * 0.7f + fi * 1.7f) * 14.0f;
+        const float size = (46.0f + std::fmod(fi * 37.0f, 60.0f)) * (1.0f + 0.06f * pulse);
+        const float ax = t * (0.35f + 0.08f * fi) + fi, ay = t * (0.5f - 0.05f * fi) + fi * 2.0f;
+        const Color c = gfx::mix(kCubeColors[i % 5], tint, 0.25f);
+        gfx::cube({x, y}, size, ax, ay, c, 0.22f, true, kHorizon + 8.0f);
+        gfx::cube({x, y}, size, ax, ay, c, 0.85f, false, kHorizon);
     }
 }
 

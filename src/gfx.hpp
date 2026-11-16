@@ -68,6 +68,12 @@ void capsule(Vector2 a, Vector2 b, float radius, Color col);
 void gradientRect(Rectangle r, Color top, Color bottom);
 void glow(Vector2 c, float radius, Color col);  // additive soft light
 void softCircle(Vector2 c, float radius, Color col);  // alpha-blended soft disc
+// A star: a round, soft centre and a thin ray along each axis (big ones get
+// four shorter diagonal rays too).
+void star(Vector2 c, float r, Color col);
+// A glassy cube turning in the air (ax, ay: its angles); mirror draws its
+// reflection in a floor at floorY (flipped, flattened, faint).
+void cube(Vector2 at, float size, float ax, float ay, Color base, float alpha, bool mirror, float floorY);
 Texture2D& glowTexture();
 
 // ---- notes

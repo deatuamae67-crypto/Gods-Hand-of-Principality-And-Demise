@@ -25,8 +25,8 @@ using gfx::FontId;
 using gfx::fade;
 
 namespace {
-const Color kGold{255, 214, 120, 255};
-const Color kIvory{246, 236, 214, 255};
+const Color kGold{255, 222, 64, 255};   // the accent: a bright, cartoon yellow
+const Color kIvory{242, 244, 255, 255};  // text: a cool white
 const Color kMissColor{255, 70, 80, 255};
 
 Color ratingColor(Rating r) {
@@ -1631,7 +1631,7 @@ void PlayState::drawHud() {
             DrawTexturePro(iconTex_[i], src, {pos.x, pos.y, dw, dh}, {dw * 0.5f, dh * 0.5f}, angle, fade(WHITE, ia));
         } else {
             const CharacterState& cs = i == 0 ? left_ : right_;
-            turned(pos, angle, 1, 1, [&] { drawIcon(cs.id, cs.tint, pos, look ? 115.0f * scale : isz, losing, now); });
+            turned(pos, angle, 1, 1, [&] { drawIcon(cs.id, cs.tint, pos, look ? 115.0f * scale : isz, losing, now, flip); });
         }
     }
     // score line (Psych: 40 pixels under the bar's top; 36 in 0.6)
@@ -1873,8 +1873,7 @@ void PlayState::drawUnderNotes() {
         const double bf = chart_.beatAt(songMs_);
         const int b = int(std::floor(bf));
         const float frac = float(bf - b);
-        static const char* words[4] = {"III", "II", "I", "ASCEND!"};
-        static const char* psychWords[4] = {"3", "2", "1", "GO!"};
+        static const char* words[4] = {"3", "2", "1", "GO!"};
         if (b >= -4 && b <= -1) {
             const float sc = 1.0f + 0.35f * std::pow(1.0f - frac, 3.0f);
             if (ui.active()) {
@@ -1883,7 +1882,7 @@ void PlayState::drawUnderNotes() {
                 const float e = frac <= 0.5f ? 4.0f * frac * frac * frac : 1.0f - 4.0f * std::pow(1.0f - frac, 3.0f);
                 if (b > -4) ui.countdown(b + 3, {gfx::W / 2, gfx::H / 2}, 1.0f - e);
             } else {
-                gfx::glowText(FontId::Title, psych_ ? psychWords[b + 4] : words[b + 4], gfx::W / 2, 300 - 40 * sc, 96 * sc,
+                gfx::glowText(FontId::Title, words[b + 4], gfx::W / 2, 300 - 40 * sc, 96 * sc,
                               fade(kGold, 1.0f - frac), Color{255, 170, 60, 255});
             }
         }

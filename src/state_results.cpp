@@ -26,8 +26,8 @@ void fitText(FontId f, const std::string& s, float x, float y, float size, float
     }
     gfx::text(f, s, x, y, size, c, a, outline);
 }
-const Color kGold{255, 214, 120, 255};
-const Color kIvory{246, 236, 214, 255};
+const Color kGold{255, 222, 64, 255};   // the accent: a bright, cartoon yellow
+const Color kIvory{242, 244, 255, 255};  // text: a cool white
 
 Color rankColor(const std::string& r) {
     if (r == "S+" || r == "S") return Color{255, 214, 100, 255};
@@ -107,7 +107,7 @@ public:
                 Align::Left, 2.0f);
         gfx::text(FontId::Ui, "ACCURACY", x + 380, 150, 22, fade(kGold, 0.8f));
         gfx::text(FontId::Ui, TextFormat("%.2f%%", r_.acc * 100.0 * shown), x + 380, 170, 56, WHITE, Align::Left, 2.0f);
-        static const char* names[4] = {"DIVINE", "GRACE", "MORTAL", "SINFUL"};
+        static const char* names[4] = {"SICK!", "GOOD", "BAD", "WACK"};
         for (int i = 0; i < 4; ++i) {
             gfx::text(FontId::Ui, names[i], x, 250.0f + i * 38, 30, kRatingCols[i], Align::Left, 1.5f);
             fitText(FontId::Ui, fmtThousands(r_.counts[size_t(i)]), x + 350, 250.0f + i * 38, 30, 350 - 130, WHITE, Align::Right, 1.5f);

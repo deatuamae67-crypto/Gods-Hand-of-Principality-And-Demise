@@ -1,7 +1,8 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
-// Original characters, drawn entirely with vector shapes.
+// The built-in cast (Hype, Principal P, DJ Hand, D-Mize and the Shades), drawn
+// in code as cartoons with a dark outline.
 #pragma once
 
 #include <string>
@@ -31,6 +32,7 @@ struct CharacterState {
 
 // feet: ground anchor. faceLeft mirrors the body (the player faces left).
 void drawCharacter(const CharacterState& s, Vector2 feet, float scale, double now, bool faceLeft);
-void drawIcon(CharId id, Color tint, Vector2 center, float size, bool losing, double now);
+// The head alone, for the health bar and the song list; faceLeft turns it.
+void drawIcon(CharId id, Color tint, Vector2 center, float size, bool losing, double now, bool faceLeft = false);
 
 }  // namespace gh

@@ -123,8 +123,10 @@ Every version
   - The base game's character offsets and stage layouts in src/basegame.cpp,
     which follow Friday Night Funkin' (The Funkin' Crew): Apache License 2.0,
     see licenses/Apache-2.0.txt
-  - assets/fonts/CinzelDecorative-Bold.ttf and assets/fonts/Rajdhani-Bold.ttf:
-    SIL Open Font License 1.1 (see the OFL files next to them)
+  - assets/fonts/LuckiestGuy-Regular.ttf (Astigmatic): Apache License 2.0,
+    see assets/fonts/LICENSE-LuckiestGuy.txt
+  - assets/fonts/Rajdhani-Bold.ttf: SIL Open Font License 1.1 (see the OFL
+    file next to it)
   Features from PulseForge, also by the Owner, were rewritten for this code
   base and are part of the Software.
 

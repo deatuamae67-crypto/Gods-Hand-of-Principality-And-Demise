@@ -9,10 +9,10 @@
 namespace gh {
 
 static const RatingInfo kRatings[kRatingCount] = {
-    {"DIVINE", 45.0, 350, 1.00, 0.023},
-    {"GRACE", 90.0, 200, 0.70, 0.016},
-    {"MORTAL", 135.0, 100, 0.35, 0.004},
-    {"SINFUL", kMissWindowMs, 50, 0.00, -0.020},
+    {"SICK!", 45.0, 350, 1.00, 0.023},
+    {"GOOD", 90.0, 200, 0.70, 0.016},
+    {"BAD", 135.0, 100, 0.35, 0.004},
+    {"WACK", kMissWindowMs, 50, 0.00, -0.020},
 };
 
 const RatingInfo& ratingInfo(Rating r) { return kRatings[r < kRatingCount ? r : kSinful]; }
@@ -323,11 +323,11 @@ std::string Session::rank() const {
 std::string Session::clearLabel() const {
     if (judged() == 0) return "";
     if (misses == 0) {
-        if (counts[kGrace] + counts[kMortal] + counts[kSinful] == 0) return "SANCTIFIED";
-        if (counts[kMortal] + counts[kSinful] == 0) return "BLESSED";
-        return "FAITHFUL";
+        if (counts[kGrace] + counts[kMortal] + counts[kSinful] == 0) return "SFC";  // Psych Engine's names
+        if (counts[kMortal] + counts[kSinful] == 0) return "GFC";
+        return "FC";
     }
-    return misses < 10 ? "REPENTANT" : "CLEAR";
+    return misses < 10 ? "SDCB" : "Clear";
 }
 
 bool Session::allResolved() const {

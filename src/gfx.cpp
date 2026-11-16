@@ -104,7 +104,7 @@ const Font& fontOf(FontId f) { return f == FontId::Title ? g_title : g_ui; }
 float randf(float lo, float hi) { return lo + (hi - lo) * float(std::rand()) / float(RAND_MAX); }
 
 void init(const std::string& baseDir) {
-    g_title = loadFont(baseDir + "assets/fonts/CinzelDecorative-Bold.ttf", 112, g_titleOwned);
+    g_title = loadFont(baseDir + "assets/fonts/LuckiestGuy-Regular.ttf", 112, g_titleOwned);
     g_ui = loadFont(baseDir + "assets/fonts/Rajdhani-Bold.ttf", 72, g_uiOwned);
 
     Image gi = GenImageColor(128, 128, BLANK);
@@ -295,6 +295,64 @@ void glow(Vector2 c, float radius, Color col) {
 }
 void softCircle(Vector2 c, float radius, Color col) {
     DrawTexturePro(g_glow, {0, 0, 128, 128}, {c.x, c.y, radius * 2, radius * 2}, {radius, radius}, 0, col);
+}
+
+namespace {
+struct Vec3 {
+    float x, y, z;
+};
+}  // namespace
+
+// A star as the menus draw it: a round, soft centre and a thin ray along
+// each axis (the big ones get four shorter diagonal rays too).
+void star(Vector2 c, float r, Color col) {
+    softCircle(c, r * 1.1f, fade(col, 0.55f));
+    const float w = std::max(0.8f, r * 0.16f);
+    for (int k = 0; k < 4; ++k) {
+        const float a = float(k) * 1.5707963f;
+        const Vector2 d{std::cos(a), std::sin(a)}, n{-d.y, d.x};
+        tri({c.x + n.x * w, c.y + n.y * w}, {c.x - n.x * w, c.y - n.y * w}, {c.x + d.x * r * 2.4f, c.y + d.y * r * 2.4f}, col);
+        if (r > 5.5f) {
+            const float b = a + 0.7853982f;
+            const Vector2 e{std::cos(b), std::sin(b)}, m{-e.y, e.x};
+            tri({c.x + m.x * w * 0.6f, c.y + m.y * w * 0.6f}, {c.x - m.x * w * 0.6f, c.y - m.y * w * 0.6f},
+                     {c.x + e.x * r * 1.2f, c.y + e.y * r * 1.2f}, fade(col, 0.7f));
+        }
+    }
+    DrawCircleV(c, std::max(1.0f, r * 0.34f), col);
+}
+
+// A glassy cube turning in the air: lit faces (a highlight where the light
+// hits them straight), bright edges. mirror: its reflection in the floor
+// (flipped about floorY, flattened, faint).
+void cube(Vector2 at, float size, float ax, float ay, Color base, float alpha, bool mirror, float floorY) {
+    static const Vec3 kCorner[8] = {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1}, {-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}};
+    static const int kFace[6][4] = {{0, 1, 2, 3}, {5, 4, 7, 6}, {4, 0, 3, 7}, {1, 5, 6, 2}, {4, 5, 1, 0}, {3, 2, 6, 7}};
+    static const Vec3 kNormal[6] = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}};
+    const float cx = std::cos(ax), sx = std::sin(ax), cy = std::cos(ay), sy = std::sin(ay);
+    auto rot = [&](Vec3 v) {
+        const Vec3 a{v.x * cy + v.z * sy, v.y, -v.x * sy + v.z * cy};    // about the vertical axis
+        return Vec3{a.x, a.y * cx - a.z * sx, a.y * sx + a.z * cx};      // then about the horizontal one
+    };
+    Vector2 p[8];
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 v = rot(kCorner[i]);
+        const float f = 4.0f / (4.0f + v.z);  // perspective
+        float y = at.y + v.y * size * 0.5f * f;
+        if (mirror) y = floorY + (floorY - y) * 0.55f;
+        p[i] = {at.x + v.x * size * 0.5f * f, y};
+    }
+    const Vec3 light{-0.45f, -0.7f, -0.55f};
+    for (int fi = 0; fi < 6; ++fi) {
+        const Vec3 n = rot(kNormal[fi]);
+        if (n.z > -0.02f) continue;  // turned away
+        const float lit = std::max(0.0f, -(n.x * light.x + n.y * light.y + n.z * light.z));
+        const float shine = std::pow(lit, 10.0f);
+        const Color face = mix(mix(Color{10, 8, 30, 255}, base, 0.35f + 0.65f * lit), WHITE, shine * 0.7f);
+        const int* q = kFace[fi];
+        quad(p[q[0]], p[q[1]], p[q[2]], p[q[3]], fade(face, alpha * (0.45f + 0.35f * lit)));
+        for (int k = 0; k < 4; ++k) DrawLineEx(p[q[k]], p[q[(k + 1) % 4]], mirror ? 1.0f : 2.0f, fade(brighten(base, 0.45f), alpha));
+    }
 }
 
 // ----------------------------------------------------------------- notes --
