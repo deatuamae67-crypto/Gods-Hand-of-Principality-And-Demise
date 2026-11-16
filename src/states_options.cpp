@@ -80,6 +80,8 @@ public:
             {Row::Key, "Up lane", "ENTER to rebind, LEFT/RIGHT to pick a slot, BACKSPACE to clear."},
             {Row::Key, "Right lane", "ENTER to rebind, LEFT/RIGHT to pick a slot, BACKSPACE to clear."},
             {Row::Action, "Reset controls", "Restore D F J K and the arrow keys."},
+            {Row::Action, "Key bindings (1 to 18 keys)...", "The key of every lane for charts of 1 to 18 keys, as their arrows show "
+             "in a song. Works with a Bluetooth keyboard on Android too."},
             {Row::Header, "GRAPHICS", ""},
             {Row::Bool, "Fullscreen", "Borderless fullscreen (F11 works anywhere).", &s.fullscreen},
             {Row::Bool, "VSync", "Waits for the screen's refresh. OFF: the frame limit below decides (most precise input).", &s.vsync},
@@ -179,6 +181,7 @@ public:
             else if (r.kind == Row::Number) r.fmt = pct;
             if (r.label == "Calibrate offset...") r.action = [] { app().change(makeCalibration()); };
             if (r.label == "Note colors...") r.action = [] { app().change(makeNoteColors()); };
+            if (r.label == "Key bindings (1 to 18 keys)...") r.action = [] { app().change(makeKeyBindings()); };
             if (r.label == "Note skin") {
                 // Default (NOTE_assets) and the skins in noteSkins/ of the Psych
                 // copy in use and of every installed mod.
@@ -203,13 +206,12 @@ public:
         for (Row& r : rows_)
             if (r.kind == Row::Key) r.lane = lane++;
         if (platform::kAndroid) {
-            // No keyboard and no window: the lanes are the screen itself.
-            bool controls = false;
+            // No window to resize, the lanes are the screen itself, and Render
+            // Mode uses the phone's own H.264 encoder: no encoder to pick. The
+            // key bindings stay, for a Bluetooth keyboard.
             std::vector<Row> kept;
             for (Row& r : rows_) {
-                if (r.kind == Row::Header) controls = r.label.rfind("CONTROLS", 0) == 0;
-                // Rendering mode uses the phone's own H.264 encoder: no encoder to pick.
-                if (controls || r.label == "Fullscreen" || r.label == "Touch controls" || r.label == "Video encoder") continue;
+                if (r.label == "Fullscreen" || r.label == "Touch controls" || r.label == "Video encoder") continue;
                 kept.push_back(std::move(r));
             }
             rows_ = std::move(kept);
@@ -427,6 +429,147 @@ private:
 
 public:
     bool keyReserved(int) const override { return waiting_; }  // rebinding: the next key is the binding
+};
+
+// ----------------------------------------------------------- Key bindings --
+// The keys of every key count, 1 to 18: the lanes as a song shows them, each
+// with its key. LEFT/RIGHT pick a lane (on the top row, the key count), ENTER
+// or a tap on a lane waits for its new key, BACKSPACE gives the lane its
+// default back, R all of them.
+
+class KeyBindState : public State {
+public:
+    TouchLayout touchLayout() const override {
+        TouchLayout t;
+        t.keys = {{"FEWER KEYS", KEY_PAGE_DOWN}, {"MORE KEYS", KEY_PAGE_UP}, {"RESET LANE", KEY_DELETE}, {"RESET ALL", KEY_R}};
+        return t;
+    }
+    bool keyReserved(int) const override { return waiting_; }  // the next key is the binding
+
+    void update(double dt) override {
+        App& a = app();
+        Input& in = a.input;
+        Settings& s = a.settings;
+        anim_ = approach(anim_, float(lane_), 14.0f, float(dt));
+        if (waiting_) {
+            const int code = in.firstPressed();
+            if (code == KEY_ESCAPE || code == KEY_BACK) {
+                waiting_ = false;
+                sfxPlay(Sfx::Cancel);
+            } else if (code > 0 && code < kPadBase) {
+                setKey(s, lane_, code);
+                waiting_ = false;
+                sfxPlay(Sfx::Confirm);
+                a.saveSettings();
+            }
+            return;
+        }
+        const int before = keys_;
+        if (in.pressed(KEY_PAGE_UP) || (row_ == 0 && in.right())) keys_ = std::min(ek::kTableKeys, keys_ + 1);
+        if (in.pressed(KEY_PAGE_DOWN) || (row_ == 0 && in.left())) keys_ = std::max(1, keys_ - 1);
+        if (keys_ != before) {
+            lane_ = clampv(lane_, 0, keys_ - 1);
+            sfxPlay(Sfx::Scroll);
+        }
+        if (in.up() && row_ == 1) { row_ = 0; sfxPlay(Sfx::Scroll); }
+        if (in.down() && row_ == 0) { row_ = 1; sfxPlay(Sfx::Scroll); }
+        if (row_ == 1) {
+            if (in.left()) { lane_ = (lane_ + keys_ - 1) % keys_; sfxPlay(Sfx::Scroll); }
+            if (in.right()) { lane_ = (lane_ + 1) % keys_; sfxPlay(Sfx::Scroll); }
+        }
+        if (in.accept()) {
+            if (row_ == 0) row_ = 1;
+            else waiting_ = true;
+            sfxPlay(Sfx::Scroll);
+        }
+        if (in.pressed(KEY_DELETE) || (in.pressed(KEY_BACKSPACE) && row_ == 1)) {
+            setKey(s, lane_, 0);
+            sfxPlay(Sfx::Cancel);
+            a.saveSettings();
+            return;
+        }
+        if (in.pressed(KEY_R)) {
+            for (int l = 0; l < keys_; ++l) setKey(s, l, 0);
+            sfxPlay(Sfx::Confirm);
+            a.saveSettings();
+        }
+        // A tap or click on a lane: that lane waits for its key.
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            const Vector2 p = gfx::toCanvas(GetMousePosition());
+            for (int l = 0; l < keys_; ++l) {
+                const Vector2 c = laneCenter(l);
+                if (std::fabs(p.x - c.x) < laneStep() * 0.5f && std::fabs(p.y - c.y) < 90) {
+                    lane_ = l;
+                    row_ = 1;
+                    waiting_ = true;
+                    sfxPlay(Sfx::Scroll);
+                    return;
+                }
+            }
+        }
+        if (in.back() && !in.pressed(KEY_BACKSPACE)) {
+            a.saveSettings();
+            sfxPlay(Sfx::Cancel);
+            a.change(makeOptions());
+        }
+    }
+
+    void draw() override {
+        App& a = app();
+        const Settings& s = a.settings;
+        gfx::beginCanvas();
+        drawMenuBackground(a.now, 0x5C9CFF, menuPulse());
+        gfx::text(FontId::Title, "KEY BINDINGS", 60, 22, 48, kGold, Align::Left, 2.0f);
+        const bool top = row_ == 0;
+        DrawRectangleRounded({440, 110, 400, 56}, 0.4f, 8, top ? Color{255, 214, 120, 60} : Color{0, 0, 0, 110});
+        gfx::text(FontId::Title, TextFormat("<   %d KEY%s   >", keys_, keys_ == 1 ? "" : "S"), 640, 116, 38, top ? kGold : kIvory,
+                  Align::Center, 2.0f);
+        const auto lanes = s.laneKeys(keys_);
+        const auto defaults = Settings::defaultLaneKeys(keys_);
+        const float size = std::min(96.0f, laneStep() * 0.9f);
+        for (int l = 0; l < keys_; ++l) {
+            const Vector2 c = laneCenter(l);
+            const bool on = row_ == 1 && l == lane_;
+            if (on) DrawRectangleRounded({c.x - laneStep() * 0.5f + 2, c.y - 70, laneStep() - 4, 190}, 0.2f, 8, Color{255, 214, 120, 50});
+            gfx::drawNote(gfx::laneDir(keys_, l), {c.x, c.y}, size, on ? 1.0f : 0.75f);
+            const int code = l < int(lanes.size()) && !lanes[size_t(l)].empty() ? lanes[size_t(l)][0] : 0;
+            const bool changed = l < int(defaults.size()) && !defaults[size_t(l)].empty() && code != defaults[size_t(l)][0];
+            const std::string name = on && waiting_ ? std::string("?") : std::string(code ? keyName(code) : "-");
+            const float ts = keys_ > 12 ? 20.0f : keys_ > 8 ? 24.0f : 30.0f;
+            gfx::text(FontId::Ui, name, c.x, c.y + 64, ts, on ? WHITE : (changed ? kGold : kIvory), Align::Center, 1.5f);
+        }
+        std::string help = waiting_ ? "Press the key for this lane (ESC: keep the one it has)"
+                                    : "Lanes for charts with this many keys. Gold: a key you chose.";
+        if (keys_ == 4 && !waiting_) help = "4 keys: also in Options > CONTROLS, with a second key for each lane.";
+        DrawRectangleRec({0, gfx::H - 84, gfx::W, 44}, Color{0, 0, 0, 120});
+        gfx::text(FontId::Ui, help, gfx::W / 2, gfx::H - 76, 24, kIvory, Align::Center);
+        if (!a.touchMode) {
+            DrawRectangleRec({0, gfx::H - 40, gfx::W, 40}, Color{0, 0, 0, 150});
+            gfx::text(FontId::Ui, "UP/DOWN row   LEFT/RIGHT keys or lane   ENTER rebind   BACKSPACE default   R all defaults   ESC back",
+                      gfx::W / 2, gfx::H - 33, 22, Color{220, 214, 235, 255}, Align::Center);
+        }
+        gfx::endCanvas();
+    }
+
+private:
+    float laneStep() const { return std::min(130.0f, 1180.0f / float(keys_)); }
+    Vector2 laneCenter(int lane) const {
+        const float w = laneStep() * float(keys_);
+        return {640.0f - w * 0.5f + laneStep() * (float(lane) + 0.5f), 330.0f};
+    }
+    void setKey(Settings& s, int lane, int code) {
+        if (keys_ == 4) {
+            const Settings d;
+            s.keys4[lane][0] = code ? code : d.keys4[lane][0];
+            return;
+        }
+        std::vector<int>& v = s.laneBinds[keys_];
+        v.resize(size_t(keys_), 0);
+        v[size_t(lane)] = code;
+    }
+    int keys_ = 9, lane_ = 0, row_ = 1;
+    float anim_ = 0;
+    bool waiting_ = false;
 };
 
 // ------------------------------------------------------------ Calibration --
@@ -670,6 +813,7 @@ private:
 };
 
 std::unique_ptr<State> makeNoteColors() { return std::make_unique<NoteColorsState>(); }
+std::unique_ptr<State> makeKeyBindings() { return std::make_unique<KeyBindState>(); }
 
 std::unique_ptr<State> makeOptions() { return std::make_unique<OptionsState>(); }
 std::unique_ptr<State> makeCalibration() { return std::make_unique<CalibrationState>(); }

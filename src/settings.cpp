@@ -2,6 +2,8 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "settings.hpp"
+
+#include <algorithm>
 #include "keys.hpp"
 
 #include <cstdio>
@@ -33,6 +35,20 @@ bool Settings::load(const std::string& path) {
         if (k.rfind("key", 0) == 0 && k.size() == 5) {
             const int lane = k[3] - '0', slot = k[4] - '0';
             if (lane >= 0 && lane < 4 && slot >= 0 && slot < 2) keys4[lane][slot] = int(d);
+        } else if (k.rfind("lanes", 0) == 0 && k.size() > 5) {  // lanes9=65,83,...
+            const int count = std::atoi(k.c_str() + 5);
+            if (count >= 1 && count <= ek::kTableKeys && count != 4) {
+                std::vector<int> codes;
+                size_t p = 0;
+                while (p <= v.size() && int(codes.size()) < count) {
+                    const size_t c = v.find(',', p);
+                    codes.push_back(std::atoi(v.substr(p, c == std::string::npos ? std::string::npos : c - p).c_str()));
+                    if (c == std::string::npos) break;
+                    p = c + 1;
+                }
+                codes.resize(size_t(count), 0);
+                laneBinds[count] = codes;
+            }
         } else if (k == "downscroll") downscroll = b;
         else if (k == "middlescroll") middlescroll = b;
         else if (k == "ghostTapping") ghostTapping = b;
@@ -131,6 +147,12 @@ bool Settings::save(const std::string& path) const {
     if (!f) return false;
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 2; ++j) f << "key" << i << j << "=" << keys4[i][j] << "\n";
+    for (const auto& [count, codes] : laneBinds) {
+        if (std::all_of(codes.begin(), codes.end(), [](int c) { return c == 0; })) continue;
+        f << "lanes" << count << "=";
+        for (size_t i = 0; i < codes.size(); ++i) f << (i ? "," : "") << codes[i];
+        f << "\n";
+    }
     f << "downscroll=" << downscroll << "\nmiddlescroll=" << middlescroll << "\nghostTapping=" << ghostTapping
       << "\nnoteSplashes=" << noteSplashes << "\nflashing=" << flashing << "\ncamZoom=" << camZoom
       << "\nshowFps=" << showFps << "\nfpsMemory=" << fpsMemory << "\nfpsFrameTimes=" << fpsFrameTimes << "\nfpsUsage=" << fpsUsage
@@ -155,8 +177,16 @@ bool Settings::save(const std::string& path) const {
 }
 
 std::vector<std::vector<int>> Settings::laneKeys(int keys) const {
+    if (keys != 4) {
+        std::vector<std::vector<int>> r = defaultLaneKeys(keys);
+        auto it = laneBinds.find(keys);
+        if (it != laneBinds.end())
+            for (size_t l = 0; l < r.size() && l < it->second.size(); ++l)
+                if (it->second[l] > 0) r[l] = {it->second[l]};
+        return r;
+    }
     std::vector<std::vector<int>> r;
-    if (keys == 4) {
+    {
         for (int i = 0; i < 4; ++i) r.push_back({keys4[i][0], keys4[i][1]});
         // Gamepad: d-pad and face buttons.
         r[0].push_back(kPadBase + GAMEPAD_BUTTON_LEFT_FACE_LEFT);
@@ -167,6 +197,14 @@ std::vector<std::vector<int>> Settings::laneKeys(int keys) const {
         r[2].push_back(kPadBase + GAMEPAD_BUTTON_RIGHT_FACE_UP);
         r[3].push_back(kPadBase + GAMEPAD_BUTTON_LEFT_FACE_RIGHT);
         r[3].push_back(kPadBase + GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
+        return r;
+    }
+}
+
+std::vector<std::vector<int>> Settings::defaultLaneKeys(int keys) {
+    std::vector<std::vector<int>> r;
+    if (keys == 4) {
+        for (int k : {KEY_D, KEY_F, KEY_J, KEY_K}) r.push_back({k});
         return r;
     }
     static const std::vector<std::vector<int>> presets = {

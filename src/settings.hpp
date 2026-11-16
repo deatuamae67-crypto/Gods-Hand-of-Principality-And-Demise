@@ -15,6 +15,9 @@ constexpr int kPadBase = 1000;  // gamepad buttons are mapped to codes 1000+butt
 
 struct Settings {
     int keys4[4][2];  // two bindings per lane for 4-key charts
+    // The other key counts (1 to 18): a key per lane chosen in Options > Key
+    // bindings (0: the default key of that lane).
+    std::map<int, std::vector<int>> laneBinds;
     bool downscroll = false;
     bool middlescroll = false;
     bool ghostTapping = true;
@@ -110,6 +113,7 @@ struct Settings {
     bool save(const std::string& path) const;
     // Key codes for each lane of a K-key chart (4K uses keys4, others presets).
     std::vector<std::vector<int>> laneKeys(int keys) const;
+    static std::vector<std::vector<int>> defaultLaneKeys(int keys);  // the keys before any rebinding
 };
 
 const char* keyName(int code);
