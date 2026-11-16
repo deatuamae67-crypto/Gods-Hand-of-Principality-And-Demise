@@ -1,11 +1,11 @@
 # God's Hand wiki
 
-God's Hand of Principality and Demise is a rhythm game engine in C++ that plays Friday Night Funkin' mods made for Psych Engine, JS Engine and Kade, and its own songs. This wiki describes what it does for modders and players, for version **1.10.0**. It lives in the repository (`docs/wiki/`), so it changes with the code.
+God's Hand of Principality and Demise is a rhythm game engine in C++ that plays Friday Night Funkin' mods made for Psych Engine, JS Engine and Kade, and its own songs. This wiki describes what it does for modders and players, for version **1.11.0**. It lives in the repository (`docs/wiki/`), so it changes with the code.
 
 | Page | What it covers |
 |---|---|
 | [Options](Options.md) | Every option of the Options menu, tab by tab |
-| [Lua API](Lua-API.md) | All 311 functions Lua scripts can call, and the variables they see |
+| [Lua API](Lua-API.md) | All 326 functions Lua scripts can call, and the variables they see |
 | [Callbacks](Callbacks.md) | The functions the game calls in scripts (onCreate, goodNoteHit, onEvent...) |
 | [HScript](HScript.md) | `runHaxeCode` and `.hx` scripts: the language and the classes |
 | [Shaders](Shaders.md) | Shaders on sprites (in layers) and cameras, and JS Engine's screen effects |

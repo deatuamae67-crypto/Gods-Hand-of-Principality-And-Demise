@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 1.10.0 LANGUAGES C CXX)
+project(GodsHand VERSION 1.11.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -357,10 +357,10 @@ if(GH_BUILD_TESTS AND TARGET raylib)
                  src/render_mode.cpp src/process.cpp src/sysinfo.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   if(WIN32)
-    target_link_libraries(gh_tests PRIVATE shell32 ole32)  # platform.cpp's folder dialog
+    target_link_libraries(gh_tests PRIVATE shell32 ole32 pdh)  # platform.cpp's folder dialog; sysinfo.cpp's GPU counters
   endif()
   if(APPLE)
-    target_link_libraries(gh_tests PRIVATE "-framework Cocoa")
+    target_link_libraries(gh_tests PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreFoundation")  # sysinfo.cpp
   endif()
   target_compile_definitions(gh_tests PRIVATE GH_AUDIO_TESTS=1)
 endif()

@@ -39,8 +39,10 @@ A character, stage, image, sound, video, shader or font a mod uses but does not 
 - **HScript** (`runHaxeCode`, `.hx` files): [HScript](HScript.md).
 - **Shaders** on sprites and cameras, and JS Engine's screen effects: [Shaders](Shaders.md).
 - **Videos**: `startVideo` cutscenes and video sprites (`.mp4`/`.webm` are converted once with ffmpeg when it is installed; `.mpg` plays as it is).
-- **Events and note types**: Psych's, JS Engine's, V-Slice's and the mod's own.
+- **Events and note types**: Psych's, JS Engine's and the mod's own; V-Slice's camera, zoom and scroll events and the Psych events P-Slice and H-Slice make of them (Zoom Camera, Target Camera, Set Camera Bopping, Vslice Scroll Speed); the base game's stage events (Philly Glow, Kill Henchmen, Trigger BG Ghouls, Dadbattle Spotlight, BG Freaks Expression); and the events Dek Engine, Denpa Engine and other engines have built in (Camera rotate, Flash in its colours, Invert, Glitch Shader add, Change Zoom Interval...). Events that older engines had built in and mods call without a script (Blammed Lights, Subtitle, Stage Tint, Cinematics, Hide HUD, FadeScreen, Lyrics, camera speed and zoom events...) come with the game as Lua scripts. The song's own mod's `custom_events` script of the same name always runs instead; another mod's script of that name is not borrowed for an event the game already knows.
 - **Base game and Kade builds**: the week 1–6 characters, stages and stage behaviour are rebuilt from the mod's own images.
+
+`godshand --check-scripts <folder>` reads every Lua script, HScript file, `runHaxeCode` block and shader under a folder as a song would, without playing, and lists the ones that fail and why.
 
 Scripts run in a sandbox (no `io`, `os.execute` or `debug`; files can only be written inside `mods/`), and a script stuck in a loop is stopped with a warning instead of freezing the game. Options → DEBUG chooses when script errors and warnings show.
 

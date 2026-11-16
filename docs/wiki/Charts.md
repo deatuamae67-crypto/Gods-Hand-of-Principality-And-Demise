@@ -14,9 +14,10 @@ See also: [Editors](Editors.md), [Mods](Mods.md).
 | God's Hand binary | `.ghc` (below) |
 | Audio only | a folder with a song and no chart: AutoChart makes one for every track of 30 s or more |
 
-Charts can have 1 to 18 keys a side: `keyCount`, or `mania` (Dave & Bambi, Kade, Andromeda, Psych Extra Keys up to `mania` 17 for 18 keys, Shaggy), or Denpa Engine's `options.mania`. The notes decide which numbering a chart uses; a chart without either has 4 keys, as in Psych. Options → GAMEPLAY → Extra keys OFF plays everything with 4 keys.
+Charts can have 1 to 100 keys a side: `keyCount` (up to 100), or `mania` (Dave & Bambi, Kade, Andromeda, Psych Extra Keys up to `mania` 17 for 18 keys, Shaggy), or Denpa Engine's `options.mania`. The notes decide which numbering a chart uses; a chart without either has 4 keys, as in Psych. Options → GAMEPLAY → Extra keys OFF plays everything with 4 keys.
 
-- **10 to 18 keys** use the lane widths, arrow directions and keys of the extra keys scripts of JS Engine mods (18 keys: `Q W E R A S D F V N H J K L U I O P`).
+- **10 to 18 keys** use the lane widths, arrow directions and keys of the extra keys scripts of JS Engine mods (18 keys: `Q W E R A S D F V N H J K L U I O P`). Options → CONTROLS → **Key bindings** changes the key of every lane, for each key count from 1 to 18 (a Bluetooth keyboard works on Android too).
+- **19 to 100 keys**: the lanes narrow to fit and take the keyboard's keys row by row (`1`–`0`, `Q`–`]`, `A`–`'`, `Z`–`/`: 43 keys); the bot plays the lanes past them for you.
 - **Leather Engine** charts can give each side its own key count: `keyCount` is the opponent's and `playerKeyCount` the player's. A note's value belongs to the side the section is on when it is under that side's key count, and to the other side otherwise; its lane is the value modulo its side's keys, as in Leather.
 - **Scripts that fake extra keys** in a 4-key engine (the "Extra Keys Script" of JS Engine mods, which builds its own arrows) do not run: the game plays the chart's keys itself.
 
@@ -33,6 +34,7 @@ Charts of millions of notes load in seconds:
 A `.ghc` file holds a Psych chart in a fraction of its JSON size and loads faster. Nothing is lost: the game reads it as the chart it was made from.
 
 - **How it is built**: the song data, sections and events stay as compressed JSON. The notes become columns: times, hold lengths, lanes, stacks and note types. Each time is stored as how much the gap from the note before changed, in nanoseconds; hold lengths are stored in microseconds. Small numbers like these pack very well. The columns are compressed with deflate in blocks of 262,144 notes, and the blocks are unpacked on every core at once. Deflate and not a stronger packer: past this point a smaller file costs more time to unpack than it saves to read.
+- **Versions**: version 2 (God's Hand 1.11.0) keeps note values up to 255, for charts of up to 100 keys a side; version 1 files still open.
 - **How much smaller**: a spam chart of 3.42 million notes went from 201.1 MB of JSON to 2.4 MB (84.6× smaller, converted in 0.31 s) and loads in 150 ms instead of 240 ms. A small chart of 1,400 notes went from 34.5 KB to 2.6 KB (13.4× smaller).
 - **Making one**:
   - main menu `7` → **Chart Converter**: pick a mod, then convert one chart or all of them. Each line shows how much smaller its file got.

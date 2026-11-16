@@ -1,6 +1,6 @@
 # Lua API
 
-Every function God's Hand gives Lua scripts (311), as Psych Engine names them, with what God's Hand adds.
+Every function God's Hand gives Lua scripts (326), as Psych Engine names them, with what God's Hand adds.
 Scripts go in a mod's `scripts/` (every song), `data/<song>/` (one song), `stages/<stage>.lua`, `custom_events/` and `custom_notetypes/`.
 See also: [Callbacks](Callbacks.md), [HScript](HScript.md), [Shaders](Shaders.md).
 
@@ -46,6 +46,7 @@ See also: [Callbacks](Callbacks.md), [HScript](HScript.md), [Shaders](Shaders.md
 
 | Function | What it does |
 |---|---|
+| `addAnim(tag, name, prefix, fps, loop)` | Old name of addAnimationByPrefix. |
 | `addAnimation(tag, name, frames, fps, loop)` | An animation from frame numbers. |
 | `addAnimationByIndices(tag, name, prefix, indices, fps, loop)` | An animation from some frames of a prefix (`'0,1,2,3'` or a table). |
 | `addAnimationByIndicesLoop(tag, name, prefix, indices, fps)` | The same, looping. |
@@ -86,12 +87,17 @@ See also: [Callbacks](Callbacks.md), [HScript](HScript.md), [Shaders](Shaders.md
 | `getProperty(path)` | Any value by path: `'boyfriend.x'`, `'camGame.zoom'`, `'iconP1.alpha'`, `'tag.scale.x'`, `'playerStrums.members[0].y'`... |
 | `getPropertyFromClass(class, field)` | A static field: `ClientPrefs.downScroll`, `Conductor.songPosition`, `flixel.FlxG.camera.zoom`... |
 | `getPropertyFromGroup(group, index, field)` | A field of a member: `notes`, `unspawnNotes`, `playerStrums`, `opponentStrums`, `strumLineNotes`... |
+| `getPropertyFromObject(object, property)` | getProperty('object.property'), as some engines name it. |
 | `getVar(name)` | Reads it. |
+| `getX(object)` | Its X (0 when there is none). |
+| `getY(object)` | Its Y (0 when there is none). |
 | `removeVar(name)` | Forgets it. |
 | `setProperty(path, value)` | Changes it (numbers given as text, and true/false, are converted as in Psych). |
 | `setPropertyFromClass(class, field, value)` | Changes it. |
 | `setPropertyFromGroup(group, index, field, value)` | Changes it. |
 | `setVar(name, value)` | A variable shared by every script (Lua and HScript). |
+| `setX(object, x)` | Moves it (X). |
+| `setY(object, y)` | Moves it (Y). |
 
 ## Tweens and timers
 
@@ -139,6 +145,7 @@ Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new
 | `removeCamera(tag)` | Accepted for compatibility; does nothing in God's Hand. |
 | `setCameraFollowPoint(x, y)` | Where the camera heads. |
 | `setCameraScroll(x, y)` | Where the camera is now. |
+| `windowShake()` | Vs Dek's window nudge: the view trembles a pixel instead (the window stays where the player put it). |
 
 ## Shaders
 
@@ -178,6 +185,7 @@ Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new
 | `addBloomEffect(camera, intensity, blurSize)` | Glow (0.35, 1). |
 | `addChromaticAbberationEffect(camera, offset)` | The same (JS Engine's spelling). |
 | `addChromaticAberrationEffect(camera, offset)` | Red and blue pulled apart by offset (0.005). |
+| `AddChromaticAberrationEffect(camera, offset)` | addChromaticAberrationEffect, with a capital A as some scripts call it. |
 | `addDistortionEffect(camera, waveSpeed, waveFrq, waveAmp)` | Distortion. |
 | `addGlitchEffect(camera, waveSpeed, waveFrq, waveAmp)` | Wavy glitch. |
 | `addGlitchShader(camera, amount)` | Glitch. |
@@ -189,8 +197,11 @@ Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new
 | `addScanlineEffect(camera, lockAlpha)` | CRT lines. |
 | `addTiltshiftEffect(camera, blurAmount, center)` | Tilt-shift blur. |
 | `addVCREffect(camera, glitchFactor, distortion, perspectiveOn, vignetteMoving)` | VHS look: glitches, a curved picture, a moving vignette and scanlines. |
+| `addWavyShader(object)` | The same wiggle with its usual values. |
 | `addWiggleEffect(camera, type, speed, frequency, amplitude, verticalStrength, horizontalStrength)` | Wavy picture: type `'dreamy'`, `'wavy'`, `'heat_wave_horizontal'`, `'heat_wave_vertical'`, `'heat_wave_both'` or `'flag'`. |
 | `clearEffects(camera)` | Every effect off. |
+| `clearWiggleEffect(object)` | Takes the wiggles off a sprite or a camera. |
+| `wavyEffect(object, amplitude, frequency, speed)` | A dreamy wiggle on a sprite or a camera (0.1, 5, 2), as the mods' engines have it. |
 
 ## Sounds and music
 
@@ -231,6 +242,7 @@ Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new
 | `addNPS(value)` | Accepted for compatibility; does nothing in God's Hand: the game counts the notes per second itself. |
 | `addScore(value)` | Adds to it. |
 | `changeCharacter(type, name)` | Swaps a character. |
+| `changeMania(keys)` | Kade extra keys: the song already plays with all its keys, so it only warns once. |
 | `changeMaxHealth(value)` | Accepted for compatibility; does nothing in God's Hand: the most health stays 2. |
 | `endSong()` | Ends the song now. |
 | `exitSong()` | Back to the menus. |
@@ -368,10 +380,12 @@ Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new
 | `getActorX(actor)` | Kade: getProperty(actor .. '.x'). |
 | `getActorY(actor)` | Kade. |
 | `getPropertyLuaSprite(tag, field)` | Psych 0.4: getProperty(tag .. '.' .. field). |
+| `iconScale(...)` | Does nothing (an engine's own helper). |
 | `luaSpriteAddAnimationByIndices(tag, name, prefix, indices, fps)` | Psych 0.4. |
 | `luaSpriteAddAnimationByPrefix(tag, name, prefix, fps, loop)` | Psych 0.4. |
 | `luaSpriteMakeGraphic(tag, w, h, color)` | Psych 0.4: makeGraphic. |
 | `luaSpritePlayAnimation(tag, name, forced)` | Psych 0.4. |
+| `resizeWindow(width, height)` | Does nothing: the player sizes the window. |
 | `scaleLuaSprite(tag, x, y)` | Psych 0.4: scaleObject. |
 | `setActorAlpha(alpha, actor)` | Kade. |
 | `setActorAngle(angle, actor)` | Kade. |
@@ -398,6 +412,7 @@ Tweens and timers are kept by tag, as in Psych 0.4 to 0.7.3 and JS Engine: a new
 | `tweenPos(actor, x, y, time, onComplete)` | Kade. |
 | `tweenPosXAngle(actor, x, angle, time, onComplete)` | Kade. |
 | `tweenPosYAngle(actor, y, angle, time, onComplete)` | Kade. |
+| `wait(...)` | Does nothing (an engine's own helper; use runTimer). |
 
 ## Variables
 
