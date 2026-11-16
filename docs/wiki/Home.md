@@ -1,6 +1,6 @@
 # God's Hand wiki
 
-God's Hand of Principality and Demise is a rhythm game engine in C++ that plays Friday Night Funkin' mods made for Psych Engine, JS Engine and Kade, and its own songs. This wiki describes what it does for modders and players, for version **1.12.0**. It lives in the repository (`docs/wiki/`), so it changes with the code.
+God's Hand of Principality and Demise is a rhythm game engine in C++ that plays Friday Night Funkin' mods made for Psych Engine, JS Engine and Kade, and its own songs. This wiki describes what it does for modders and players, for version **1.12.1**. It lives in the repository (`docs/wiki/`), so it changes with the code.
 
 | Page | What it covers |
 |---|---|
