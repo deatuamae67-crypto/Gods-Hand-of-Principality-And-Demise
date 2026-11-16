@@ -107,8 +107,10 @@ void PlayState::enter() {
     const SongEntry copy = *entry_;
     const std::string diff = req_.diff;
     const bool extraKeys = app().settings.extraKeys;
-    job_ = std::async(std::launch::async,
-                      [copy, diff, mirror, extraKeys] { return app().library.prepare(copy, diff, mirror, extraKeys); });
+    const bool autoChart = req_.autoChart;
+    job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart] {
+        return app().library.prepare(copy, diff, mirror, extraKeys, autoChart);
+    });
     loadStart_ = a.now;
     loadStartReal_ = nowSec();
 }
@@ -389,7 +391,7 @@ void PlayState::setup() {
         playerLeft_ = playback_.mirror;
     }
     // Rendering mode: the song plays by itself and is recorded from here on.
-    if (a.wantsRender() && !replaying_) {
+    if ((req_.render || a.wantsRender()) && !replaying_) {
         rendering_ = a.startRender(entry_->title, req_.diff);
         if (rendering_) cfg_.botplay = true;
     }
@@ -1083,7 +1085,8 @@ void PlayState::finish() {
     const bool saveable = !cfg_.botplay && !cfg_.practice && !replaying_ && rate_ >= 1.0;
     if (saveable) {
         ScoreEntry e{r.score, r.acc, r.misses, r.rank, r.clear};
-        r.newBest = a.scores.submit(Scores::key(entry_->id + (playerLeft_ ? "#opponent" : ""), req_.diff), e);
+        r.newBest = a.scores.submit(Scores::key(entry_->id + (playerLeft_ ? "#opponent" : "") + (req_.autoChart ? "#autochart" : ""),
+                                                req_.diff), e);
     }
     if (!replaying_ && !cfg_.botplay && !record_.events.empty()) {
         record_.songId = entry_->id;

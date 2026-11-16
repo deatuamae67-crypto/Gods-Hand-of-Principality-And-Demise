@@ -246,6 +246,7 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
         else if (!std::strcmp(a, "--render")) renderCli = true;  // record the --autoplay song to renders/
+        else if (!std::strcmp(a, "--autochart")) autoChartCli = true;  // the --autoplay song with an AutoChart
         else if (!std::strcmp(a, "--size")) std::sscanf(next(), "%dx%d", &winW_, &winH_);  // e.g. 2400x1080
     }
     if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
@@ -371,11 +372,16 @@ int App::run(int argc, char** argv) {
         PlayRequest r;
         r.songId = autoRun.song.find(':') == std::string::npos ? "builtin:" + autoRun.song : autoRun.song;
         r.diff = autoRun.diff;
+        r.autoChart = autoChartCli;
         mods.botplay = autoRun.botplay;
         state_ = makePlay(r);
     } else if (!autoRun.editorSong.empty()) state_ = makeChartEditor(autoRun.editorSong, autoRun.diff);
     else if (autoRun.state == "menu") state_ = makeMainMenu();
     else if (autoRun.state == "freeplay") state_ = makeFreeplay();
+    else if (autoRun.state == "render-list" || autoRun.state == "autochart-list") {
+        songListMode = autoRun.state == "render-list" ? SongListMode::Render : SongListMode::AutoChart;
+        state_ = makeFreeplay();
+    }
     else if (autoRun.state == "story") state_ = makeStory();
     else if (autoRun.state == "options") state_ = makeOptions();
     else if (autoRun.state == "credits") state_ = makeCredits();
@@ -742,7 +748,7 @@ void App::drawFpsPanel() {
 
 // -------------------------------------------------------- rendering mode --
 
-bool App::wantsRender() const { return settings.renderMode || renderCli; }
+bool App::wantsRender() const { return renderCli; }  // Render Mode itself is PlayRequest::render
 
 bool App::startRender(const std::string& title, const std::string& diff) {
     if (renderer.active()) return true;

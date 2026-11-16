@@ -175,9 +175,17 @@ private:
 
 // -------------------------------------------------------------- Main menu --
 
+// RENDER MODE and AUTOCHART open the song list for recording a video or
+// for playing a chart made from the song's audio.
+constexpr const char* kMainItems[] = {"STORY MODE", "FREEPLAY", "RENDER MODE", "AUTOCHART", "OPTIONS", "CREDITS", "QUIT"};
+constexpr int kMainCount = int(sizeof(kMainItems) / sizeof(kMainItems[0]));
+
 class MainMenuState : public State {
 public:
-    void enter() override { anim_ = float(app().mainSel); }
+    void enter() override {
+        app().mainSel = clampv(app().mainSel, 0, kMainCount - 1);
+        anim_ = float(app().mainSel);
+    }
     void update(double dt) override {
         App& a = app();
         int& sel = a.mainSel;
@@ -186,20 +194,27 @@ public:
             if (a.now - chosenAt_ > 0.55) {
                 switch (chosen_) {
                     case 0: a.change(makeStory()); break;
-                    case 1: a.change(makeFreeplay()); break;
-                    case 2: a.change(makeOptions()); break;
-                    case 3: a.change(makeCredits()); break;
+                    case 1:
+                    case 2:
+                    case 3:
+                        a.songListMode = chosen_ == 2   ? App::SongListMode::Render
+                                         : chosen_ == 3 ? App::SongListMode::AutoChart
+                                                        : App::SongListMode::Play;
+                        a.change(makeFreeplay());
+                        break;
+                    case 4: a.change(makeOptions()); break;
+                    case 5: a.change(makeCredits()); break;
                     default: a.quit = true; break;
                 }
             }
             return;
         }
-        if (a.input.up()) { sel = (sel + 4) % 5; sfxPlay(Sfx::Scroll); }
-        if (a.input.down()) { sel = (sel + 1) % 5; sfxPlay(Sfx::Scroll); }
+        if (a.input.up()) { sel = (sel + kMainCount - 1) % kMainCount; sfxPlay(Sfx::Scroll); }
+        if (a.input.down()) { sel = (sel + 1) % kMainCount; sfxPlay(Sfx::Scroll); }
         if (a.input.accept()) {
             chosen_ = sel;
             chosenAt_ = a.now;
-            sfxPlay(sel == 4 ? Sfx::Cancel : Sfx::Confirm);
+            sfxPlay(sel == kMainCount - 1 ? Sfx::Cancel : Sfx::Confirm);
         }
         if (a.input.back()) { sfxPlay(Sfx::Cancel); a.change(makeTitle()); }
         // 7: the editors (chart, character, stage, events), as Psych's Master Editor Menu.
@@ -212,7 +227,7 @@ public:
         App& a = app();
         const double now = a.now;
         const float pulse = menuPulse();
-        static const char* items[5] = {"STORY MODE", "FREEPLAY", "OPTIONS", "CREDITS", "QUIT"};
+        const char* const* items = kMainItems;
         gfx::beginCanvas();
         drawMenuBackground(now, 0x8C6CFF, pulse);
         CharacterState h;
@@ -221,10 +236,10 @@ public:
         gfx::glow({1080, 500}, 230 + 20 * pulse, fade(kGold, 0.3f));
         drawCharacter(h, {1080, 640}, 0.85f, now, true);
         gfx::text(FontId::Title, "GOD'S HAND", 60, 40, 44, kGold, Align::Left, 2.0f);
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < kMainCount; ++i) {
             const bool on = i == a.mainSel;
-            const float y = 165.0f + i * 92.0f - (on ? 6.0f : 0.0f);
-            float size = on ? 66.0f + 4.0f * pulse : 50.0f;
+            const float y = 128.0f + i * 70.0f - (on ? 6.0f : 0.0f);
+            float size = on ? 56.0f + 4.0f * pulse : 42.0f;
             Color c = on ? kGold : fade(kIvory, 0.55f);
             if (chosen_ >= 0 && on && std::fmod(float(now - chosenAt_) * 10.0f, 2.0f) < 1.0f) c = WHITE;
             if (chosen_ >= 0 && !on) c = fade(c, std::max(0.0f, 1.0f - float(now - chosenAt_) * 3.0f));
@@ -416,7 +431,7 @@ public:
         if (n > 0) {
             if (in.up()) { sel = (sel + n - 1) % n; changed(); }
             if (in.down()) { sel = (sel + 1) % n; changed(); }
-            const int nd = int(list_[size_t(sel)]->diffs.size());
+            const int nd = int(diffsOf(list_[size_t(sel)]).size());
             if (nd > 0) {
                 if (in.left()) { a.freeplayDiff = (diffIndex() + nd - 1) % nd; sfxPlay(Sfx::Scroll); }
                 if (in.right()) { a.freeplayDiff = (diffIndex() + 1) % nd; sfxPlay(Sfx::Scroll); }
@@ -466,12 +481,14 @@ public:
         }
         if (in.accept() && n > 0) {
             const SongEntry* e = list_[size_t(sel)];
-            if (!e->diffs.empty()) {
+            if (!diffsOf(e).empty()) {
                 remember();
                 sfxPlay(Sfx::Confirm);
                 PlayRequest r;
                 r.songId = e->id;
-                r.diff = e->diffs[size_t(diffIndex())];
+                r.diff = diffsOf(e)[size_t(diffIndex())];
+                r.render = a.songListMode == App::SongListMode::Render;
+                r.autoChart = autoMode();
                 a.change(makePlay(r));
                 return;
             }
@@ -533,20 +550,20 @@ public:
                 gfx::text(FontId::Ui, l, 1035, y, 22, kIvory, Align::Center);
                 y += 24;
             }
-            if (!e->diffs.empty()) {
-                const std::string d = e->diffs[size_t(diffIndex())];
+            if (!diffsOf(e).empty()) {
+                const std::string d = diffsOf(e)[size_t(diffIndex())];
                 const Color dc = diffColor(d);
                 const float bob = std::sin(float(now) * 4.0f) * 3.0f;
                 gfx::drawNote(gfx::kLeft, {880 - bob, 430}, 40);
                 gfx::drawNote(gfx::kRight, {1190 + bob, 430}, 40);
                 gfx::text(FontId::Title, toLower(d) == "infernal" ? "INFERNAL" : d, 1035, 410, 34, dc, Align::Center, 2.0f);
-                const ScoreEntry* best = a.scores.get(Scores::key(e->id, d));
+                const ScoreEntry* best = a.scores.get(Scores::key(scoreId(e), d));
                 const std::string bs = best ? fmtThousands(best->score) + "  -  " + TextFormat("%.2f%%", best->acc * 100.0) +
                                                   "  -  " + best->rank
                                             : "No record yet";
                 gfx::text(FontId::Ui, "BEST", 1035, 466, 20, fade(kGold, 0.8f), Align::Center);
                 gfx::text(FontId::Ui, bs, 1035, 488, 26, WHITE, Align::Center, 1.5f);
-                gfx::text(FontId::Ui, TextFormat("Difficulty %d / %d", diffIndex() + 1, int(e->diffs.size())), 1035, 524, 20,
+                gfx::text(FontId::Ui, TextFormat("Difficulty %d / %d", diffIndex() + 1, int(diffsOf(e).size())), 1035, 524, 20,
                           fade(kIvory, 0.6f), Align::Center);
             }
             const Modifiers& m = a.mods;
@@ -576,10 +593,21 @@ public:
             const std::string count = n == 0 ? std::string("no songs") : TextFormat("%d song%s", n, n == 1 ? "" : "s");
             gfx::text(FontId::Ui, count, 766, 32, 20, fade(kIvory, 0.7f), Align::Right, 1.0f);
         }
+        if (a.songListMode != App::SongListMode::Play) {
+            const bool render = a.songListMode == App::SongListMode::Render;
+            DrawRectangleRounded({830, 18, 410, 46}, 0.4f, 8, render ? Color{120, 20, 30, 230} : Color{20, 70, 120, 230});
+            gfx::text(FontId::Title, render ? "RENDER MODE" : "AUTOCHART", 1035, 20, 26, WHITE, Align::Center, 2.0f);
+            gfx::text(FontId::Ui,
+                      render ? "The song plays by itself and is saved as a video"
+                             : "A chart made from the song's own audio",
+                      1035, 640, 18, fade(kIvory, 0.75f), Align::Center);
+        }
         if (modsOpen_) drawMods();
+        const char* go = a.songListMode == App::SongListMode::Render ? "ENTER record" : "ENTER play";
         if (typing_) hints("Type the song's name   ENTER keep   BACKSPACE erase   ESC clear");
-        else hints(query_.empty() ? "ENTER play   LEFT/RIGHT difficulty   F search   TAB modifiers   7 chart editor   M mod packs   R rescan   ESC back"
-                                  : "ENTER play   LEFT/RIGHT difficulty   F search   ESC clear the search   TAB modifiers   7 chart editor");
+        else hints((query_.empty() ? std::string(go) + "   LEFT/RIGHT difficulty   F search   TAB modifiers   7 chart editor   M mod packs   R rescan   ESC back"
+                                   : std::string(go) + "   LEFT/RIGHT difficulty   F search   ESC clear the search   TAB modifiers   7 chart editor")
+                       .c_str());
         gfx::endCanvas();
     }
 
@@ -641,9 +669,16 @@ private:
         PollInputEvents();
         SwapScreenBuffer();
     }
+    // AUTOCHART: every song in the three difficulties AutoChart makes.
+    static bool autoMode() { return app().songListMode == App::SongListMode::AutoChart; }
+    static const std::vector<std::string>& diffsOf(const SongEntry* e) {
+        static const std::vector<std::string> kAuto = {"Easy", "Normal", "Hard"};
+        return autoMode() ? kAuto : e->diffs;
+    }
+    static std::string scoreId(const SongEntry* e) { return autoMode() ? e->id + "#autochart" : e->id; }
     int diffIndex() const {
         if (list_.empty()) return 0;
-        const int nd = int(list_[size_t(app().freeplaySel)]->diffs.size());
+        const int nd = int(diffsOf(list_[size_t(app().freeplaySel)]).size());
         return nd > 0 ? clampv(app().freeplayDiff, 0, nd - 1) : 0;
     }
     Color currentColor() const {

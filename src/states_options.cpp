@@ -140,11 +140,11 @@ public:
             {Row::Number, "Combo position Y", "", nullptr, &s.comboOffset[3], -400, 400, 1},
             {Row::Choice, "Pause screen song", "The pause menu's music with the Psych Engine interface.", nullptr, nullptr, 0, 0, 0,
              &s.pauseMusic, {0, 1, 2}, {"None", "Breakfast", "Tea Time"}},
-            {Row::Header, "RENDERING", ""},
-            {Row::Bool, "Rendering mode", "Songs play by themselves and are recorded to a video in renders/, frame by frame, as in JS Engine and "
-             "H-Slice: smooth even if the device cannot keep up. On a computer it needs ffmpeg (next to the game or installed); "
-             "on Android the phone's own encoder makes it and it goes to Movies/GodsHand. ESC stops.", &s.renderMode},
-            {Row::Choice, "Video size", "", nullptr, nullptr, 0, 0, 0, &s.renderSize, {0, 1, 2, 3},
+            {Row::Header, "RENDER MODE VIDEOS", ""},
+            {Row::Choice, "Video size", "For RENDER MODE on the main menu: the song plays by itself and is recorded to a video in "
+             "renders/, frame by frame, smooth even if the device cannot keep up. On a computer it needs ffmpeg (next to the game "
+             "or installed); on Android the phone's own encoder makes it and it goes to Movies/GodsHand.", nullptr, nullptr, 0, 0, 0,
+             &s.renderSize, {0, 1, 2, 3},
              {"1280x720", "1920x1080", "2560x1440", "3840x2160"}},
             {Row::Choice, "Video frame rate", "", nullptr, nullptr, 0, 0, 0, &s.renderFps, {30, 60, 120, 240}},
             {Row::Choice, "Video encoder", "x264 and x265 use the processor; the NVIDIA, AMD and Intel ones use the graphics card "

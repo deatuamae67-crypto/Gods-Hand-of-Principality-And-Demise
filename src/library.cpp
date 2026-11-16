@@ -111,19 +111,26 @@ static PcmPtr streamOrNull(const std::string& path, double startFraction = 0.0) 
     return loadSongAudio(path, startFraction);
 }
 
-Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys) {
+Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys, bool forceAutoChart) {
     Prepared p;
-    if (e.builtin && e.def) {
+    if (e.builtin && e.def && !forceAutoChart) {
         BuiltinAudio a = builtinAudio(*e.def);
         buildChart(*e.def, *a.comp, diff, p.chart);
         p.inst = a.inst;
         p.voiceP = a.vp;
         p.voiceO = a.vo;
-    } else if (e.autoChart) {
+    } else if (e.autoChart || forceAutoChart) {
         int d = 1;
-        for (size_t i = 0; i < e.diffs.size(); ++i)
-            if (e.diffs[i] == diff) d = int(i);
-        {
+        if (forceAutoChart) d = diff == "Easy" ? 0 : diff == "Hard" ? 2 : 1;
+        else
+            for (size_t i = 0; i < e.diffs.size(); ++i)
+                if (e.diffs[i] == diff) d = int(i);
+        if (e.builtin && e.def) {  // the built-in songs' own audio, charted anew
+            BuiltinAudio a = builtinAudio(*e.def);
+            p.inst = a.inst;
+            p.voiceP = a.vp;
+            p.voiceO = a.vo;
+        } else {
             std::lock_guard<std::mutex> lk(customMtx_);
             // A streamed copy (the menu's preview) does not hold all the samples.
             if (customInstKey_ != e.id || !customInst_ || customInst_->stream) {
@@ -132,6 +139,14 @@ Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirr
             }
             customCacheKey_.clear();
             p.inst = customInst_;
+            // A charted song's voices play along with the AutoChart.
+            if (forceAutoChart && !e.autoChart) {
+                if (!e.voices.empty()) p.voiceP = streamOrNull(e.voices);
+                else {
+                    p.voiceP = streamOrNull(e.voicesP);
+                    p.voiceO = streamOrNull(e.voicesO);
+                }
+            }
         }
         if (!p.inst) { p.error = "cannot decode " + e.inst; return p; }
         AutoChartInfo info;

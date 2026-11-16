@@ -47,7 +47,8 @@ public:
 
     // Heavy work (decoding, composing, parsing). Thread-safe.
     // extraKeys = false: every chart gets 4 keys (Options, Extra keys).
-    Prepared prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys = true);
+    // forceAutoChart: a chart made from the song's audio even when it has charts.
+    Prepared prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys = true, bool forceAutoChart = false);
     PcmPtr preview(const SongEntry& e);  // instrumental only, for menus
     // The song's audio read again from its files, the chart left alone (the
     // chart editor's Reload audio).

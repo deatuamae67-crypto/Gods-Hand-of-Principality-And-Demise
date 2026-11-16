@@ -54,6 +54,8 @@ struct Modifiers {
 struct PlayRequest {
     std::string songId, diff;
     bool story = false;
+    bool render = false;     // Render Mode (main menu): the song plays by itself and is recorded to a video
+    bool autoChart = false;  // AutoChart (main menu): a chart made from the song's audio, whatever charts it has
     std::string replayPath;  // watch this replay instead of playing
     std::vector<std::string> storyQueue;  // songs still to play after this one
     long long storyScore = 0;
@@ -90,6 +92,7 @@ public:
     bool listSongs = false;
     bool checkCharts = false;  // --check-charts with --list-songs
     std::string checkScriptsDir;  // --check-scripts <folder>
+    bool autoChartCli = false;    // --autochart: the --autoplay song played with an AutoChart
     Settings settings;
     Scores scores;
     Library library;
@@ -107,6 +110,8 @@ public:
 
     // remembered menu positions
     int mainSel = 0, freeplaySel = 0, freeplayDiff = 1, storyDiff = 1;
+    // What FREEPLAY, RENDER MODE or AUTOCHART on the main menu opened the song list for.
+    enum class SongListMode { Play, Render, AutoChart } songListMode = SongListMode::Play;
 
     struct Automation {
         bool enabled = false;
