@@ -220,6 +220,7 @@ std::unique_ptr<State> makeOptions();
 std::unique_ptr<State> makeCredits();
 std::unique_ptr<State> makeCalibration();
 std::unique_ptr<State> makeNoteColors();  // Options: Psych's Note Colors
+std::unique_ptr<State> makeNoteSkins();   // Options: Psych's Note Skins, with the notes on show
 std::unique_ptr<State> makeKeyBindings();  // Options: the keys of 1 to 18 key charts
 std::unique_ptr<State> makePlay(const PlayRequest& req);
 std::unique_ptr<State> makeResults(const ResultData& r);

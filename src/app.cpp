@@ -395,6 +395,7 @@ int App::run(int argc, char** argv) {
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
     else if (autoRun.state == "converter") state_ = makeChartConverter();
     else if (autoRun.state == "note-colors") state_ = makeNoteColors();
+    else if (autoRun.state == "note-skins") state_ = makeNoteSkins();
     else if (autoRun.state == "key-bindings") state_ = makeKeyBindings();
     else if (autoRun.state == "character-editor") state_ = makeCharacterEditor();
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();

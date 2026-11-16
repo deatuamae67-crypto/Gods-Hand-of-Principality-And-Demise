@@ -36,8 +36,33 @@ struct Row {
     std::vector<std::string> names;  // shown for each choice (default: frames per second)
     std::function<std::string(float)> fmt;
     std::function<void()> action;
+    std::function<std::string()> value;  // Action rows: shown before the arrow
     int lane = 0;
 };
+// The row Options was on, to come back to it from a screen it opened.
+std::string gLastOptionsRow;
+
+// The words of s on as many lines as it takes to stay within `width`.
+std::vector<std::string> wrapWidth(FontId f, const std::string& s, float size, float width) {
+    std::vector<std::string> lines;
+    std::string cur;
+    size_t i = 0;
+    while (i < s.size()) {
+        const size_t sp = s.find(' ', i);
+        const std::string word = s.substr(i, sp == std::string::npos ? std::string::npos : sp - i);
+        i = sp == std::string::npos ? s.size() : sp + 1;
+        if (word.empty()) continue;
+        const std::string longer = cur.empty() ? word : cur + " " + word;
+        if (!cur.empty() && gfx::measure(f, longer, size).x > width) {
+            lines.push_back(cur);
+            cur = word;
+        } else {
+            cur = longer;
+        }
+    }
+    if (!cur.empty()) lines.push_back(cur);
+    return lines;
+}
 }  // namespace
 
 class OptionsState : public State {
@@ -133,8 +158,8 @@ public:
             {Row::Bool, "Combo stacking", "Ratings and combo numbers pile up. OFF: only the latest one, easier to read.",
              &s.comboStacking},
             {Row::Number, "Note splash opacity", "How see-through the bursts on your best hits are.", nullptr, &s.splashAlpha, 0, 1, 0.1f},
-            {Row::Choice, "Note skin", "The Psych interface's note skin: the noteSkins/ pictures of your Psych copy and of every installed mod.", nullptr, nullptr, 0, 0, 0,
-             &noteSkinIdx_},
+            {Row::Action, "Note skin...", "The Psych interface's note skin, with its notes on show: Default and the noteSkins/ "
+             "pictures of your Psych copy and of every installed mod."},
             {Row::Action, "Note colors...", "The Psych interface's note colours, as in Psych's Note Colors menu."},
             {Row::Number, "Rating position X", "Where the ratings pop up (Psych's Adjust Combo).", nullptr, &s.comboOffset[0], -600, 600, 1},
             {Row::Number, "Rating position Y", "", nullptr, &s.comboOffset[1], -400, 400, 1},
@@ -183,17 +208,9 @@ public:
             if (r.label == "Calibrate offset...") r.action = [] { app().change(makeCalibration()); };
             if (r.label == "Note colors...") r.action = [] { app().change(makeNoteColors()); };
             if (r.label == "Key bindings (1 to 18 keys)...") r.action = [] { app().change(makeKeyBindings()); };
-            if (r.label == "Note skin") {
-                // Default (NOTE_assets) and the skins in noteSkins/ of the Psych
-                // copy in use and of every installed mod.
-                skins_ = psychNoteSkins(app().psychFolderInUse, app().library.allAssetRoots());
-                r.names = {"Default"};
-                r.choices = {0};
-                for (size_t k = 0; k < skins_.size(); ++k) {
-                    r.names.push_back(skins_[k]);
-                    r.choices.push_back(int(k) + 1);
-                    if (skins_[k] == s.noteSkin) noteSkinIdx_ = int(k) + 1;
-                }
+            if (r.label == "Note skin...") {
+                r.action = [] { app().change(makeNoteSkins()); };
+                r.value = [&s] { return s.noteSkin.empty() ? std::string("Default") : s.noteSkin; };
             }
             if (r.label == "Reset controls")
                 r.action = [&s] {
@@ -218,6 +235,9 @@ public:
             rows_ = std::move(kept);
         }
         sel_ = 1;
+        for (int i = 0; i < int(rows_.size()); ++i)
+            if (rows_[size_t(i)].kind != Row::Header && rows_[size_t(i)].label == gLastOptionsRow) sel_ = i;
+        anim_ = float(sel_);
     }
 
     void update(double dt) override {
@@ -284,10 +304,6 @@ public:
                     idx = (idx + r.choices.size() + size_t(dir)) % r.choices.size();
                     *r.i = r.choices[idx];
                     changed = true;
-                    if (r.label == "Note skin") {
-                        a.settings.noteSkin = noteSkinIdx_ <= 0 || noteSkinIdx_ > int(skins_.size()) ? std::string() : skins_[size_t(noteSkinIdx_ - 1)];
-                        a.applyPsychUi();
-                    }
                 }
                 break;
             case Row::Action:
@@ -348,7 +364,7 @@ public:
                         val = *r.i == 0 ? std::string("Unlimited") : std::string(TextFormat("%d FPS", *r.i));
                     }
                     break;
-                case Row::Action: val = ">"; break;
+                case Row::Action: val = r.value ? r.value() + "  >" : ">"; break;
                 case Row::Key: {
                     for (int k = 0; k < 2; ++k) {
                         const bool hl = on && k == slot_;
@@ -419,12 +435,11 @@ private:
     void move(int d) {
         const int n = int(rows_.size());
         do { sel_ = (sel_ + d + n) % n; } while (rows_[size_t(sel_)].kind == Row::Header);
+        gLastOptionsRow = rows_[size_t(sel_)].label;
         sfxPlay(Sfx::Scroll);
     }
     std::vector<Row> rows_;
     int sel_ = 1, slot_ = 0;
-    int noteSkinIdx_ = 0;              // "Note skin": 0 = Default, k = skins_[k - 1]
-    std::vector<std::string> skins_;
     float anim_ = 1;
     bool waiting_ = false;
 
@@ -813,6 +828,231 @@ private:
     }
 };
 
+// -------------------------------------------------------------- note skin --
+
+// Psych's Note Skins option with the notes on show: the skins on the left
+// (Default and the noteSkins/ of the Psych copy and of every installed mod),
+// the chosen one on the right as a song shows it: receptors, notes coming up,
+// holds and the receptors' hit animation. UP/DOWN (or a click on a name)
+// change it at once; P turns the Psych Engine interface, which the skins
+// belong to, on or off; ENTER or ESC save and go back.
+class NoteSkinState : public State {
+public:
+    TouchLayout touchLayout() const override {
+        TouchLayout t;
+        t.keys = {{app().settings.psychUi ? "PSYCH UI: ON" : "PSYCH UI: OFF", KEY_P}};
+        return t;
+    }
+    void enter() override {
+        start_ = app().now;
+        listSkins();
+        anim_ = float(sel_);
+    }
+    void update(double dt) override {
+        App& a = app();
+        Input& in = a.input;
+        anim_ = approach(anim_, float(sel_), 14.0f, float(dt));
+        if ((in.back() && !in.pressed(KEY_BACKSPACE)) || in.accept()) {
+            if (pending_) apply();
+            a.saveSettings();
+            sfxPlay(in.accept() ? Sfx::Confirm : Sfx::Cancel);
+            a.change(makeOptions());
+            return;
+        }
+        if (in.pressed(KEY_P)) {  // the Psych Engine interface: the skins are part of it
+            if (pending_) apply();
+            a.settings.psychUi = !a.settings.psychUi;
+            a.applyPsychUi();
+            a.saveSettings();
+            listSkins();
+            sfxPlay(Sfx::Confirm);
+        }
+        const int n = rows();
+        int to = sel_;
+        if (in.up()) to = (sel_ + n - 1) % n;
+        if (in.down()) to = (sel_ + 1) % n;
+        if (in.pressed(KEY_PAGE_UP)) to = std::max(0, sel_ - 8);
+        if (in.pressed(KEY_PAGE_DOWN)) to = std::min(n - 1, sel_ + 8);
+        if (in.pressed(KEY_HOME)) to = 0;
+        if (in.pressed(KEY_END)) to = n - 1;
+        const float wheel = in.wheel();
+        if (wheel > 0.5f) to = std::max(0, sel_ - 1);
+        if (wheel < -0.5f) to = std::min(n - 1, sel_ + 1);
+        // A click (or a tap) on a name picks it; not the touch buttons.
+        if (in.mousePressed(MOUSE_BUTTON_LEFT) && !(a.touchMode && a.touch.covers(GetMousePosition()))) {
+            const Vector2 m = gfx::toCanvas(GetMousePosition());
+            for (int i = 0; i < n; ++i)
+                if (CheckCollisionPointRec(m, rowBox(i))) to = i;
+        }
+        if (to != sel_) {
+            sel_ = to;
+            a.settings.noteSkin = sel_ == 0 ? std::string() : skins_[size_t(sel_ - 1)];
+            // Loaded when the choice rests a moment: holding DOWN through a
+            // long list does not load every skin on the way.
+            pending_ = true;
+            pendingAt_ = a.now + 0.12;
+            sfxPlay(Sfx::Scroll);
+        }
+        if (pending_ && a.now >= pendingAt_) apply();
+    }
+    void draw() override {
+        App& a = app();
+        const PsychUi& ui = psychUi();
+        gfx::beginCanvas();
+        drawMenuBackground(a.now, 0x5C9CFF, menuPulse());
+        DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(BLACK, 0.3f));
+        gfx::text(FontId::Title, "NOTE SKIN", 60, 22, 48, kGold, Align::Left, 2.0f);
+        gfx::text(FontId::Ui, TextFormat("%d to choose from", rows()), 64, 82, 22, fade(kIvory, 0.8f), Align::Left, 1.0f);
+
+        // The names.
+        const float top = listTop(), bottom = listBottom(), mid = (top + bottom) * 0.5f - 22;
+        for (int i = 0; i < rows(); ++i) {
+            const Rectangle b = rowBox(i);
+            if (b.y < top - 4 || b.y + b.height > bottom + 4) continue;
+            const bool on = i == sel_;
+            const float alpha = saturate(1.0f - std::fabs(b.y - mid) / (bottom - top) * 1.2f) * 0.7f + 0.3f;
+            if (on) DrawRectangleRounded(b, 0.3f, 8, Color{255, 214, 120, 46});
+            const std::string name = i == 0 ? std::string("Default") : skins_[size_t(i - 1)];
+            gfx::text(FontId::Ui, on ? "> " + name : name, b.x + 16, b.y + 6, 30, fade(on ? kGold : kIvory, alpha), Align::Left, 1.5f);
+        }
+
+        // The preview: the skin as a song shows it.
+        const Rectangle p = panel();
+        DrawRectangleRounded(p, 0.06f, 8, Color{8, 14, 34, 170});
+        DrawRectangleRoundedLinesEx(p, 0.06f, 8, 2, fade(kGold, 0.5f));
+        const bool skinOn = ui.active();
+        const float size = 104, gap = 120;
+        const float strumY = p.y + 80, fadeY = p.y + p.height - 20;
+        const float speed = 0.45f;  // pixels per millisecond (Psych's scroll speed 1)
+        const double ms = (a.now - start_) * 1000.0;
+        const double loop = kLoopMs;
+        const float alphaAll = skinOn ? 1.0f : 0.45f;
+        const Vector2 o = gfx::canvasOrigin();
+        const float cs = gfx::canvasScale();
+        BeginScissorMode(int(o.x + p.x * cs), int(o.y + p.y * cs), int(p.width * cs), int(p.height * cs));
+        for (int dir = 0; dir < 4; ++dir) {
+            const Vector2 c{p.x + p.width * 0.5f + (float(dir) - 1.5f) * gap, strumY};
+            // The receptor lights up while a note of its lane is being hit.
+            float conf = 0;
+            for (const PreviewNote& n : kPattern) {
+                if (n.lane != dir) continue;
+                const double at = std::fmod(ms - n.t + loop * 4, loop);  // time since this note's last hit
+                const double lit = std::max(n.len, 140.0);
+                if (at < lit) conf = std::max(conf, float(n.len > 0 && at < n.len ? 1.0 : 1.0 - (at - std::max(0.0, n.len)) / 140.0));
+            }
+            const int state = conf > 0.01f ? 2 : 0;
+            if (state) ui.beginDir(dir);  // idle receptors stay grey
+            const bool drawn = ui.strum(dir, c, size, state, alphaAll, 0, a.now);
+            if (state) ui.endDir();
+            if (!drawn) {
+                if (conf > 0.01f) {
+                    gfx::glow(c, size * 0.95f * conf, fade(gfx::dirColor(dir), 0.6f * alphaAll));
+                    gfx::drawNote(dir, c, size, alphaAll, 1.0f + 0.06f * conf);
+                } else {
+                    gfx::drawReceptor(dir, c, size, fade(WHITE, alphaAll));
+                }
+            }
+            // The notes coming up, and their holds, under the pattern's loop.
+            ui.beginDir(dir);
+            const double cycle = std::floor(ms / loop);
+            for (int k = 0; k < 3; ++k)
+                for (const PreviewNote& n : kPattern) {
+                    if (n.lane != dir) continue;
+                    const double t = n.t + (cycle + k) * loop;
+                    if (n.len > 0 && ms < t + n.len) {
+                        const float y0 = strumY + float(std::max(0.0, t - ms)) * speed;
+                        const float y1 = strumY + float(t + n.len - ms) * speed;
+                        const float al = alphaAll * saturate((fadeY - y0) / 80.0f);
+                        if (y1 > y0 + 1 && al > 0.01f && !ui.hold(dir, c.x, y0, y1, size * 0.3f, al))
+                            gfx::drawSustain(dir, c.x, y0, y1, size * 0.3f, al * 0.85f + 0.15f, true);
+                    }
+                    if (t < ms) continue;
+                    const float y = strumY + float(t - ms) * speed;
+                    const float al = alphaAll * saturate((fadeY - y) / 80.0f);
+                    if (al <= 0.01f) continue;
+                    if (!ui.note(dir, {c.x, y}, size, al, 0)) gfx::drawNote(dir, {c.x, y}, size, al);
+                }
+            ui.endDir();
+        }
+        EndScissorMode();
+        // What the preview shows.
+        std::string about, why;
+        if (!a.settings.psychUi) {
+            about = "The Psych Engine interface is OFF";
+            why = std::string("Note skins are part of it: songs show the game's own notes. ") +
+                  (a.touchMode ? "PSYCH UI turns it on." : "P turns it on.");
+        } else if (!skinOn) {
+            about = "No Psych Engine interface to show";
+            why = a.psychReport.empty() ? std::string("No Psych Engine or JS Engine copy among your mods.") : a.psychReport;
+        }
+        if (!about.empty()) {
+            const Rectangle box{p.x + 30, p.y + p.height * 0.5f - 70, p.width - 60, 140};
+            DrawRectangleRounded(box, 0.2f, 8, Color{0, 0, 0, 200});
+            gfx::text(FontId::Ui, about, box.x + box.width * 0.5f, box.y + 18, 30, kGold, Align::Center, 1.5f);
+            float y = box.y + 62;
+            for (const std::string& line : wrapWidth(FontId::Ui, why, 22, box.width - 40)) {
+                gfx::text(FontId::Ui, line, box.x + box.width * 0.5f, y, 22, kIvory, Align::Center);
+                y += 26;
+            }
+        }
+
+        if (!a.touchMode) {
+            DrawRectangleRec({0, gfx::H - 40, gfx::W, 40}, Color{0, 0, 0, 150});
+            gfx::text(FontId::Ui, "UP/DOWN or click: skin   P Psych interface ON/OFF   ENTER/ESC save and back", gfx::W / 2,
+                      gfx::H - 33, 22, Color{220, 214, 235, 255}, Align::Center);
+        }
+        gfx::endCanvas();
+    }
+
+private:
+    // The preview's chart: two bars at 120 BPM, looped (times and lengths in ms).
+    struct PreviewNote {
+        double t;
+        int lane;
+        double len;
+    };
+    static constexpr double kLoopMs = 4000;
+    static constexpr PreviewNote kPattern[] = {
+        {0, 0, 0},    {250, 1, 0},  {500, 2, 0},    {750, 3, 0},  {1000, 1, 750}, {1250, 3, 0},
+        {1500, 0, 0}, {1750, 2, 0}, {2000, 3, 0},   {2250, 0, 0}, {2500, 2, 500}, {2750, 1, 0},
+        {3000, 3, 0}, {3250, 0, 0}, {3250, 3, 0},   {3500, 1, 0}, {3750, 2, 0},
+    };
+
+    std::vector<std::string> skins_;  // row k + 1; row 0 is Default
+    int sel_ = 0;
+    float anim_ = 0;
+    double start_ = 0;
+    bool pending_ = false;
+    double pendingAt_ = 0;
+
+    int rows() const { return int(skins_.size()) + 1; }
+    // Default and the skins of the Psych copy in use and of every installed mod.
+    void listSkins() {
+        const App& a = app();
+        skins_ = psychNoteSkins(a.psychFolderInUse, a.library.allAssetRoots());
+        sel_ = 0;
+        for (size_t k = 0; k < skins_.size(); ++k)
+            if (skins_[k] == a.settings.noteSkin) sel_ = int(k) + 1;
+    }
+    void apply() {
+        pending_ = false;
+        App& a = app();
+        PsychUi& ui = psychUi();
+        if (ui.active()) ui.changeNoteSkin(a.settings.noteSkin);
+        else ui.setNoteSkin(a.settings.noteSkin);
+        a.saveSettings();  // kept even if the game is closed on this screen
+    }
+    // Touchscreens: the arrows and OK/BACK buttons cover the bottom corners.
+    float listTop() const { return 120; }
+    float listBottom() const { return app().touchMode ? 390.0f : 640.0f; }
+    Rectangle rowBox(int i) const {
+        const float mid = (listTop() + listBottom()) * 0.5f - 22;
+        return {50, mid + (float(i) - anim_) * 48, 470, 44};
+    }
+    Rectangle panel() const { return {560, 100, 660, app().touchMode ? 420.0f : 540.0f}; }
+};
+
+std::unique_ptr<State> makeNoteSkins() { return std::make_unique<NoteSkinState>(); }
 std::unique_ptr<State> makeNoteColors() { return std::make_unique<NoteColorsState>(); }
 std::unique_ptr<State> makeKeyBindings() { return std::make_unique<KeyBindState>(); }
 

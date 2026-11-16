@@ -192,45 +192,9 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
     int found = 0;
     std::vector<std::string> missing;
 
-    std::string notePng;
-    if (!skin_.empty()) {
-        notePng = findAny(f, {"images/noteSkins/NOTE_assets-" + skin_ + ".png", "images/noteskins/NOTE_assets-" + skin_ + ".png"});
-        if (notePng.empty() && !skinRoots_.empty()) {  // a skin another mod brings
-            scene::Files mods;
-            mods.setRoots(skinRoots_);
-            notePng = findAny(mods, {"images/noteSkins/NOTE_assets-" + skin_ + ".png", "images/noteskins/NOTE_assets-" + skin_ + ".png"});
-        }
-    }
-    if (notePng.empty())
-        notePng = findAny(f, {"images/noteskins/NOTE_assets.png", "images/noteSkins/NOTE_assets.png", "images/NOTE_assets.png"});
-    if (!notePng.empty()) {
-        std::string xml;
-        psych::Atlas atlas;
-        if (scene::readFile(notePng.substr(0, notePng.size() - 4) + ".xml", xml) && atlas.parseSparrow(xml)) {
-            notes_ = loadTex(notePng);
-            for (const psych::AtlasFrame& a : atlas.frames) {
-                Frame fr;
-                fr.src = {a.x, a.y, a.w, a.h};
-                fr.fx = a.fx;
-                fr.fy = a.fy;
-                fr.fw = a.fw > 0 ? a.fw : a.w;
-                fr.fh = a.fh > 0 ? a.fh : a.h;
-                fr.rotated = a.rotated;
-                atlas_.push_back({a.name, fr});
-            }
-            if (notes_.id) ++found;
-        }
-        // Skins in noteSkins/ (Psych 0.7, JS Engine) are colour templates.
-        template_ = notePng.find("oteskins/") != std::string::npos || notePng.find("oteSkins/") != std::string::npos;
-        if (template_) {
-            paletteShader_ = LoadShaderFromMemory(nullptr, rlGetVersion() == RL_OPENGL_ES_20 ? kPaletteGles : kPaletteGl330);
-            locR_ = GetShaderLocation(paletteShader_, "r");
-            locG_ = GetShaderLocation(paletteShader_, "g");
-            locB_ = GetShaderLocation(paletteShader_, "b");
-            if (!paletteShader_.id || paletteShader_.id == rlGetShaderIdDefault()) template_ = false;
-        }
-    }
-    if (!notes_.id) missing.push_back("note skin (NOTE_assets)");
+    roots_ = roots;
+    if (loadNotes(f)) ++found;
+    else missing.push_back("note skin (NOTE_assets)");
 
     const char* rnames[4] = {"sick", "good", "bad", "shit"};
     for (int i = 0; i < 4; ++i) {
@@ -326,12 +290,71 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
     return found;
 }
 
-void PsychUi::unload() {
+// The note skin: images/noteSkins/NOTE_assets-<skin>.png of the roots (or of
+// another installed mod), else the plain NOTE_assets.
+bool PsychUi::loadNotes(const scene::Files& f) {
+    std::string notePng;
+    if (!skin_.empty()) {
+        notePng = findAny(f, {"images/noteSkins/NOTE_assets-" + skin_ + ".png", "images/noteskins/NOTE_assets-" + skin_ + ".png"});
+        if (notePng.empty() && !skinRoots_.empty()) {  // a skin another mod brings
+            scene::Files mods;
+            mods.setRoots(skinRoots_);
+            notePng = findAny(mods, {"images/noteSkins/NOTE_assets-" + skin_ + ".png", "images/noteskins/NOTE_assets-" + skin_ + ".png"});
+        }
+    }
+    if (notePng.empty())
+        notePng = findAny(f, {"images/noteskins/NOTE_assets.png", "images/noteSkins/NOTE_assets.png", "images/NOTE_assets.png"});
+    if (!notePng.empty()) {
+        std::string xml;
+        psych::Atlas atlas;
+        if (scene::readFile(notePng.substr(0, notePng.size() - 4) + ".xml", xml) && atlas.parseSparrow(xml)) {
+            notes_ = loadTex(notePng);
+            for (const psych::AtlasFrame& a : atlas.frames) {
+                Frame fr;
+                fr.src = {a.x, a.y, a.w, a.h};
+                fr.fx = a.fx;
+                fr.fy = a.fy;
+                fr.fw = a.fw > 0 ? a.fw : a.w;
+                fr.fh = a.fh > 0 ? a.fh : a.h;
+                fr.rotated = a.rotated;
+                atlas_.push_back({a.name, fr});
+            }
+        }
+        // Skins in noteSkins/ (Psych 0.7, JS Engine) are colour templates.
+        template_ = notePng.find("oteskins/") != std::string::npos || notePng.find("oteSkins/") != std::string::npos;
+        if (template_) {
+            paletteShader_ = LoadShaderFromMemory(nullptr, rlGetVersion() == RL_OPENGL_ES_20 ? kPaletteGles : kPaletteGl330);
+            locR_ = GetShaderLocation(paletteShader_, "r");
+            locG_ = GetShaderLocation(paletteShader_, "g");
+            locB_ = GetShaderLocation(paletteShader_, "b");
+            if (!paletteShader_.id || paletteShader_.id == rlGetShaderIdDefault()) template_ = false;
+        }
+    }
+    return notes_.id != 0;
+}
+
+void PsychUi::unloadNotes() {
     ++generation_;
     unloadTex(notes_);
     if (paletteShader_.id && paletteShader_.id != rlGetShaderIdDefault() && IsWindowReady()) UnloadShader(paletteShader_);
     paletteShader_ = Shader{};
     template_ = false;
+    atlas_.clear();
+}
+
+bool PsychUi::changeNoteSkin(const std::string& skin) {
+    setNoteSkin(skin);
+    if (!active_) return false;
+    unloadNotes();
+    scene::Files f;
+    f.setRoots(roots_);
+    const bool ok = loadNotes(f);
+    if (notes_.id && !smooth_) SetTextureFilter(notes_, TEXTURE_FILTER_POINT);
+    return ok;
+}
+
+void PsychUi::unload() {
+    unloadNotes();
     for (Texture2D& t : ratings_) unloadTex(t);
     for (Texture2D& t : nums_) unloadTex(t);
     for (Texture2D& t : count_) unloadTex(t);
@@ -346,7 +369,7 @@ void PsychUi::unload() {
     barOnTop_ = timeOnTop_ = true;
     if (font_.texture.id && IsWindowReady()) UnloadFont(font_);
     font_ = Font{};
-    atlas_.clear();
+    roots_.clear();
     sounds_.clear();
     menuMusic_.clear();
     active_ = false;

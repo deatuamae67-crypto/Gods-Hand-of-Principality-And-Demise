@@ -17,6 +17,10 @@
 
 namespace gh {
 
+namespace scene {
+class Files;
+}
+
 class PsychUi {
 public:
     // Looks for the assets under `folder` (the engine's folder, its assets/
@@ -34,6 +38,10 @@ public:
         skin_ = skin;
         ++generation_;
     }
+    // Once loaded: another note skin, from the same folders, without loading
+    // the rest again (the Note skin screen's preview). False when it is off
+    // or no NOTE_assets was found.
+    bool changeNoteSkin(const std::string& skin);
     // Where else a note skin may be: every installed mod's folders.
     void setSkinRoots(std::vector<std::string> roots) { skinRoots_ = std::move(roots); }
     void setPalette(const uint32_t colors[4][3]);
@@ -103,12 +111,15 @@ private:
         bool rotated = false;
     };
     bool drawFrame(const Frame& f, Vector2 c, float scale, float alpha, float angle, bool flipY = false) const;
+    bool loadNotes(const scene::Files& f);
+    void unloadNotes();
     std::vector<Frame> frames(const std::string& prefix) const;
 
     bool active_ = false;
     uint32_t generation_ = 0;
     std::string root_, skin_;
     std::vector<std::string> skinRoots_;
+    std::vector<std::string> roots_;  // where load() looked (changeNoteSkin looks there again)
     uint32_t palette_[4][3] = {{0xC24B99, 0xFFFFFF, 0x3C1F56},
                                {0x00FFFF, 0xFFFFFF, 0x1542B7},
                                {0x12FA05, 0xFFFFFF, 0x0A4447},
