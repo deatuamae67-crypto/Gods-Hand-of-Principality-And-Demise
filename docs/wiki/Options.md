@@ -76,7 +76,7 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Botplay text | BOTPLAY (or REPLAY) on screen while the game plays by itself. | on / off |
 | Combo stacking | Ratings and combo numbers pile up. OFF: only the latest one, easier to read. | on / off |
 | Note splash opacity | How see-through the bursts on your best hits are. | 0 to 1 |
-| Note skin | The Psych interface's note skin: the noteSkins/ pictures of your Psych copy and of every installed mod. | - |
+| Note skin... | The Psych interface's note skin, with its notes on show: Default and the noteSkins/ pictures of your Psych copy and of every installed mod. | - |
 | Note colors... | The Psych interface's note colours, as in Psych's Note Colors menu. | - |
 | Rating position X | Where the ratings pop up (Psych's Adjust Combo). | -600 to 600 |
 | Rating position Y | - | -400 to 400 |
@@ -109,6 +109,6 @@ Every option of the Options menu, section by section (the text the game shows fo
 |---|---|---|
 | Lua errors | Errors of mod scripts on screen. Psych shows them only for scripts that set luaDebugMode. | Always, luaDebugMode, Off |
 | Lua warnings | Missing images, sounds and objects that mods ask for. Psych: only with luaDebugMode. | Always, luaDebugMode, Off |
-| Lua note callbacks | Scripts hear every hit and miss (goodNoteHit, noteMiss...). OFF is faster on spam charts, but mods that count notes or drain health with them stop doing it. | on / off |
+| Lua note callbacks | Scripts hear every hit and miss (goodNoteHit, noteMiss...). OFF is faster on spam charts: plain notes are not passed on, but notes with a note type always are. | on / off |
 
 Settings live in the user folder (on Windows `%APPDATA%\GodsHand`), so a new version extracted elsewhere keeps them.
