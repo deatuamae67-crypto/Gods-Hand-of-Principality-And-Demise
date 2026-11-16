@@ -16,7 +16,13 @@
 #include "hscript.hpp"
 #include "scene.hpp"
 
+struct lua_State;
+
 namespace gh {
+
+// Lua code with an `end` too many or too few fixed when that alone makes it
+// read (fixes: how many changes, 0 when it is returned as it was).
+std::string repairLuaEnds(lua_State* L, const std::string& code, const std::string& chunk, int* fixes);
 
 // Gameplay side of the API, implemented by the play state (and by a stub in
 // the tests).
@@ -53,6 +59,8 @@ public:
     virtual void soundCommand(const std::string& tag, std::string_view cmd, double a, double b, double c) {}
     virtual double soundQuery(const std::string& tag, std::string_view what) { return 0; }
     virtual int noteCount(std::string_view group) { return 0; }
+    // Psych's singAnimations: one per lane of the player (singLEFT... as each lane points).
+    virtual std::vector<std::string> singAnimations() { return {"singLEFT", "singDOWN", "singUP", "singRIGHT"}; }
     virtual bool noteGet(std::string_view group, int index, std::string_view field, scene::Value& out) { return false; }
     virtual bool noteSet(std::string_view group, int index, std::string_view field, const scene::Value& v) { return false; }
     virtual void changeCharacter(int who, const std::string& name) {}

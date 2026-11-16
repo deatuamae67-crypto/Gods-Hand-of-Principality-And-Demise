@@ -49,6 +49,8 @@ endforeach()
 set_source_files_properties(${GH_LUA_SOURCES} PROPERTIES LANGUAGE CXX)
 add_library(gh_lua STATIC ${GH_LUA_SOURCES})
 target_include_directories(gh_lua PUBLIC ${lua_SOURCE_DIR})
+# Names may use any UTF-8 letter, as in Psych's LuaJIT (mods have "äniName").
+target_compile_definitions(gh_lua PRIVATE LUA_UCID)
 if(MSVC)
   target_compile_options(gh_lua PRIVATE /TP /W0)
   target_compile_definitions(gh_lua PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -89,6 +91,7 @@ add_library(gh_core STATIC
   src/chart_stream.cpp
   src/chart_binary.cpp
   src/basegame.cpp
+  src/builtin_events.cpp
   src/shader_glsl.cpp
   src/effects.cpp
   src/hscript.cpp
@@ -289,6 +292,7 @@ if(GH_BUILD_GAME)
     src/sysinfo.cpp
     src/touch_ui.cpp
     src/visualizer.cpp
+    src/check_scripts.cpp
   )
   if(ANDROID)
     # NativeActivity loads libgodshand.so; raylib's android_main() calls main().

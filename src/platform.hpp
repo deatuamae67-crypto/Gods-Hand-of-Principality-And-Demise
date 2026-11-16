@@ -18,6 +18,18 @@ constexpr bool kAndroid =
     false;
 #endif
 
+// The system the game was built for, as people call it.
+constexpr const char* kName =
+#if defined(__ANDROID__)
+    "Android";
+#elif defined(_WIN32)
+    "Windows";
+#elif defined(__APPLE__)
+    "macOS";
+#else
+    "Linux";
+#endif
+
 // Touch-first device (no keyboard assumed): menus get the on-screen pad.
 bool touchFirst();
 
@@ -78,5 +90,12 @@ enum class Import { Idle, Picking, Copying, Done, Nothing };
 bool pickModZips();               // false if the picker cannot be shown
 Import importStatus(int* count);  // count: zips copied (when Done)
 void resetImport();
+
+// A line of text from the player. Android: a box with the on-screen keyboard
+// (follow textStatus); elsewhere false, the keyboard types straight in.
+enum class TextAsk { Idle, Asking, Done, Cancelled };
+bool askText(const std::string& title, const std::string& initial);
+TextAsk textStatus(std::string* text);  // text: what was typed (when Done)
+void resetText();
 
 }  // namespace gh::platform

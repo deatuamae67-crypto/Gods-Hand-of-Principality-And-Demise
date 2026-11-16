@@ -104,6 +104,14 @@ bool Settings::load(const std::string& path) {
         else if (k == "sfxVol") sfxVol = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hitsoundVol") hitsoundVol = clampv(float(d), 0.0f, 1.0f);
         else if (k == "muted") muted = b;
+        else if (k == "modRate") modRate = clampv(float(d), 0.5f, 2.0f);
+        else if (k == "modBotplay") modBotplay = b;
+        else if (k == "modPractice") modPractice = b;
+        else if (k == "modMirror") modMirror = b;
+        else if (k == "modScrollType") modScrollType = clampv(int(d), 0, 2);
+        else if (k == "modScrollValue") modScrollValue = clampv(float(d), 0.25f, 10.0f);
+        else if (k == "freeplaySong") freeplaySong = v;
+        else if (k == "freeplayDiff") freeplayDiff = std::max(0, int(d));
     }
     return true;
 }
@@ -140,7 +148,9 @@ bool Settings::save(const std::string& path) const {
       << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums << "\ntouchControls=" << touchControls
       << "\nfpsCap=" << fpsCap << "\noffsetMs=" << offsetMs << "\nscrollSpeed=" << scrollSpeed
       << "\nmasterVol=" << masterVol << "\nmusicVol=" << musicVol << "\nsfxVol=" << sfxVol
-      << "\nhitsoundVol=" << hitsoundVol << "\nmuted=" << muted << "\npsychUi=" << psychUi << "\npsychFolder=" << psychFolder << "\n";
+      << "\nhitsoundVol=" << hitsoundVol << "\nmuted=" << muted << "\nmodRate=" << modRate << "\nmodBotplay=" << modBotplay << "\nmodPractice=" << modPractice
+      << "\nmodMirror=" << modMirror << "\nmodScrollType=" << modScrollType << "\nmodScrollValue=" << modScrollValue
+      << "\nfreeplaySong=" << freeplaySong << "\nfreeplayDiff=" << freeplayDiff << "\npsychUi=" << psychUi << "\npsychFolder=" << psychFolder << "\n";
     return bool(f);
 }
 
@@ -170,8 +180,14 @@ std::vector<std::vector<int>> Settings::laneKeys(int keys) const {
         {KEY_A, KEY_S, KEY_D, KEY_F, KEY_H, KEY_J, KEY_K, KEY_L},
         {KEY_A, KEY_S, KEY_D, KEY_F, KEY_SPACE, KEY_H, KEY_J, KEY_K, KEY_L},
     };
+    if (keys > ek::kTableKeys) {  // the keyboard's rows; lanes past them have no key
+        for (int l = 0; l < std::min(keys, kMaxKeys); ++l)
+            r.push_back(l < int(sizeof(ek::kManyControls)) - 1 ? std::vector<int>{int((unsigned char)ek::kManyControls[l])}
+                                                                : std::vector<int>{});
+        return r;
+    }
     if (keys > 9) {  // the extra keys scripts' keys: two rows of the keyboard
-        for (const char* k = ek::kControls[clampv(keys, 10, kMaxKeys) - 10]; *k; ++k) r.push_back({int((unsigned char)*k)});
+        for (const char* k = ek::kControls[clampv(keys, 10, ek::kTableKeys) - 10]; *k; ++k) r.push_back({int((unsigned char)*k)});
         return r;
     }
     const auto& p = presets[size_t(clampv(keys, 1, 9) - 1)];

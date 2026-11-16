@@ -3,10 +3,12 @@
 
 package com.godshand.game;
 
+import android.app.AlertDialog;
 import android.app.NativeActivity;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -16,7 +18,10 @@ import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.text.InputType;
 import android.view.View;
+import android.view.WindowManager;
+import android.widget.EditText;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -62,6 +67,9 @@ public class GameActivity extends NativeActivity {
      * (am start ... --es args "--autoplay builtin:x --render"): the emulator test.
      */
     public static volatile String launchArgs = "";
+    /** A line of text asked with askText: 0 idle, 1 asking, 2 typed (textResult), 3 cancelled. */
+    public static volatile int textState = 0;
+    public static volatile String textResult = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -118,6 +126,49 @@ public class GameActivity extends NativeActivity {
                 | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+    }
+
+    /** Called from the game thread: a box with the on-screen keyboard (Freeplay's search). */
+    public void askText(final String title, final String initial) {
+        textResult = "";
+        textState = 1;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                final EditText input = new EditText(GameActivity.this);
+                input.setSingleLine(true);
+                input.setInputType(InputType.TYPE_CLASS_TEXT);
+                input.setText(initial);
+                input.setSelection(input.getText().length());
+                AlertDialog dialog = new AlertDialog.Builder(GameActivity.this)
+                        .setTitle(title)
+                        .setView(input)
+                        .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                textResult = input.getText().toString();
+                                textState = 2;
+                            }
+                        })
+                        .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                textState = 3;
+                            }
+                        })
+                        .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                            @Override
+                            public void onCancel(DialogInterface d) {
+                                textState = 3;
+                            }
+                        })
+                        .create();
+                if (dialog.getWindow() != null)
+                    dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+                dialog.show();
+                input.requestFocus();
+            }
+        });
     }
 
     /** Called from the game thread. */

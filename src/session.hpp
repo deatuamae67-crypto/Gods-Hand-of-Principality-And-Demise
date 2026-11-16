@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -53,7 +54,12 @@ struct GameEvent {
     uint32_t id = 0;
 };
 
+using LaneMask = std::bitset<kMaxKeys>;  // one bit per lane
+
 struct SessionConfig {
+    // Lanes the bot always plays for the player: lanes with no key (a chart of
+    // more keys than the keyboard has).
+    LaneMask keylessLanes;
     bool ghostTapping = true;
     bool botplay = false;
     bool practice = false;
@@ -83,7 +89,7 @@ public:
     long long activeHold(int side, int lane) const { return activeHold_[side][lane]; }
     void setBotplay(bool b) { cfg_.botplay = b; }
     // Lanes the bot plays for the player (JS Engine bot energy), one bit per lane.
-    void setAutoLanes(unsigned mask) { autoLanes_ = mask; }
+    void setAutoLanes(const LaneMask& mask) { autoLanes_ = mask; }
     // Each player/opponent hit counts this many notes (JS Engine "Change Note Multiplier").
     void setNoteMultiplier(int side, long long m) { mult_[side & 1] = std::max(1LL, m); }
     void setPractice(bool b) { cfg_.practice = b; }
@@ -124,7 +130,8 @@ private:
     bool held_[kMaxKeys]{};
     double lastMs_ = -1e18;
     double accSum_ = 0;
-    unsigned autoLanes_ = 0;
+    LaneMask autoLanes_;
+    bool botLane(int lane) const { return autoLanes_[size_t(lane)] || cfg_.keylessLanes[size_t(lane)]; }
     long long mult_[2] = {1, 1};
     static constexpr size_t kMaxHitErrors = size_t(1) << 21;
     uint64_t errStride_ = 1, errTick_ = 0;

@@ -5,7 +5,7 @@
 //
 //   "GHCB" u32 version
 //   u64 notes, u64 rawCount, i32 maxData, u32 blockNotes, u32 blocks, u32 types
-//   u64 dataCount[64]
+//   u64 dataCount[256] (version 1: [64])
 //   types: u32 length + bytes, each
 //   u64 skeleton bytes, u64 packed, packed bytes           (deflate)
 //   u64 ranges, u64 bytes, u64 packed, packed bytes        (varint gaps)
@@ -13,7 +13,9 @@
 //
 // A block holds five columns, their lengths first (u32 each): times (the
 // change of the gap from the note before, in ns, zigzag varints), lengths
-// (us, zigzag varints), noteData bytes, stack bytes, types (varints).
+// (us, zigzag varints), noteData bytes, stack bytes, types (varints; bit 15
+// the alt flag). Version 1 kept the alt flag in bit 7 of noteData (values
+// 0..63 only); it is still read.
 #include "chart_binary.hpp"
 
 #include <algorithm>
@@ -35,7 +37,7 @@ namespace gh {
 namespace {
 
 constexpr uint32_t kMagic = 0x42434847u;  // "GHCB"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;  // 1 is still read
 constexpr uint32_t kBlockNotes = 1u << 18;  // 262144 notes: enough blocks for every core
 
 void putU32(std::string& o, uint32_t v) {
@@ -124,7 +126,7 @@ std::string encodeBlock(const StreamedNote* n, size_t count) {
     return raw;
 }
 
-bool decodeBlock(const std::string& raw, StreamedNote* out, size_t count) {
+bool decodeBlock(const std::string& raw, StreamedNote* out, size_t count, uint32_t version) {
     if (raw.size() < 20) return false;
     const uint8_t* p = reinterpret_cast<const uint8_t*>(raw.data());
     uint64_t lens[5], total = 20;
@@ -145,10 +147,14 @@ bool decodeBlock(const std::string& raw, StreamedNote* out, size_t count) {
         out[i].time = double(prevT) / 1e6;
         if (!getVar(l, d, v)) return false;
         out[i].length = float(double(unzig(v)) / 1000.0);
-        out[i].data = d[i];
         out[i].stack = s[i];
         if (!getVar(y, end, v) || v > 65535) return false;
         out[i].type = uint16_t(v);
+        out[i].data = d[i];
+        if (version < 2) {  // the alt flag was bit 7 of noteData
+            out[i].data = uint8_t(d[i] & 63);
+            if (d[i] & 128) out[i].type |= StreamedNote::kAltBit;
+        }
     }
     return t == p + 20 + lens[0] && y == end;
 }
@@ -262,6 +268,7 @@ namespace {
 
 // Everything before the note blocks.
 struct Head {
+    uint32_t version = kVersion;
     uint64_t notes = 0, rawCount = 0;
     int32_t maxData = -1;
     uint32_t blockNotes = 0, blocks = 0, types = 0;
@@ -270,7 +277,8 @@ struct Head {
 bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::string& err) {
     uint32_t magic = 0, version = 0, maxData = 0;
     if (!readU32(f, magic) || magic != kMagic) { err = "not a God's Hand binary chart"; return false; }
-    if (!readU32(f, version) || version != kVersion) { err = "a binary chart of a newer God's Hand"; return false; }
+    if (!readU32(f, version) || version < 1 || version > kVersion) { err = "a binary chart of a newer God's Hand"; return false; }
+    h.version = version;
     if (!readU64(f, h.notes) || !readU64(f, h.rawCount) || !readU32(f, maxData) || !readU32(f, h.blockNotes) ||
         !readU32(f, h.blocks) || !readU32(f, h.types) || h.blockNotes == 0 ||
         uint64_t(h.blocks) != (h.notes + h.blockNotes - 1) / h.blockNotes) {
@@ -278,9 +286,9 @@ bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::s
         return false;
     }
     h.maxData = int32_t(maxData);
-    std::array<uint64_t, 64> counts{};
-    for (uint64_t& c : counts)
-        if (!readU64(f, c)) { err = "damaged binary chart"; return false; }
+    std::array<uint64_t, kNoteDataValues> counts{};
+    for (size_t i = 0; i < (version < 2 ? size_t(64) : counts.size()); ++i)
+        if (!readU64(f, counts[i])) { err = "damaged binary chart"; return false; }
     std::vector<std::string> types(h.types);
     for (std::string& t : types) {
         uint32_t len = 0;
@@ -367,10 +375,11 @@ bool readBinaryChart(const std::string& path, std::string& skeleton, StreamedNot
             const size_t from = size_t(b) * h.blockNotes, cnt = std::min<size_t>(h.blockNotes, size_t(h.notes) - from);
             StreamedNote* dst = sn.notes.data() + from;
             const uint32_t rawLen = rawLens[b];
-            flight.push_back(std::async(std::launch::async, [packed, dst, cnt, rawLen] {
+            const uint32_t version = h.version;
+            flight.push_back(std::async(std::launch::async, [packed, dst, cnt, rawLen, version] {
                 std::string raw;
                 return unpack(reinterpret_cast<const uint8_t*>(packed->data()), packed->size(), raw, rawLen) &&
-                       decodeBlock(raw, dst, cnt);
+                       decodeBlock(raw, dst, cnt, version);
             }));
             while (flight.size() >= window) {
                 ok = flight.front().get() && ok;

@@ -251,7 +251,8 @@ void PlayState::update(double dt) {
     if (focus != lastFocus_) {
         lastFocus_ = focus;
         // Charts with sections move the camera at each section (onSection).
-        if (psych_ && chart_.sections.empty() && !scene_->camForced) psychFocus(focus);
+        // (V-Slice charts move it with their FocusCamera events, offsets and eases included.)
+        if (psych_ && chart_.sections.empty() && !scene_->camForced && !vsliceFocus_) psychFocus(focus);
     }
     if (!psych_) {
         const bool focusLeft = (focus == 1) == playerLeft_;
@@ -275,7 +276,8 @@ void PlayState::update(double dt) {
     healthShown_ = approach(healthShown_, float(session_.health), 10.0f, float(dt));
     if (speedTweenDur_ > 0) {
         speedTweenT_ = std::min(speedTweenDur_, speedTweenT_ + dt);
-        speedMult_ = speedTweenFrom_ + (speedTweenTo_ - speedTweenFrom_) * (speedTweenT_ / speedTweenDur_);
+        const double k = psych::ease(speedTweenEase_, speedTweenT_ / speedTweenDur_);
+        speedMult_ = speedTweenFrom_ + (speedTweenTo_ - speedTweenFrom_) * k;
         if (speedTweenT_ >= speedTweenDur_) speedTweenDur_ = 0;
     }
 
@@ -406,23 +408,35 @@ void PlayState::setup() {
         for (int code : lk[size_t(l)])
             if (code > 0 && code < Input::kMaxCodes) keyLane_[size_t(code)] = l;
     for (int l = 0; l < chart_.keysOf(1) && l < kMaxKeys; ++l) keyLane_[size_t(kTouchLane + l)] = l;  // on-screen lanes
+    // Lanes no key reaches (a chart of more keys than the keyboard has): the
+    // bot plays them, unless the lanes are touched (each one is a column then).
+    cfg_.keylessLanes.reset();
+    if (!a.touchMode && !a.settings.touchControls)
+        for (int l = 0; l < chart_.keysOf(1) && l < kMaxKeys; ++l)
+            if (size_t(l) >= lk.size() || lk[size_t(l)].empty()) cfg_.keylessLanes.set(size_t(l));
 
+    // The notes are ready before the scripts run: what onCreate and
+    // onCreatePost change on them (noAnimation, noteType, hitCausesMiss...
+    // through unspawnNotes) stays when the song starts, as in Psych.
+    session_.init(chart_, cfg_);
+    sessionFresh_ = true;
     // Script note ids: every note in chart order.
     noteOrder_.clear();
     {
-        Session probe;
-        probe.init(chart_, cfg_);
         std::vector<NoteRef> refs(chart_.notes.size(), NoteRef{0, 0, 0});
         for (int side = 0; side < 2; ++side)
             for (int l = 0; l < chart_.keys; ++l) {
-                const auto& v = probe.lane(side, l);
+                const auto& v = session_.lane(side, l);
                 for (size_t i = 0; i < v.size(); ++i)
                     if (v[i].id < refs.size()) refs[v[i].id] = NoteRef{uint8_t(side), uint8_t(l), uint32_t(i)};
             }
         noteOrder_ = std::move(refs);
     }
 
+    findGfSections();
+    creating_ = true;  // onCreate / onCreatePost: no note has come yet
     psych_ = !entry_->builtin && setupPsych();
+    creating_ = false;
     if (!psych_) layoutStrums();  // Psych mode laid them out before its scripts ran
     if (psych_) {
         leftColor_ = rgbColor(barColor_[0]);
@@ -500,6 +514,7 @@ Vector2 PlayState::strumCenter(int side, int lane) const {
 // keys on, the widths of the extra keys scripts (18 keys: 33 pixels).
 float PlayState::laneWidth(int keys) const {
     const int K = std::clamp(keys > 0 ? keys : chart_.keys, 1, kMaxKeys);
+    if (K > ek::kTableKeys) return ek::manyLaneWidth(K);
     return K >= 10 ? ek::kLaneWidth[K] : std::min(112.0f, 500.0f / float(K));
 }
 
@@ -510,13 +525,14 @@ double PlayState::scrollSpeed() const {
     const Settings& s = a.settings;
     double base = s.scrollSpeed > 0.001f ? s.scrollSpeed : chart_.speed;
     if (a.mods.scrollType == 1) base *= a.mods.scrollValue;  // Freeplay modifiers
-    else if (a.mods.scrollType == 2) base = a.mods.scrollValue;
+    else if (a.mods.scrollType == 2) return a.mods.scrollValue;  // constant: scroll speed events do nothing (Psych)
     return base * speedMult_;
 }
 
 void PlayState::restart() {
     App& a = app();
-    session_.init(chart_, cfg_);
+    if (!sessionFresh_) session_.init(chart_, cfg_);  // the first time it was made before the scripts
+    sessionFresh_ = false;
     popups_.clear();
     fx_.clear();
     for (auto& s : confirm_)
@@ -652,6 +668,8 @@ TouchLayout PlayState::touchLayout() const {
         return t;
     }
     t.keys = {{"PAUSE", KEY_ESCAPE}};
+    // The chart editor on this song, as 7 does on a keyboard.
+    if (!replaying_ && !rendering_) t.keys.push_back({"CHART", KEY_SEVEN});
     if (botEnergyOn_ && !cfg_.botplay) t.keys.push_back({"BOT", KEY_LEFT_CONTROL});
     if (!replaying_ && !cfg_.botplay) t.lanes = chart_.keysOf(1);
     return t;
@@ -830,6 +848,7 @@ void PlayState::onBeat(int b) {
     stage_.onBeat(b);
     beatPulse_ = 1.0f;
     if (b >= 0) vis_.beat();
+    if (chart_.sections.empty()) syncScriptBpm();
     if (psych_) {
         psychBeat(b);
         return;
@@ -849,6 +868,20 @@ void PlayState::onStep(int s) {
     if (chart_.sections.empty() && s >= 0 && s % 16 == 0) onSection(s / 16);
 }
 
+// Psych's sectionHit: a change of tempo reaches the scripts' curBpm, crochet
+// and stepCrochet (bpm stays the song's own). Scripts that move things with
+// curBpm (taimuresu-overkill: 250 then 1000 BPM) otherwise run slow. Charts
+// without sections (V-Slice) get it on each beat.
+void PlayState::syncScriptBpm() {
+    if (!scripts_) return;
+    const double bpm = chart_.bpmAt(std::max(0.0, songMs_ + 1));
+    if (!(bpm > 0) || bpm == scriptBpm_) return;
+    scriptBpm_ = bpm;
+    scripts_->setGlobal("curBpm", bpm);
+    scripts_->setGlobal("crochet", 60000.0 / bpm);
+    scripts_->setGlobal("stepCrochet", 15000.0 / bpm);
+}
+
 void PlayState::onSection(int s) {
     if (s == lastSection_) return;
     lastSection_ = s;
@@ -858,6 +891,7 @@ void PlayState::onSection(int s) {
     // script or "Camera Follow Pos" holds it.
     if (psych_ && info && !scene_->camForced) moveCameraSection(s);
     if (!scripts_) return;
+    syncScriptBpm();
     scripts_->setGlobal("curSection", double(s));
     scripts_->setGlobal("mustHitSection", info ? info->mustHit : chart_.focusAt(songMs_ + 1) == 1);
     scripts_->setGlobal("gfSection", info && info->gf);
@@ -1898,40 +1932,6 @@ void PlayState::drawPsychPause() {
 
 // The engine's watermark in the bottom-left corner, as JS Engine shows its
 // own: the engine and its version (Options: Watermark; hidden with the HUD).
-// What the FPS panel keeps clear of: the arrows where they start, the health
-// bar with its icons, the score, the time bar and the watermark.
-void PlayState::busyRects(std::vector<Rectangle>& out) const {
-    if (!scene_ || phase_ == Phase::Loading || phase_ == Phase::Error) return;
-    const Settings& s = app().settings;
-    const float W = float(gfx::W), H = float(gfx::H);
-    for (int side = 0; side < 2; ++side) {
-        const int K = chart_.keysOf(side);
-        const float w = laneWidth(K);
-        for (int l = 0; l < K; ++l) {
-            const scene::Strum& st = strum(side, l);
-            if (!st.visible || st.alpha < 0.05f) continue;
-            const bool home = st.defX != 0 || st.defY != 0;  // scripts may be moving it: its place
-            out.push_back({(home ? st.defX : st.x) + 56 - w * 0.5f, home ? st.defY : st.y, w, 112});
-        }
-    }
-    if (!s.hideHud) {
-        const Vector2 hbs = psychUi().healthBarSize();
-        Rectangle bar = hbs.x > 0 ? Rectangle{(W - hbs.x) * 0.5f, H * (s.downscroll ? 0.11f : 0.89f), hbs.x, hbs.y}
-                                  : Rectangle{335, s.downscroll ? 77.0f : 635.0f, 610, 28};
-        const Vector2 moved = hudMoved("healthBar");
-        bar.x += moved.x;
-        bar.y += moved.y;
-        out.push_back({bar.x - 75, bar.y - 75, bar.width + 150, bar.height + 150});  // with the icons
-        out.push_back({W * 0.5f - 360, bar.y + 36, 720, 52});                       // score and note counter
-        if (s.watermark) out.push_back({0, H - 26, 200, 26});
-    }
-    if (s.timeBar != 3) out.push_back({W * 0.5f - 220, s.downscroll ? H - 48 : 14, 440, 40});
-    if (s.visualizer && !s.hideHud) {
-        const Rectangle v = visualizerArea();
-        out.push_back({v.x - 8, v.y - 5, v.width + 16, v.height + 11});
-    }
-}
-
 // ------------------------------------------------------- audio visualizer --
 
 // The top-right corner, 280 pixels wide: as high as the room over the arrows
@@ -1986,7 +1986,8 @@ void PlayState::drawVisualizer() const {
 void PlayState::drawWatermark() {
     const Settings& s = app().settings;
     if (!s.watermark || s.hideHud) return;
-    static const std::string text = "God's Hand (" GH_VERSION ")";
+    // As the issue asked: "Gods Hand engine v.(version) (platform) edition".
+    static const std::string text = std::string("God's Hand Engine v." GH_VERSION " ") + platform::kName + " Edition";
     const PsychUi& ui = psychUi();
     if (psych_ && ui.active() && ui.font()) ui.text(text, 2, gfx::H - 22, 16, fade(WHITE, 0.85f), -1, 1.0f);
     else gfx::text(FontId::Ui, text, 8, gfx::H - 26, 18, fade(kIvory, 0.75f), Align::Left, 1.2f);

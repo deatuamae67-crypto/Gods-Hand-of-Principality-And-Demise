@@ -115,13 +115,12 @@ public:
              nullptr, 0, 0, 0, &s.noteCounter, {0, 1, 2}, {"Off", "Your side", "Both sides"}},
             {Row::Bool, "Psych Engine interface", "Psych's notes, ratings, health and time bars, fonts, pause menu and sounds, from your own copy.",
              &s.psychUi},
-            {Row::Action, "Psych Engine folder...", ""},  // BACKSPACE: back to the copy found automatically
             {Row::Bool, "Hit popups", "Rating pictures and combo numbers that pop up on each hit.", &s.hitPopups},
             {Row::Choice, "Time bar", "The bar at the top of the screen, as in Psych.", nullptr, nullptr, 0, 0, 0, &s.timeBar,
              {0, 1, 2, 3}, {"Time left", "Time elapsed", "Song name", "Off"}},
             {Row::Number, "Health bar opacity", "The health bar and the icons.", nullptr, &s.healthBarAlpha, 0, 1, 0.1f},
             {Row::Bool, "Hide HUD", "Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD.", &s.hideHud},
-            {Row::Bool, "Watermark", "\"God's Hand\" and its version in the bottom-left corner of songs, as JS Engine shows its own.",
+            {Row::Bool, "Watermark", "\"God's Hand Engine v.(version) (system) Edition\" in the bottom-left corner of songs, as JS Engine shows its own.",
              &s.watermark},
             {Row::Bool, "Audio visualizer",
              "Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it "
@@ -132,7 +131,7 @@ public:
             {Row::Bool, "Combo stacking", "Ratings and combo numbers pile up. OFF: only the latest one, easier to read.",
              &s.comboStacking},
             {Row::Number, "Note splash opacity", "How see-through the bursts on your best hits are.", nullptr, &s.splashAlpha, 0, 1, 0.1f},
-            {Row::Choice, "Note skin", "The Psych interface's note skin: Psych's noteSkins/ pictures in your copy.", nullptr, nullptr, 0, 0, 0,
+            {Row::Choice, "Note skin", "The Psych interface's note skin: the noteSkins/ pictures of your Psych copy and of every installed mod.", nullptr, nullptr, 0, 0, 0,
              &noteSkinIdx_},
             {Row::Action, "Note colors...", "The Psych interface's note colours, as in Psych's Note Colors menu."},
             {Row::Number, "Rating position X", "Where the ratings pop up (Psych's Adjust Combo).", nullptr, &s.comboOffset[0], -600, 600, 1},
@@ -179,11 +178,11 @@ public:
                 r.fmt = [](float v) { return std::string(TextFormat("%+d", int(std::lround(v)))); };
             else if (r.kind == Row::Number) r.fmt = pct;
             if (r.label == "Calibrate offset...") r.action = [] { app().change(makeCalibration()); };
-            if (r.label == "Psych Engine folder...") r.action = [this] { chooseFolder(); };
             if (r.label == "Note colors...") r.action = [] { app().change(makeNoteColors()); };
             if (r.label == "Note skin") {
-                // Default (NOTE_assets) and the skins in the copy's noteSkins/.
-                skins_ = psychNoteSkins(app().psychFolderInUse);
+                // Default (NOTE_assets) and the skins in noteSkins/ of the Psych
+                // copy in use and of every installed mod.
+                skins_ = psychNoteSkins(app().psychFolderInUse, app().library.allAssetRoots());
                 r.names = {"Default"};
                 r.choices = {0};
                 for (size_t k = 0; k < skins_.size(); ++k) {
@@ -263,10 +262,7 @@ public:
                     else *r.b = !*r.b;
                     if (r.label == "VSync") platform::setVsync(a.settings.vsync);
                     if (r.b == &a.settings.antialiasing) psychUi().setSmooth(a.settings.antialiasing);  // the loaded pictures too
-                    if (r.label == "Psych Engine interface") {
-                        a.applyPsychUi();  // no folder chosen: the best copy found among the mods
-                        if (a.settings.psychUi && a.settings.psychFolder.empty() && !psychUi().active()) chooseFolder();
-                    }
+                    if (r.label == "Psych Engine interface") a.applyPsychUi();  // the best copy found among the mods
                     changed = true;
                 }
                 break;
@@ -293,12 +289,6 @@ public:
                 break;
             case Row::Action:
                 if (in.accept()) { sfxPlay(Sfx::Confirm); r.action(); }
-                else if (r.label == "Psych Engine folder..." && in.pressed(KEY_BACKSPACE) && !a.settings.psychFolder.empty()) {
-                    a.settings.psychFolder.clear();  // back to the copy found among the mods
-                    a.applyPsychUi();
-                    a.saveSettings();
-                    sfxPlay(Sfx::Cancel);
-                }
                 break;
             case Row::Key:
                 if (dir) { slot_ = 1 - slot_; sfxPlay(Sfx::Scroll); }
@@ -406,17 +396,19 @@ private:
         a.saveSettings();
         sfxPlay(Sfx::Confirm);
     }
+    // The interface's pictures and sounds come from the most complete Psych
+    // Engine / JS Engine copy among the mods (engine packs such as JS Engine or
+    // H-Slice): its row says which, or that there is none.
     void refreshFolderHelp() {
         const App& a = app();
         for (Row& r : rows_)
-            if (r.label == "Psych Engine folder...") {
+            if (r.label == "Psych Engine interface") {
+                const std::string base = "Psych's notes, ratings, health and time bars, fonts, pause menu and sounds.";
                 if (pickingFolder_) r.help = "Copying the interface files...";
-                else if (a.settings.psychFolder.empty() && !a.psychFolderInUse.empty())
-                    r.help = "Found among your mods: " + platform::displayPath(a.psychFolderInUse) + ". Pick another folder, or drop one on this window.";
-                else if (a.settings.psychFolder.empty())
-                    r.help = "None found among your mods (engine packs such as JS Engine or H-Slice have one). Pick the folder, or drop it on this window.";
-                else r.help = platform::displayPath(a.settings.psychFolder) + (a.psychReport.empty() ? "" : "  (" + a.psychReport + ")") +
-                              "  BACKSPACE: the copy found among your mods.";
+                else if (!a.psychFolderInUse.empty()) r.help = base + " From " + platform::displayPath(a.psychFolderInUse) + ".";
+                else if (a.settings.psychUi)
+                    r.help = base + " No copy among your mods yet: install an engine pack such as JS Engine or H-Slice (Freeplay > MOD PACKS).";
+                else r.help = base;
             }
     }
     bool pickingFolder_ = false;

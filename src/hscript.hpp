@@ -96,6 +96,8 @@ public:
 
     // Runs a chunk of code; result is the value of its last statement or `return`.
     bool run(const std::string& code, const std::string& name, Value& result, std::string& err);
+    // Reads the code without running it: false and why when it cannot be read.
+    static bool checkSyntax(const std::string& code, std::string& err);
     // Calls a function defined by earlier code. found=false when it does not exist.
     bool call(const std::string& fn, std::vector<Value> args, Value& result, std::string& err, bool* found = nullptr);
     bool hasFunction(const std::string& fn) const;

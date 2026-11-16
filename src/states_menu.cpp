@@ -10,6 +10,7 @@
 #include "app.hpp"
 #include "characters.hpp"
 #include "common.hpp"
+#include "editor_ui.hpp"
 #include "gfx.hpp"
 #include "platform.hpp"
 #include "raylib.h"
@@ -321,10 +322,12 @@ public:
     bool wantsMenuMusic() const override { return !previewPlaying_; }
     TouchLayout touchLayout() const override {
         TouchLayout t;
-        if (!modsOpen_) t.keys = {{"MODIFIERS", KEY_TAB}, {"MOD PACKS", KEY_M}, {"CHART EDITOR", KEY_SEVEN}, {"RESCAN", KEY_R}};
-        if (!modsOpen_ && platform::kAndroid) t.keys.insert(t.keys.begin() + 2, {"IMPORT ZIP", KEY_I});
+        if (!modsOpen_) t.keys = {{"SEARCH", KEY_F}, {"MODIFIERS", KEY_TAB}, {"MOD PACKS", KEY_M}, {"CHART EDITOR", KEY_SEVEN}, {"RESCAN", KEY_R}};
+        if (!modsOpen_ && platform::kAndroid) t.keys.insert(t.keys.begin() + 3, {"IMPORT ZIP", KEY_I});
         return t;
     }
+    // While typing a search, the volume keys and the other letters type.
+    bool keyReserved(int) const override { return typing_; }
 
     void update(double dt) override {
         App& a = app();
@@ -335,6 +338,48 @@ public:
         const Color target = currentColor();
         bg_ = gfx::mix(bg_, target, saturate(float(dt) * 4.0f));
 
+        // Searching (JS Engine's Freeplay search): F or / starts typing, the
+        // list keeps the songs whose name, mod or id has the text; ENTER keeps
+        // the search, ESC clears it. Android: the system's text box.
+        if (askingText_) {
+            std::string text;
+            const platform::TextAsk st = platform::textStatus(&text);
+            if (st == platform::TextAsk::Done || st == platform::TextAsk::Cancelled) {
+                askingText_ = false;
+                platform::resetText();
+                if (st == platform::TextAsk::Done) setQuery(text);
+            }
+            return;
+        }
+        if (typing_) {
+            std::string q = query_;
+            for (char32_t c : in.typed()) q += edui::utf8(c);
+            if (in.pressed(KEY_BACKSPACE) && !q.empty()) {
+                q.pop_back();
+                while (!q.empty() && (static_cast<unsigned char>(q.back()) & 0xC0) == 0x80) q.pop_back();
+            }
+            if (in.pressed(KEY_ESCAPE)) {
+                typing_ = false;
+                q.clear();
+                sfxPlay(Sfx::Cancel);
+            } else if (in.pressed(KEY_ENTER) || in.pressed(KEY_KP_ENTER) || in.pressed(KEY_DOWN) || in.pressed(KEY_UP)) {
+                typing_ = false;
+                sfxPlay(Sfx::Confirm);
+            }
+            if (q != query_) setQuery(q);
+            return;
+        }
+        if (!modsOpen_ && (in.pressed(KEY_F) || in.pressed(KEY_SLASH))) {
+            sfxPlay(Sfx::Scroll);
+            if (platform::kAndroid && platform::askText("Search songs", query_)) askingText_ = true;
+            else typing_ = true;
+            return;
+        }
+        if (!modsOpen_ && !query_.empty() && in.back()) {  // ESC first clears the search
+            setQuery("");
+            sfxPlay(Sfx::Cancel);
+            return;
+        }
         if (modsOpen_) {
             Modifiers& m = a.mods;
             if (in.up()) { modSel_ = (modSel_ + kModRows - 1) % kModRows; sfxPlay(Sfx::Scroll); }
@@ -355,6 +400,15 @@ public:
                     m.scrollValue = std::round((m.scrollValue + step * (dir ? dir : 1)) / step) * step;
                     m.scrollValue = m.scrollType == 1 ? clampv(m.scrollValue, 0.25, 5.0) : clampv(m.scrollValue, 0.5, 10.0);
                 }
+                // Kept for the next time the game starts, like the options.
+                Settings& s = a.settings;
+                s.modRate = float(m.rate);
+                s.modBotplay = m.botplay;
+                s.modPractice = m.practice;
+                s.modMirror = m.mirror;
+                s.modScrollType = m.scrollType;
+                s.modScrollValue = float(m.scrollValue);
+                a.saveSettings();
             }
             if (in.back() || in.pressed(KEY_TAB)) modsOpen_ = false;
             return;
@@ -399,11 +453,12 @@ public:
                 if (list_[size_t(i)]->id == id) sel = i;
             sfxPlay(Sfx::Confirm);
         }
-        if (in.back()) { sfxPlay(Sfx::Cancel); a.change(makeMainMenu()); return; }
-        if (in.pressed(KEY_M)) { sfxPlay(Sfx::Confirm); a.change(makeModPacks()); return; }
+        if (in.back()) { remember(); sfxPlay(Sfx::Cancel); a.change(makeMainMenu()); return; }
+        if (in.pressed(KEY_M)) { remember(); sfxPlay(Sfx::Confirm); a.change(makeModPacks()); return; }
         if ((in.pressed(KEY_SEVEN) || in.pressed(KEY_KP_7)) && n > 0) {  // chart editor, as in Psych
             const SongEntry* e = list_[size_t(sel)];
             if (!e->diffs.empty()) {
+                remember();
                 sfxPlay(Sfx::Confirm);
                 a.change(makeChartEditor(e->id, e->diffs[size_t(diffIndex())]));
                 return;
@@ -412,6 +467,7 @@ public:
         if (in.accept() && n > 0) {
             const SongEntry* e = list_[size_t(sel)];
             if (!e->diffs.empty()) {
+                remember();
                 sfxPlay(Sfx::Confirm);
                 PlayRequest r;
                 r.songId = e->id;
@@ -511,16 +567,58 @@ public:
         }
         if (!note_.empty() && a.now - noteAt_ < 4.0)
             gfx::text(FontId::Ui, note_, 40, 600, 24, fade(kGold, float(std::min(1.0, 4.0 - (a.now - noteAt_)))), Align::Left, 1.5f);
+        if (typing_ || askingText_ || !query_.empty()) {
+            const std::string shown = (query_.empty() && !typing_ ? std::string("...") : query_) +
+                                      (typing_ && std::fmod(now, 1.0) < 0.5 ? "_" : "");
+            DrawRectangleRounded({40, 22, 740, 42}, 0.4f, 8, Color{8, 6, 16, 210});
+            gfx::text(FontId::Ui, "SEARCH", 58, 30, 22, kGold, Align::Left, 1.5f);
+            gfx::text(FontId::Ui, shown, 160, 28, 26, WHITE, Align::Left, 1.0f);
+            const std::string count = n == 0 ? std::string("no songs") : TextFormat("%d song%s", n, n == 1 ? "" : "s");
+            gfx::text(FontId::Ui, count, 766, 32, 20, fade(kIvory, 0.7f), Align::Right, 1.0f);
+        }
         if (modsOpen_) drawMods();
-        hints("ENTER play   LEFT/RIGHT difficulty   TAB modifiers   7 chart editor   M mod packs   R rescan   ESC back");
+        if (typing_) hints("Type the song's name   ENTER keep   BACKSPACE erase   ESC clear");
+        else hints(query_.empty() ? "ENTER play   LEFT/RIGHT difficulty   F search   TAB modifiers   7 chart editor   M mod packs   R rescan   ESC back"
+                                  : "ENTER play   LEFT/RIGHT difficulty   F search   ESC clear the search   TAB modifiers   7 chart editor");
         gfx::endCanvas();
     }
 
 private:
     void rebuild() {
+        App& a = app();
+        const std::string keep = !list_.empty() ? list_[size_t(clampv(a.freeplaySel, 0, int(list_.size()) - 1))]->id : std::string();
         list_.clear();
-        for (const SongEntry& e : app().library.songs()) list_.push_back(&e);
-        app().freeplaySel = clampv(app().freeplaySel, 0, std::max(0, int(list_.size()) - 1));
+        const std::string q = toLower(query_);
+        for (const SongEntry& e : a.library.songs())
+            if (q.empty() || toLower(e.title).find(q) != std::string::npos || toLower(e.subtitle).find(q) != std::string::npos ||
+                toLower(e.id).find(q) != std::string::npos)
+                list_.push_back(&e);
+        if (!keep.empty())  // the same song stays picked when it is still listed
+            for (int i = 0; i < int(list_.size()); ++i)
+                if (list_[size_t(i)]->id == keep) a.freeplaySel = i;
+        // The first time after the game starts: the song picked last time.
+        static bool restored = false;
+        if (!restored && !a.settings.freeplaySong.empty()) {
+            for (int i = 0; i < int(list_.size()); ++i)
+                if (list_[size_t(i)]->id == a.settings.freeplaySong) a.freeplaySel = i;
+        }
+        restored = true;
+        a.freeplaySel = clampv(a.freeplaySel, 0, std::max(0, int(list_.size()) - 1));
+    }
+    void setQuery(const std::string& q) {
+        if (q == query_) return;
+        query_ = q;
+        rebuild();
+        anim_ = float(app().freeplaySel);
+        selChangedAt_ = app().now;
+    }
+    // The song and difficulty picked, kept for the next time the game starts.
+    void remember() {
+        App& a = app();
+        if (list_.empty()) return;
+        a.settings.freeplaySong = list_[size_t(clampv(a.freeplaySel, 0, int(list_.size()) - 1))]->id;
+        a.settings.freeplayDiff = a.freeplayDiff;
+        a.saveSettings();
     }
     void changed() {
         sfxPlay(Sfx::Scroll);
@@ -582,6 +680,9 @@ private:
     static constexpr int kModRows = 6;
     int modSel_ = 0;
     bool importing_ = false;
+    std::string query_;        // the search (empty: every song)
+    bool typing_ = false;      // typing it with the keyboard
+    bool askingText_ = false;  // Android: the system's text box is open
     std::string note_;
     double noteAt_ = 0;
 };

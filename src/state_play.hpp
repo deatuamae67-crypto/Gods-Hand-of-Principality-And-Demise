@@ -37,7 +37,6 @@ public:
     bool wantsMenuMusic() const override { return false; }
     std::string perfInfo() const override;
     TouchLayout touchLayout() const override;
-    void busyRects(std::vector<Rectangle>& out) const override;
     bool keepsPictures() const override { return true; }
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
@@ -73,6 +72,7 @@ public:
     void soundCommand(const std::string& tag, std::string_view cmd, double a, double b, double c) override;
     double soundQuery(const std::string& tag, std::string_view what) override;
     int noteCount(std::string_view group) override;
+    std::vector<std::string> singAnimations() override;
     bool noteGet(std::string_view group, int index, std::string_view field, scene::Value& out) override;
     bool noteSet(std::string_view group, int index, std::string_view field, const scene::Value& v) override;
     void changeCharacter(int who, const std::string& name) override;
@@ -135,6 +135,7 @@ private:
     void drawLoading();
     void drawDebugLog();
     void drawWatermark();
+    void syncScriptBpm();
     void updateVisualizer(double dt);
     void drawVisualizer() const;
     Rectangle visualizerArea() const;
@@ -177,6 +178,8 @@ private:
     void moveCameraSection(int sec);   // Psych moveCameraSection
     void psychHoldRefresh();
     void handleBuiltinEvent(const psych::ChartEvent& e);
+    bool handleSliceEvent(const psych::ChartEvent& e);  // V-Slice and P-Slice camera and scroll events
+    void moveCameraFollow(float x, float y, const std::string& ease, double seconds);
     scene::Character* charForSide(int side);
     std::string singAnim(int side, int lane, uint8_t flags) const;
     void loadIcons();
@@ -250,6 +253,11 @@ private:
     float gameW_ = gfx::W;  // Flixel's FlxG.width (scripts may narrow the picture)
     std::map<std::string, scene::Value, std::less<>> classVars_;  // openfl/lime window values and friends
     int lastBeat_ = -100000, lastStep_ = -100000, lastSection_ = -100000, lastFocus_ = -1;
+    double scriptBpm_ = 0;  // the tempo the scripts were last told (curBpm)
+    bool sessionFresh_ = false;  // made in setup, before the scripts: restart() keeps it
+    bool creating_ = false;      // the scripts' onCreate/onCreatePost: every note is still to come
+    std::vector<bool> gfSection_;  // sections whose notes GF mostly sings (the camera goes to her)
+    void findGfSections();
     float camZoom_ = 1, hudZoom_ = 1, beatPulse_ = 0, minePulse_ = 0, healthShown_ = 1;
     Vector2 camFocus_{640, 370};
     float confirm_[2][kMaxKeys] = {};
@@ -335,10 +343,13 @@ private:
     RenderTexture2D hudRt_{};
     std::string ratingNameOverride_, ratingFcOverride_;
     double speedTweenFrom_ = 1, speedTweenTo_ = 1, speedTweenT_ = 0, speedTweenDur_ = 0;
+    std::string speedTweenEase_ = "linear";
     double mustHitSectionFlag_ = 1;
     bool camZoomOnBeat_ = true, cameraZoomsSet_ = false, inCutscene_ = false;
     bool zoomingOn_ = false;  // built-in camera: bops and zoom easing start at the first note hit
-    int bopEvery_ = 4;
+    double bopEvery_ = 4;         // the camera bops every this many beats (0: never)
+    bool zoomEventBoost_ = false;  // a zoom event is easing defaultCamZoom: the camera follows it 7x faster
+    bool vsliceFocus_ = false;     // the chart moves the camera with V-Slice FocusCamera events
     // JS Engine events
     bool camTwist_ = false, twisted_ = false;
     double twistIntensity_ = 0;
@@ -347,6 +358,8 @@ private:
     bool camRotate_ = false;
     double camRotateSpeed_ = 1, camRotateAngle_ = 0, camRotatePhase_ = 0;
     std::vector<std::string> scriptedEvents_;  // events with a custom_events script of their own
+    scene::ShaderPtr invertFx_, glitchFx_, glitchHudFx_;  // Dek Engine's "Invert" and "Glitch Shader add"
+    scene::ShaderPtr blockedFx_;                          // SCReboot's "Toggle Blocked Glitch Effect"
     double fakeLenMs_ = -1, fakeLenFrom_ = 0, fakeLenTo_ = 0, fakeLenT_ = 0, fakeLenDur_ = 0;
     std::string songNameShown_;  // "Change Song Name" ("" = the chart's title)
     int rainbowEndStep_ = -1;

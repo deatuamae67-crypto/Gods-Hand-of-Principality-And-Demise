@@ -313,6 +313,41 @@ void resetImport() {
     j.env->DeleteLocalRef(cls);
 }
 
+bool askText(const std::string& title, const std::string& initial) {
+    Jni j;
+    if (!j.env) return false;
+    jclass cls = activityClass(j.env);
+    if (!cls) return false;
+    bool ok = false;
+    if (jmethodID m = j.env->GetMethodID(cls, "askText", "(Ljava/lang/String;Ljava/lang/String;)V")) {
+        jstring t = j.env->NewStringUTF(title.c_str()), v = j.env->NewStringUTF(initial.c_str());
+        j.env->CallVoidMethod(GetAndroidApp()->activity->clazz, m, t, v);
+        j.env->DeleteLocalRef(t);
+        j.env->DeleteLocalRef(v);
+        std::string err;
+        ok = !j.failed(err, "text box");
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    return ok;
+}
+
+TextAsk textStatus(std::string* text) {
+    const int s = staticInt("textState", 0);
+    if (s == 2 && text) *text = staticString("textResult");
+    return s >= 0 && s <= 3 ? TextAsk(s) : TextAsk::Idle;
+}
+
+void resetText() {
+    Jni j;
+    if (!j.env) return;
+    jclass cls = activityClass(j.env);
+    if (!cls) return;
+    if (jfieldID f = j.env->GetStaticFieldID(cls, "textState", "I")) j.env->SetStaticIntField(cls, f, 0);
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+}
+
 std::string dataDir() {
     android_app* app = GetAndroidApp();
     const char* p = app && app->activity ? app->activity->externalDataPath : nullptr;
@@ -529,6 +564,9 @@ Import importStatus(int* count) {
     return Import::Idle;
 }
 void resetImport() {}
+bool askText(const std::string&, const std::string&) { return false; }
+TextAsk textStatus(std::string*) { return TextAsk::Idle; }
+void resetText() {}
 
 #endif
 

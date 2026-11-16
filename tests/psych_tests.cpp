@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <algorithm>
 #include <filesystem>
@@ -16,11 +17,16 @@
 #include <string>
 #include <vector>
 
+#include "basegame.hpp"
+#include "builtin_events.hpp"
 #include "chart.hpp"
 #include "common.hpp"
 #include "lua_host.hpp"
 #include "psych.hpp"
 #include "scene.hpp"
+#include "lauxlib.h"
+#include "lua.h"
+#include "lualib.h"
 
 using namespace gh;
 
@@ -173,6 +179,21 @@ void testEventsAndMeta() {
     psych::parseEvents(R"({"notes": {}, "events": [{"t": 10, "e": "ZoomCamera", "v": {"zoom": 1.3, "duration": 4, "ease": "expoOut"}},
         {"t": 20, "e": "PlayAnimation", "v": {"target": "gf", "anim": "cheer", "force": true}}]})", vs);
     PCHECK(vs.size() == 2 && vs[0].name == "__vslice_zoom" && vs[0].v1 == "1.3" && vs[1].name == "Play Animation" && vs[1].v2 == "gf");
+    PCHECK(vs[0].v2 == "4|expoOut|stage");
+    // V-Slice 0.5+: the ease split into a type and a direction; scroll speed in steps; focus offsets and eases.
+    vs.clear();
+    psych::parseEvents(R"({"notes": {}, "events": [
+        {"t": 0, "e": "ZoomCamera", "v": {"zoom": 0.8, "duration": 16, "ease": "expo", "easeDir": "Out", "mode": "direct"}},
+        {"t": 1, "e": "ScrollSpeed", "v": {"scroll": 1.5, "duration": 8, "ease": "quad", "easeDir": "InOut", "absolute": true}},
+        {"t": 2, "e": "FocusCamera", "v": {"char": 2, "x": -50, "y": 20, "duration": 4, "ease": "sine", "easeDir": "In"}},
+        {"t": 3, "e": "FocusCamera", "v": {"char": 1}},
+        {"t": 4, "e": "ZoomCamera", "v": {"zoom": 1, "ease": "INSTANT", "easeDir": "Out"}}]})", vs);
+    PCHECK(vs.size() == 5);
+    PCHECK(vs.size() == 5 && vs[0].v2 == "16|expoOut|direct");
+    PCHECK(vs.size() == 5 && vs[1].name == "__vslice_scroll" && vs[1].v1 == "1.5" && vs[1].v2 == "8|quadInOut|true");
+    PCHECK(vs.size() == 5 && vs[2].name == "__vslice_focus" && vs[2].v1 == "2" && vs[2].v2 == "-50|20|4|sineIn");
+    PCHECK(vs.size() == 5 && vs[3].v1 == "1" && vs[3].v2 == "0|0|4|CLASSIC");
+    PCHECK(vs.size() == 5 && vs[4].v2 == "4|INSTANT|stage");
 
     PCHECK(psych::parseColor("FF0000") == 0xFFFF0000u);
     PCHECK(psych::parseColor("0xFF00FF00") == 0xFF00FF00u);
@@ -1134,6 +1155,37 @@ void testShaderTranslation() {
     PCHECK(es.find("precision mediump float;") != std::string::npos && es.find("varying vec2 fragTexCoord;") != std::string::npos);
     PCHECK(es.find("gh_FragColor = gh_texBitmap( openfl_TextureCoordv)") != std::string::npos);
     PCHECK(es.find("#define gh_FragColor gl_FragColor") != std::string::npos && es.find(" in vec2") == std::string::npos);
+    // texture2D with a bias, texture() used as a call, Shadertoy's main and names.
+    const std::string st = translateShader(
+        "#pragma header\nvoid main(out vec4 fragColor, in vec2 fragCoord) {\n"
+        "  vec2 uv = fragCoord / iResolution.xy;\n"
+        "  fragColor = texture(bitmap, uv) + texture2D(bitmap, uv, 0.5) * iTime;\n}\n");
+    PCHECK(st.find("void gh_mainImage(out vec4 fragColor") != std::string::npos);
+    PCHECK(st.find("gh_mainImage(gh_color, openfl_TextureCoordv * openfl_TextureSize)") != std::string::npos);
+    PCHECK(st.find("gh_FragColor = gh_color;") != std::string::npos);
+    PCHECK(st.find("gh_texBitmap( uv)") != std::string::npos && st.find("gh_texBitmap( uv, 0.5)") != std::string::npos);
+    PCHECK(st.find("#define iResolution vec3(openfl_TextureSize, 0.0)") != std::string::npos);
+    PCHECK(st.find("uniform float iTime;") != std::string::npos);
+    PCHECK(st.find("vec4 gh_texBitmap(vec2 uv, float bias)") != std::string::npos);
+    // A shader naming its own `texture` keeps it as a name.
+    const std::string own = translateShader("#define texture flixel_texture2D\nvoid main() { gl_FragColor = texture(bitmap, openfl_TextureCoordv); }\n");
+    PCHECK(own.find("#define gh_userTexture flixel_texture2D") != std::string::npos);
+
+    // Lua with an `end` too many, or too few.
+    lua_State* L = luaL_newstate();
+    int fixes = 0;
+    std::string fixed = repairLuaEnds(L, "function f()\n  if x then\n  end\nend\nend\n", "@extra", &fixes);
+    PCHECK(fixes == 1 && luaL_loadbufferx(L, fixed.data(), fixed.size(), "x", "t") == LUA_OK);
+    lua_settop(L, 0);
+    fixed = repairLuaEnds(L, "function f()\n  if x then\n    y = 1\n", "@missing", &fixes);
+    PCHECK(fixes == 2 && luaL_loadbufferx(L, fixed.data(), fixed.size(), "x", "t") == LUA_OK);
+    lua_settop(L, 0);
+    fixed = repairLuaEnds(L, "x = 'broken\n", "@other", &fixes);
+    PCHECK(fixes == 0 && fixed == "x = 'broken\n");
+    // UTF-8 letters in names, as Psych's LuaJIT reads them.
+    const char* utf = "\xC3\xA4niName = 1";
+    PCHECK(luaL_loadbufferx(L, utf, std::strlen(utf), "utf", "t") == LUA_OK);
+    lua_close(L);
 }
 
 void testHScript() {
@@ -1458,9 +1510,43 @@ void testJsEngineEffects() {
     }
 }
 
+// The engine's own Lua (base-game stages and the events engines have built
+// in) compiles, and the event table says which events it keeps for itself.
+void testBuiltinScripts() {
+    auto compiles = [](const char* name, const char* code) {
+        lua_State* L = luaL_newstate();
+        const int r = luaL_loadbufferx(L, code, std::strlen(code), name, "t");
+        if (r != LUA_OK) std::printf("  %s: %s\n", name, lua_tostring(L, -1));
+        lua_close(L);
+        return r == LUA_OK;
+    };
+    for (const char* st : {"stage", "spooky", "philly", "limo", "mall", "mallEvil", "school", "schoolEvil"}) {
+        const char* code = basegame::stageLua(st);
+        PCHECK(code != nullptr);
+        if (code) PCHECK(compiles(st, code));
+    }
+    const char* events[] = {"Blammed Lights", "Gain", "Opponent Fade", "BF Fade", "Three Two One Go Event", "Subtitle",
+                            "Add Subtitle", "Stage Tint", "Set Cam Speed", "Change the Camera Speed", "Flash Camera",
+                            "Camera Flash", "thearchyRedFlash", "CameraZoom", "Change the Default Camera Zoom",
+                            "the camera move middle", "Cinematics", "Goodbye Hud", "Hide or Show HUD elements",
+                            "Hide Hud", "FadeScreen", "FadeText", "Lyrics - Add/Edit", "Lyrics - Reset"};
+    for (const char* ev : events) {
+        const char* code = builtin::eventLua(ev);
+        PCHECK(code != nullptr && builtin::engineEvent(ev));
+        if (code) PCHECK(compiles(ev, code));
+    }
+    // Done in C++: no script, still the engine's.
+    for (const char* ev : {"Zoom Camera", "Target Camera", "Philly Glow", "Kill Henchmen", "Flash", "Invert No", "Hey!"})
+        PCHECK(builtin::engineEvent(ev) && !builtin::eventLua(ev));
+    // Unknown events borrow other mods' scripts.
+    PCHECK(!builtin::engineEvent("Image Flash") && !builtin::engineEvent("Toggle Trail"));
+    PCHECK(basegame::stageProbeImage("schoolEvil") && std::string(basegame::stageProbeImage("schoolEvil")).find('|') != std::string::npos);
+}
+
 }  // namespace
 
 void runExtraTests(bool audio) {
+    testBuiltinScripts();
     testAutoChart();
     testReplayDeterminism();
     testZipInstall();

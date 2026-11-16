@@ -314,6 +314,7 @@ int laneDir(int keys, int lane) {
     };
     keys = clampv(keys, 1, kMaxKeys);
     lane = clampv(lane, 0, keys - 1);
+    if (keys > ek::kTableKeys) return ek::manyDir(keys, lane);
     if (keys > 9) return ek::kDirs[keys - 10][lane];
     return dirs[keys][lane];
 }

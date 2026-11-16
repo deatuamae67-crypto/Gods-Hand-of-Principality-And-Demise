@@ -1420,7 +1420,7 @@ private:
         auto byTime = [](const EdNote& n, double v) { return n.t < v; };
         const Stats& st = stats();
         const double msPerPx = 1.0 / std::max(1e-9, double(pp));
-        float lastY[64];
+        float lastY[2 * kMaxKeys];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
         if (st.maxLen > 0) {
             auto it = std::lower_bound(notes_.begin(), notes_.end(), tTop - st.maxLen, byTime);
@@ -1451,7 +1451,7 @@ private:
             }
             ++it;
             const float y = ly + float((n.t - cur_) * pp);
-            if (y < 30 || y > gfx::H + 30 || n.col >= 64) continue;
+            if (y < 30 || y > gfx::H + 30 || n.col >= 2 * kMaxKeys) continue;
             // Spam charts: one note per pixel row is enough to see them.
             if (std::fabs(y - lastY[n.col]) < rowPx && !n.sel) continue;
             lastY[n.col] = y;
@@ -1476,11 +1476,11 @@ private:
             else if (v.typed) DrawCircleV({v.cx + lw * 0.3f, v.y - lw * 0.3f}, 5, gfx::rgb(0xFFD54A));
             if (v.sel) DrawRectangleLinesEx({v.cx - lw * 0.48f, v.y - lw * 0.48f, lw * 0.96f, lw * 0.96f}, 2, gfx::rgb(0xFFFFFF));
         }
-        float lastLabel[64];  // "xN" (stacked notes) only where it has room
+        float lastLabel[2 * kMaxKeys];  // "xN" (stacked notes) only where it has room
         std::fill(std::begin(lastLabel), std::end(lastLabel), -1e9f);
         for (const VisNote& v : vis_) {
             if (v.stack <= 1) continue;
-            const int c = std::clamp(int((v.cx - x0) / lw), 0, 63);
+            const int c = std::clamp(int((v.cx - x0) / lw), 0, 2 * kMaxKeys - 1);
             if (std::fabs(v.y - lastLabel[c]) < 16.0f) continue;
             lastLabel[c] = v.y;
             gfx::text(FontId::Ui, "x" + std::to_string(v.stack), v.cx + lw * 0.42f, v.y + 2, 14, kAccent, Align::Right, 1.0f);
@@ -1531,13 +1531,13 @@ private:
         BeginScissorMode(int(o.x + box.x * cs), int(o.y + box.y * cs), int(box.width * cs), int(box.height * cs));
         for (int c = 0; c < cols; ++c)
             gfx::drawReceptor(gfx::laneDir(keys_, c % keys_), {x0 + (c + 0.5f) * lw, recY}, lw * 0.9f, Color{200, 190, 230, 150});
-        float lastY[64];
+        float lastY[2 * kMaxKeys];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
         const Stats& st = stats();
         auto r = notesIn(tTop - st.maxLen, tBot);
         for (auto it = r.first; it != r.second; ++it) {
             const EdNote& n = *it;
-            if (n.col >= 64) continue;
+            if (n.col >= 2 * kMaxKeys) continue;
             const float y = recY + float((n.t - cur_) * pp);
             const float cx = x0 + (n.col + 0.5f) * lw;
             const int dir = gfx::laneDir(keys_, n.col % keys_);

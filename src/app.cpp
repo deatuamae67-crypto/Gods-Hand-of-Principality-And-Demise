@@ -2,6 +2,7 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "app.hpp"
+#include "check_scripts.hpp"
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
 
@@ -159,6 +160,7 @@ void App::applyPsychUi() {
     PsychUi& ui = psychUi();
     ui.unload();
     ui.setNoteSkin(settings.noteSkin);       // Psych's Note Skins option
+    ui.setSkinRoots(library.allAssetRoots());  // skins of every installed mod too
     ui.setPalette(settings.noteColors);      // and its Note Colors
     ui.setSmooth(settings.antialiasing);
     psychReport.clear();
@@ -240,11 +242,13 @@ int App::run(int argc, char** argv) {
         } else if (!std::strcmp(a, "--editor-export")) autoRun.editorExport = next();
         else if (!std::strcmp(a, "--list-songs")) listSongs = true;
         else if (!std::strcmp(a, "--check-charts")) checkCharts = true;
+        else if (!std::strcmp(a, "--check-scripts")) checkScriptsDir = next();
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
         else if (!std::strcmp(a, "--render")) renderCli = true;  // record the --autoplay song to renders/
         else if (!std::strcmp(a, "--size")) std::sscanf(next(), "%dx%d", &winW_, &winH_);  // e.g. 2400x1080
     }
+    if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
     if (listSongs) {
         // Prints what the song library finds (no window): --list-songs [--base dir]
         // [--check-charts: load every chart and print its keys and notes, or why it fails]
@@ -304,6 +308,15 @@ int App::run(int argc, char** argv) {
     }
     settings.load(userDir + "settings.cfg");
     scores.load(userDir + "scores.cfg");
+    if (!autoRun.enabled) {  // Freeplay's modifiers and the song last picked, as they were left
+        mods.rate = settings.modRate;
+        mods.botplay = settings.modBotplay;
+        mods.practice = settings.modPractice;
+        mods.mirror = settings.modMirror;
+        mods.scrollType = settings.modScrollType;
+        mods.scrollValue = settings.modScrollValue;
+        freeplayDiff = settings.freeplayDiff;
+    }
     // Big charts read once load from here afterwards (chart_stream.hpp).
     setChartCacheDir(userDir + "cache/charts/");
 
@@ -666,9 +679,9 @@ void App::drawFpsPanel() {
         if (!hw.gl.empty()) lines.push_back({"OpenGL " + hw.gl, dim});
         if (!hw.os.empty()) lines.push_back({hw.os, dim});
     }
-    // Small and narrow, so that it fits in a corner of a song's HUD: the FPS
-    // in 18 pixels, the rest in 14, lines cut at 330 pixels.
-    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = 330;
+    // Small and narrow, so that it stays in its corner of a song's HUD: the
+    // FPS in 18 pixels, the rest in 14, lines cut at 240 pixels.
+    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = 240;
     const bool fpsFirst = s.showFps;
     for (size_t i = 0; i < lines.size(); ++i) {
         std::string& t = lines[i].first;
@@ -690,49 +703,18 @@ void App::drawFpsPanel() {
     if (graphH > 0) w = std::max(w, graphW);
     const bool panel = lines.size() > 1 || graphH > 0;
     const float pw = w + 12, ph = textH + graphH + 6;
-    // Where: the top left corner, unless the screen has something there (a
-    // song's arrows, health bar, score, time bar, the touch buttons): then the
-    // first corner that is clear, or the one least in the way. Checked twice a
-    // second, and it only moves when where it is gets covered.
-    std::vector<Rectangle> busy;
-    if (state_) state_->busyRects(busy);
+    // Always the top left corner. Narrow enough to stay clear of a song's
+    // health bar and score (they start 260 pixels in); below the touch
+    // buttons when they sit in that corner.
+    float px = 2, py = 2;
     if (touchMode) {
         std::vector<Rectangle> keys;
         touch.buttonRects(keys);
         for (const Rectangle& r : keys) {
             const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
-            busy.push_back({a.x, a.y, b.x - a.x, b.y - a.y});
+            if (a.x < px + pw && b.x > px && a.y < py + ph && b.y > py) py = std::max(py, b.y + 4);
         }
     }
-    const float W = float(gfx::W), H = float(gfx::H);
-    const Vector2 spots[6] = {{2, 2}, {2, H - ph - 28}, {W - pw - 2, 2}, {W - pw - 2, H - ph - 2}, {2, (H - ph) * 0.5f},
-                              {W - pw - 2, (H - ph) * 0.5f}};
-    auto covered = [&](int k) {
-        const Rectangle r{spots[k].x, spots[k].y, pw, ph};
-        float area = 0;
-        for (const Rectangle& b : busy) {
-            const float ix = std::min(r.x + r.width, b.x + b.width) - std::max(r.x, b.x);
-            const float iy = std::min(r.y + r.height, b.y + b.height) - std::max(r.y, b.y);
-            if (ix > 0 && iy > 0) area += ix * iy;
-        }
-        return area;
-    };
-    if (busy.empty()) {
-        fpsSpot_ = 0;
-    } else if (now - fpsSpotAt_ >= 0.5) {
-        fpsSpotAt_ = now;
-        const float here = covered(fpsSpot_);
-        if (here > 0) {
-            int best = 0;
-            float bestArea = covered(0);
-            for (int k = 1; k < 6 && bestArea > 0; ++k) {
-                const float a = covered(k);
-                if (a < bestArea) { best = k; bestArea = a; }
-            }
-            if (bestArea < here) fpsSpot_ = best;
-        }
-    }
-    const float px = spots[fpsSpot_].x, py = spots[fpsSpot_].y;
     if (panel) DrawRectangleRec({px, py, pw, ph}, gfx::fade(BLACK, 0.55f));
     float y = py + 3;
     for (size_t i = 0; i < lines.size(); ++i) {

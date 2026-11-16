@@ -492,9 +492,11 @@ Value hostGet(Interp& ip, const Host& h, const std::string& f) {
             return Value::array(list);
         }
         if (f == "runtimeShaders") return runtimeShaderMap(ip);
-        if (f == "singAnimations")
-            return Value::array({Value(std::string("singLEFT")), Value(std::string("singDOWN")), Value(std::string("singUP")),
-                                 Value(std::string("singRIGHT"))});
+        if (f == "singAnimations") {  // one per lane: a chart of 18 keys has 18
+            std::vector<Value> names;
+            for (const std::string& n : ip.game.singAnimations()) names.push_back(Value(n));
+            return Value::array(names);
+        }
         if (f == "variables") return hv("vars");
         if (f == "modchartSprites" || f == "modchartTexts") return hv("luaobjects");
         if (f == "strumLineNotes" || f == "playerStrums" || f == "opponentStrums") return hv("group", f);

@@ -42,6 +42,7 @@ public:
     const std::vector<std::string>& roots() const { return roots_; }
     const std::vector<std::string>& sharedRoots() const { return shared_; }
     std::string find(const std::string& rel) const;  // full path or ""
+    std::string findOwn(const std::string& rel) const;  // the song's own roots only
     // Files directly inside relDir (across roots, first root wins per name).
     std::vector<std::string> list(const std::string& relDir, const std::string& ext) const;
 

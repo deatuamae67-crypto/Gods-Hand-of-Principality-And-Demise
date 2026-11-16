@@ -208,6 +208,19 @@ void readEventArray(const Document& d, const Value* events, std::vector<ChartEve
             auto field = [&](const char* key, std::string_view def = "") {
                 return v && v->type == Type::Object ? strOf(d, d.get(*v, key), def) : std::string(def);
             };
+            // V-Slice 0.5+ splits the ease into a type and a direction
+            // ("expo" + "Out"); older charts have the whole name ("expoOut").
+            auto easeOf = [&](std::string_view def) {
+                std::string ease = field("ease", def);
+                const std::string dir = field("easeDir");
+                auto endsWith = [&](std::string_view suf) {
+                    return ease.size() >= suf.size() && ease.compare(ease.size() - suf.size(), suf.size(), suf) == 0;
+                };
+                if (!dir.empty() && ease != "linear" && ease != "INSTANT" && ease != "CLASSIC" && !endsWith("In") &&
+                    !endsWith("Out"))
+                    ease += dir;
+                return ease;
+            };
             if (kind == "PlayAnimation") {
                 ev.name = "Play Animation";
                 ev.v1 = field("anim");
@@ -215,19 +228,19 @@ void readEventArray(const Document& d, const Value* events, std::vector<ChartEve
             } else if (kind == "ZoomCamera") {
                 ev.name = "__vslice_zoom";
                 ev.v1 = v && v->type == Type::Number ? strOf(d, v) : field("zoom", "1");
-                ev.v2 = field("duration", "4") + "|" + field("ease", "linear") + "|" + field("mode", "stage");
+                ev.v2 = field("duration", "4") + "|" + easeOf("linear") + "|" + field("mode", "stage");
             } else if (kind == "SetCameraBop") {
                 ev.name = "__vslice_bop";
                 ev.v1 = field("rate", "4");
                 ev.v2 = field("intensity", "1");
             } else if (kind == "ScrollSpeed") {
-                ev.name = "Change Scroll Speed";
+                ev.name = "__vslice_scroll";
                 ev.v1 = v && v->type == Type::Number ? strOf(d, v) : field("scroll", "1");
-                ev.v2 = field("duration", "0");
+                ev.v2 = field("duration", "4") + "|" + easeOf("linear") + "|" + field("absolute", "false");
             } else if (kind == "FocusCamera") {
                 ev.name = "__vslice_focus";
                 ev.v1 = v && v->type == Type::Number ? strOf(d, v) : field("char", "0");
-                ev.v2 = field("x", "0") + "|" + field("y", "0");
+                ev.v2 = field("x", "0") + "|" + field("y", "0") + "|" + field("duration", "4") + "|" + easeOf("CLASSIC");
             } else {
                 ev.name = kind;
                 ev.v1 = v ? strOf(d, v) : "";

@@ -174,6 +174,17 @@ std::string Files::find(const std::string& relIn) const {
     return found;
 }
 
+std::string Files::findOwn(const std::string& relIn) const {
+    std::string rel = relIn;
+    while (!rel.empty() && (rel[0] == '/' || rel[0] == '\\')) rel.erase(0, 1);
+    if (rel.empty() || rel.find("..") != std::string::npos) return "";
+    for (const std::string& r : roots_) {
+        std::string f = resolveIn(r, rel);
+        if (!f.empty()) return f;
+    }
+    return "";
+}
+
 std::vector<std::string> Files::list(const std::string& relDir, const std::string& ext) const {
     std::vector<std::string> out, seen;
     for (const std::string& r : roots_) {

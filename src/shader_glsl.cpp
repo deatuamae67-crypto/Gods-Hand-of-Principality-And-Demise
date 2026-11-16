@@ -48,9 +48,14 @@ uniform bool openfl_HasColorTransform;
 #define openfl_ColorMultiplierv vec4(fragColor.rgb, 1.0)
 #define openfl_ColorOffsetv vec4(0.0)
 vec4 gh_tex(sampler2D s, vec2 uv) { vec4 c = gh_sample(s, uv); return vec4(c.rgb * c.a, c.a); }
+vec4 gh_tex(sampler2D s, vec2 uv, float bias) { vec4 c = gh_sample(s, uv, bias); return vec4(c.rgb * c.a, c.a); }
 vec4 gh_texLod(sampler2D s, vec2 uv, float lod) { vec4 c = gh_sampleLod(s, uv, lod); return vec4(c.rgb * c.a, c.a); }
 vec4 gh_texBitmap(vec2 uv) {
     vec4 c = gh_sample(texture0, vec2(uv.x, mix(uv.y, 1.0 - uv.y, gh_flipY)));
+    return gh_premul > 0.5 ? vec4(c.rgb * c.a, c.a) : c;
+}
+vec4 gh_texBitmap(vec2 uv, float bias) {
+    vec4 c = gh_sample(texture0, vec2(uv.x, mix(uv.y, 1.0 - uv.y, gh_flipY)), bias);
     return gh_premul > 0.5 ? vec4(c.rgb * c.a, c.a) : c;
 }
 vec4 flixel_texture2D(sampler2D s, vec2 uv) {
@@ -107,6 +112,94 @@ bool declaresBuiltin(const std::string& line) {
     return false;
 }
 
+// Is `name` declared by the shader itself (a variable, uniform, parameter or
+// macro), rather than used only as a call?
+bool declaresName(const std::string& body, std::string_view name) {
+    for (size_t p = body.find(name); p != std::string::npos; p = body.find(name, p + 1)) {
+        const size_t e = p + name.size();
+        if ((p > 0 && identChar(body[p - 1])) || (e < body.size() && identChar(body[e]))) continue;
+        size_t k = e;
+        while (k < body.size() && (body[k] == ' ' || body[k] == '\t')) ++k;
+        if (k < body.size() && body[k] == '(') {
+            // "#define texture(...)" declares it; a plain call does not.
+            size_t b = p;
+            while (b > 0 && (body[b - 1] == ' ' || body[b - 1] == '\t')) --b;
+            if (b >= 7 && body.compare(b - 7, 7, "#define") == 0) return true;
+            continue;
+        }
+        // Preceded by a type or #define: a declaration ("sampler2D texture", "#define texture x").
+        size_t b = p;
+        while (b > 0 && (body[b - 1] == ' ' || body[b - 1] == '\t')) --b;
+        size_t a = b;
+        while (a > 0 && (identChar(body[a - 1]) || body[a - 1] == '#')) --a;
+        if (a < b) {
+            const std::string word = body.substr(a, b - a);
+            static const char* const kTypes[] = {"#define", "sampler2D", "float", "int", "bool", "vec2", "vec3", "vec4",
+                                                 "mat2", "mat3", "mat4", "ivec2", "ivec3", "ivec4", "bvec2", "bvec3", "bvec4"};
+            for (const char* t : kTypes)
+                if (word == t) return true;
+        }
+    }
+    return false;
+}
+
+// Shadertoy's entry point written as main: "void main(out vec4 c, in vec2 p)".
+// It becomes gh_mainImage, called from a real main with the pixel position;
+// what it writes to its colour comes out (unless it writes gl_FragColor itself).
+std::string fixMainWithParameters(std::string body) {
+    size_t p = 0;
+    while ((p = body.find("main", p)) != std::string::npos) {
+        const size_t e = p + 4;
+        if ((p > 0 && identChar(body[p - 1])) || (e < body.size() && identChar(body[e]))) {
+            p = e;
+            continue;
+        }
+        size_t k = e;
+        while (k < body.size() && std::isspace((unsigned char)body[k])) ++k;
+        if (k >= body.size() || body[k] != '(') {
+            p = e;
+            continue;
+        }
+        const size_t close = body.find(')', k);
+        if (close == std::string::npos) return body;
+        const std::string params = trimmed(std::string_view(body).substr(k + 1, close - k - 1));
+        if (params.empty() || params == "void") {
+            p = e;
+            continue;
+        }
+        // The colour parameter's name: the word after "out vec4".
+        std::string colorName;
+        const size_t outPos = params.find("out");
+        if (outPos != std::string::npos) {
+            size_t v = params.find("vec4", outPos);
+            if (v != std::string::npos) {
+                v += 4;
+                while (v < params.size() && std::isspace((unsigned char)params[v])) ++v;
+                size_t w = v;
+                while (w < params.size() && identChar(params[w])) ++w;
+                colorName = params.substr(v, w - v);
+            }
+        }
+        body.replace(p, 4, "gh_mainImage");
+        size_t bodyStart = body.find('{', close);
+        bool writesColor = false;
+        if (!colorName.empty() && bodyStart != std::string::npos) {
+            for (size_t q = body.find(colorName, bodyStart); q != std::string::npos; q = body.find(colorName, q + 1)) {
+                const size_t qe = q + colorName.size();
+                if ((q > 0 && identChar(body[q - 1])) || (qe < body.size() && identChar(body[qe]))) continue;
+                writesColor = true;
+                break;
+            }
+        }
+        body += "\nvoid main() {\n    vec4 gh_color = vec4(0.0);\n"
+                "    gh_mainImage(gh_color, openfl_TextureCoordv * openfl_TextureSize);\n";
+        if (writesColor) body += "    gl_FragColor = gh_color;\n";
+        body += "}\n";
+        return body;
+    }
+    return body;
+}
+
 }  // namespace
 
 std::string translateShader(std::string_view src, bool gles) {
@@ -128,8 +221,25 @@ std::string translateShader(std::string_view src, bool gles) {
         body += line + "\n";
         if (e == src.size()) break;
     }
-    // GLSL ES 1.0 has no texture() builtin, so `texture` there is a user name.
-    body = replaceWord(body, "texture", "gh_userTexture");
+    body = fixMainWithParameters(std::move(body));
+    // GLSL ES 1.0 has no texture() builtin, so `texture` there is a user name;
+    // a shader that only calls texture() (GLSL 1.30+) means texture2D.
+    if (declaresName(body, "texture")) {
+        body = replaceWord(body, "texture", "gh_userTexture");
+    } else {
+        std::string out;
+        size_t i = 0;
+        while (i < body.size()) {
+            if (body.compare(i, 7, "texture") == 0 && (i == 0 || !identChar(body[i - 1])) &&
+                (i + 7 >= body.size() || !identChar(body[i + 7]))) {
+                out += "texture2D";
+                i += 7;
+                continue;
+            }
+            out += body[i++];
+        }
+        body.swap(out);
+    }
     // texture2D(bitmap, ...) samples the sprite: flip and alpha handling.
     {
         std::string out;
@@ -166,7 +276,19 @@ std::string translateShader(std::string_view src, bool gles) {
     body = replaceWord(body, "varying", "");
     // gl_FragData[0] -> gh_FragColor
     for (size_t q; (q = body.find("gl_FragData[0]")) != std::string::npos;) body.replace(q, 14, "gh_FragColor");
-    return std::string(gles ? kPreludeEs : kPrelude) + kCommon + body;
+    // Shadertoy names some engines provide by themselves.
+    std::string extra;
+    auto uses = [&](std::string_view name) {
+        for (size_t q = body.find(name); q != std::string::npos; q = body.find(name, q + 1)) {
+            const size_t e = q + name.size();
+            if ((q == 0 || !identChar(body[q - 1])) && (e >= body.size() || !identChar(body[e]))) return true;
+        }
+        return false;
+    };
+    if (uses("iResolution") && !declaresName(body, "iResolution")) extra += "#define iResolution vec3(openfl_TextureSize, 0.0)\n";
+    if (uses("iTime") && !declaresName(body, "iTime")) extra += "uniform float iTime;\n";
+    if (!extra.empty()) extra += "#line 1\n";
+    return std::string(gles ? kPreludeEs : kPrelude) + kCommon + extra + body;
 }
 
 }  // namespace gh

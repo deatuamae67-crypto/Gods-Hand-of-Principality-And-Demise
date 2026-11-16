@@ -197,7 +197,7 @@ static void applyNoteType(std::string_view type, Note& n, Chart& c) {
 // some of its lanes empty costs that many lanes times its share of notes
 // (with too few keys, one side's lanes spill into the other's first lanes;
 // with too many, the last lanes of a side stay empty).
-static double keyMisfit(const std::array<uint64_t, 64>& dataCount, uint64_t total, int keys) {
+static double keyMisfit(const std::array<uint64_t, kNoteDataValues>& dataCount, uint64_t total, int keys) {
     if (total == 0) return 0;
     uint64_t past = 0;
     for (size_t d = size_t(2 * keys); d < dataCount.size(); ++d) past += dataCount[d];
@@ -218,7 +218,7 @@ static double keyMisfit(const std::array<uint64_t, 64>& dataCount, uint64_t tota
 // Key count of a legacy/Psych chart. Only an explicit count makes it an
 // extra-key chart: Psych and JS Engine play every other chart with 4 keys
 // (lane = noteData % 4), whatever values its notes use.
-static int keysFromMetadata(const json::Document& doc, const json::Value& s, const std::array<uint64_t, 64>& dataCount,
+static int keysFromMetadata(const json::Document& doc, const json::Value& s, const std::array<uint64_t, kNoteDataValues>& dataCount,
                             bool extraKeys) {
     if (!extraKeys) return 4;  // the player turned extra keys off
     int keys = int(json::Document::num(doc.get(s, "keyCount"), 0));  // Leather Engine
@@ -292,7 +292,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
     auto sectionAt = [&](size_t i) -> const json::Value& { return lone ? s : doc.at(*sections, i); };
 
     // Pass 1: how often each noteData value is used.
-    std::array<uint64_t, 64> dataCount{};
+    std::array<uint64_t, kNoteDataValues> dataCount{};
     if (sn) dataCount = sn->dataCount;
     for (size_t i = 0; i < sectionCount; ++i) {
         const json::Value* sv = doc.get(sectionAt(i), "sectionNotes");
@@ -301,7 +301,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
             const json::Value& n = doc.at(*sv, j);
             if (n.type != Type::Array || doc.size(n) < 2) continue;
             double d = json::Document::num(&doc.at(n, 1), -1);
-            if (d >= 0 && d < 64) ++dataCount[size_t(d)];
+            if (d >= 0 && d < kNoteDataValues) ++dataCount[size_t(d)];
         }
     }
     out.keys = keysFromMetadata(doc, s, dataCount, extraKeys);
@@ -343,7 +343,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
     auto addNote = [&](double t, int di, double l, bool must, double stepMs, bool altSec, bool gfSec,
                        const std::string_view typeName, bool hasTypeName, bool altBool, uint16_t streamType,
                        uint16_t stack = 1) {
-        if (!std::isfinite(t) || di < 0 || di >= 64) return;
+        if (!std::isfinite(t) || di < 0 || di >= kNoteDataValues) return;
         Note n;
         n.time = t;
         n.length = (std::isfinite(l) && l >= stepMs * 0.999) ? l : 0.0;
@@ -403,7 +403,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
                     if (k >= 0 && size_t(k) + 1 < sn->rangeStart.size()) {
                         for (uint32_t q = sn->rangeStart[size_t(k)]; q < sn->rangeStart[size_t(k) + 1]; ++q) {
                             const StreamedNote& r = sn->notes[q];
-                            addNote(r.time, r.noteData(), r.length, must, stepMs, altSec, gfSec, {}, false, r.alt(), r.type,
+                            addNote(r.time, r.noteData(), r.length, must, stepMs, altSec, gfSec, {}, false, r.alt(), r.typeIdx(),
                                     r.stack);
                         }
                     }
@@ -657,8 +657,8 @@ static bool parsePulseForge(const json::Document& doc, Chart& out, std::string& 
             if (k >= 0 && size_t(k) + 1 < sn->rangeStart.size()) {
                 for (uint32_t q = sn->rangeStart[size_t(k)]; q < sn->rangeStart[size_t(k) + 1]; ++q) {
                     const StreamedNote& r = sn->notes[q];
-                    if (Note* n = add(r.time, r.length, r.noteData() % 20, r.noteData() / 20, r.stack); n && r.type) {
-                        const uint16_t ct = r.type < streamTypes.size() ? streamTypes[r.type] : 0;
+                    if (Note* n = add(r.time, r.length, r.noteData() % 20, r.noteData() / 20, r.stack); n && r.typeIdx()) {
+                        const uint16_t ct = r.typeIdx() < streamTypes.size() ? streamTypes[r.typeIdx()] : 0;
                         const std::string typeName = ct ? out.noteTypes[ct] : std::string();
                         if (ct) applyNoteType(typeName, *n, out);
                     }

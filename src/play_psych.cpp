@@ -11,6 +11,7 @@
 #include <limits>
 
 #include "basegame.hpp"
+#include "builtin_events.hpp"
 #include "common.hpp"
 #include "effects.hpp"
 #include "platform.hpp"
@@ -55,10 +56,10 @@ std::vector<std::string> luaFilesIn(const std::string& dir) {
 }
 
 // stages/foo.lua and stages/foo.hx, whichever exist.
-std::vector<std::string> scriptsNamed(const scene::Files& files, const std::string& base) {
+std::vector<std::string> scriptsNamed(const scene::Files& files, const std::string& base, bool ownOnly = false) {
     std::vector<std::string> out;
     for (const char* ext : {".lua", ".hx", ".hscript", ".hxs"})
-        if (std::string f = files.find(base + ext); !f.empty()) out.push_back(f);
+        if (std::string f = ownOnly ? files.findOwn(base + ext) : files.find(base + ext); !f.empty()) out.push_back(f);
     return out;
 }
 
@@ -132,6 +133,12 @@ std::string PlayState::singAnim(int side, int lane, uint8_t flags) const {
     std::string a = names[clampv(d, 0, 3)];
     if (flags & kFlagAlt) a += "-alt";
     return a;
+}
+
+std::vector<std::string> PlayState::singAnimations() {
+    std::vector<std::string> out;
+    for (int l = 0; l < chart_.keysOf(1); ++l) out.push_back(singAnim(1, l, 0));
+    return out;
 }
 
 void PlayState::placeCharacter(Character& c, int slot) {
@@ -422,7 +429,18 @@ void PlayState::loadScripts(bool afterHud) {
     for (const psych::ChartEvent& e : chart_.events) {
         if (std::find(seen.begin(), seen.end(), e.name) != seen.end()) continue;
         seen.push_back(e.name);
-        const auto files = scriptsNamed(sc.files, "custom_events/" + e.name);
+        // The song's own mod's script first. For an event the engine knows,
+        // its own handling comes next: another mod's script of that name may
+        // mean something else (Vs Batata's "Zoom Camera" or "Flash" are not
+        // P-Slice's or Dek Engine's). Any other event borrows a script from
+        // the other installed mods, as images and sounds are.
+        auto files = scriptsNamed(sc.files, "custom_events/" + e.name, true);
+        if (files.empty() && builtin::engineEvent(e.name)) {
+            if (const char* code = builtin::eventLua(e.name))
+                h.loadString("custom_events/" + e.name + ".lua", code);
+            continue;
+        }
+        if (files.empty()) files = scriptsNamed(sc.files, "custom_events/" + e.name);
         if (!files.empty()) scriptedEvents_.push_back(e.name);
         for (const std::string& f : files) L.load(f);
     }
@@ -432,6 +450,19 @@ void PlayState::loadScripts(bool afterHud) {
 bool PlayState::setupPsych() {
     App& a = app();
     scene::Scene& sc = *scene_;
+    vsliceFocus_ = std::any_of(chart_.events.begin(), chart_.events.end(),
+                               [](const psych::ChartEvent& e) { return e.name == "__vslice_focus"; });
+    // Psych's eventEarlyTrigger: "Kill Henchmen" goes 280 ms early, so the
+    // dancer's death sound lands on the beat.
+    bool early = false;
+    for (psych::ChartEvent& e : chart_.events)
+        if (e.name == "Kill Henchmen") {
+            e.timeMs -= 280;
+            early = true;
+        }
+    if (early)
+        std::stable_sort(chart_.events.begin(), chart_.events.end(),
+                         [](const psych::ChartEvent& x, const psych::ChartEvent& y) { return x.timeMs < y.timeMs; });
     std::vector<std::string> roots = entry_->assetRoots;
     if (roots.empty() && !entry_->modRoot.empty()) roots.push_back(entry_->modRoot);
     roots.push_back(a.base + "mods/");
@@ -449,8 +480,17 @@ bool PlayState::setupPsych() {
 
     // Charts from older engines name no stage: the original game picks it from the song.
     auto baseStageAvailable = [&](const std::string& st) {
+        // Any of the pictures the stage's layouts start from ("a|b").
         const char* probe = basegame::stageProbeImage(st);
-        return probe && !sc.files.find(std::string("images/") + probe + ".png").empty();
+        if (!probe) return false;
+        std::string_view rest = probe;
+        while (!rest.empty()) {
+            const size_t bar = rest.find('|');
+            if (!sc.files.find("images/" + std::string(rest.substr(0, bar)) + ".png").empty()) return true;
+            if (bar == std::string_view::npos) break;
+            rest.remove_prefix(bar + 1);
+        }
+        return false;
     };
     std::string stageName = chart_.stage;
     if (stageName.empty()) {
@@ -665,8 +705,13 @@ void PlayState::psychUpdate(double dt) {
     for (int l = 0; l < chart_.keys; ++l)
         holding |= heldCount_[l] > 0 || (session_.botplay() && session_.isHolding(1, l));
     sc.update(dt, chart_.stepMs(std::max(0.0, songMs_)), holding);
+    if (zoomEventBoost_ && std::none_of(sc.tweens.begin(), sc.tweens.end(),
+                                        [](const scene::Tween& t) { return t.tag == "__camZoomEvent"; })) {
+        sc.camZoomingDecay = 1;
+        zoomEventBoost_ = false;
+    }
     if (camRotate_) {
-        camRotatePhase_ += dt * rate_ * camRotateSpeed_;
+        camRotatePhase_ += dt * 0.6 * camRotateSpeed_;
         sc.camGame.angle = float(camRotateAngle_ * std::sin(camRotatePhase_));
     }
     scripts_->dispatchCompletions();
@@ -775,7 +820,8 @@ void PlayState::psychBeat(int b) {
         const std::string an = c->builtin ? c->lastAnim : c->curAnimName();
         if (((b % every) + every) % every == 0 && an.rfind("sing", 0) != 0 && !c->stunned) c->dance();
     }
-    if (b >= 0 && b % std::max(1, bopEvery_) == 0 && sc.camZooming && sc.camGame.zoom < 1.35f && a.settings.camZoom) {
+    if (b >= 0 && bopEvery_ > 0 && std::fmod(double(b), bopEvery_) == 0 && sc.camZooming && sc.camGame.zoom < 1.35f &&
+        a.settings.camZoom) {
         sc.camGame.zoom += float(0.015 * sc.camZoomingMult);
         sc.camHud.zoom += float(0.03 * sc.camZoomingMult);
     }
@@ -822,8 +868,29 @@ void PlayState::moveCameraSection(int sec) {
         psychFocus(chart_.focusAt(songMs_));
         return;
     }
-    const SectionInfo& s = chart_.sections[size_t(clampv(sec, 0, int(chart_.sections.size()) - 1))];
-    focusWho(s.gf && scene_->gf ? 2 : s.mustHit ? 0 : 1);
+    const size_t i = size_t(clampv(sec, 0, int(chart_.sections.size()) - 1));
+    const SectionInfo& s = chart_.sections[i];
+    // The camera follows who sings: a gfSection, or a section whose notes on
+    // its side are mostly "GF Sing" notes (Aguacate: GF sings on the player's
+    // side while the section stays mustHit).
+    const bool gfSings = i < gfSection_.size() && gfSection_[i];
+    focusWho((s.gf || gfSings) && scene_->gf ? 2 : s.mustHit ? 0 : 1);
+}
+
+// For each section: are most notes of the side it is on sung by GF?
+void PlayState::findGfSections() {
+    gfSection_.assign(chart_.sections.size(), false);
+    if (chart_.sections.empty()) return;
+    std::vector<uint32_t> gf(chart_.sections.size(), 0), all(chart_.sections.size(), 0);
+    for (const Note& n : chart_.notes) {
+        const int s = chart_.sectionAt(n.time);
+        if (s < 0) continue;
+        const SectionInfo& sec = chart_.sections[size_t(s)];
+        if ((n.side == 1) != sec.mustHit) continue;  // the other side's notes do not move the camera
+        ++all[size_t(s)];
+        if (n.flags & kFlagGF) ++gf[size_t(s)];
+    }
+    for (size_t s = 0; s < gf.size(); ++s) gfSection_[s] = all[s] > 0 && gf[s] * 2 > all[s];
 }
 
 void PlayState::handleBuiltinEvent(const psych::ChartEvent& e) {
@@ -855,12 +922,14 @@ void PlayState::handleBuiltinEvent(const psych::ChartEvent& e) {
             speedTweenTo_ = mult;
             speedTweenT_ = 0;
             speedTweenDur_ = dur / rate_;
+            speedTweenEase_ = "linear";
         }
         return;
     }
     if (handleJsEngineEvent(e)) return;
     if (!psych_) return;
     if (handleDekEvent(e)) return;
+    if (handleSliceEvent(e)) return;
     scene::Scene& sc = *scene_;
     if (n == "Hey!") {
         const std::string l = toLower(trim(e.v1));
@@ -920,18 +989,188 @@ void PlayState::handleBuiltinEvent(const psych::ChartEvent& e) {
         if (!setGameProp(path, v)) sc.setProp(path, v);
     } else if (n == "Play Sound") {
         playSound(trim(e.v1), numOr(e.v2, 1.0), "", false);
-    } else if (n == "__vslice_zoom") {
-        const size_t p1 = e.v2.find('|');
-        const size_t p2 = p1 == std::string::npos ? std::string::npos : e.v2.find('|', p1 + 1);
-        const std::string mode = p2 == std::string::npos ? "stage" : e.v2.substr(p2 + 1);
-        double z = numOr(e.v1, 1.0);
-        if (mode != "direct") z *= sc.stage.zoom;
-        sc.defaultCamZoom = z;
-        sc.camZooming = true;
-    } else if (n == "__vslice_bop") {
-        bopEvery_ = std::max(1, int(numOr(e.v1, 4)));
-        sc.camZoomingMult = numOr(e.v2, 1.0);
     }
+}
+
+// ----------------------------------------------- V-Slice / P-Slice events --
+
+namespace {
+std::vector<std::string> splitOn(const std::string& s, char sep) {
+    std::vector<std::string> out;
+    size_t a = 0;
+    for (;;) {
+        const size_t b = s.find(sep, a);
+        out.push_back(trim(s.substr(a, b == std::string::npos ? std::string::npos : b - a)));
+        if (b == std::string::npos) return out;
+        a = b + 1;
+    }
+}
+
+bool allNumbers(const std::vector<std::string>& v, size_t n, double* out) {
+    for (size_t i = 0; i < n; ++i) {
+        if (i >= v.size() || v[i].empty()) return false;
+        char* end = nullptr;
+        out[i] = std::strtod(v[i].c_str(), &end);
+        if (!end || *end != '\0' || !std::isfinite(out[i])) return false;
+    }
+    return true;
+}
+}  // namespace
+
+// The camera heads to (x, y): "classic" moves the follow point and lets the
+// camera catch up as usual, "instant" jumps there, any other ease glides the
+// follow point there in `seconds`.
+void PlayState::moveCameraFollow(float x, float y, const std::string& easeIn, double seconds) {
+    scene::Scene& sc = *scene_;
+    const std::string ease = toLower(easeIn);
+    sc.cancelTween("__camFollowEvent");
+    if (ease == "classic" || ease == "instant" || seconds <= 0) {
+        sc.followX = x;
+        sc.followY = y;
+        if (ease != "classic") {
+            sc.setProp("camFollowPos.x", double(x));
+            sc.setProp("camFollowPos.y", double(y));
+        }
+        return;
+    }
+    scene::Tween tw;
+    tw.tag = "__camFollowEvent";
+    tw.target = "camFollow";
+    tw.fields = {{"x", 0, double(x), false}, {"y", 0, double(y), false}};
+    tw.dur = std::max(1e-4, seconds);
+    tw.ease = ease;
+    sc.tween(std::move(tw));
+}
+
+// The base game's camera and scroll events: V-Slice's own (from its charts,
+// as __vslice_*) and the Psych events P-Slice's chart converter makes of them
+// ("Zoom Camera", "Target Camera", "Set Camera Bopping", "Vslice Scroll
+// Speed"; H-Slice and P-Slice ship the base game's songs with these), done as
+// P-Slice does them. A mod's own custom_events script of the same name runs
+// instead; values P-Slice would refuse do nothing, as there.
+bool PlayState::handleSliceEvent(const psych::ChartEvent& e) {
+    const std::string& n = e.name;
+    static const char* const kNames[] = {"Zoom Camera",    "Target Camera", "Set Camera Bopping", "SetCameraBop",
+                                         "Vslice Scroll Speed", "__vslice_zoom", "__vslice_bop", "__vslice_focus",
+                                         "__vslice_scroll"};
+    if (std::none_of(std::begin(kNames), std::end(kNames), [&](const char* k) { return n == k; })) return false;
+    if (n.rfind("__", 0) != 0 && std::find(scriptedEvents_.begin(), scriptedEvents_.end(), n) != scriptedEvents_.end())
+        return false;
+    scene::Scene& sc = *scene_;
+    const double stepSec = chart_.stepMs(std::max(0.0, songMs_)) / 1000.0 / rate_;
+    if (n == "Zoom Camera" || n == "__vslice_zoom") {
+        // P-Slice: value 1 "steps,zoom" (zoom times the stage's), value 2 the ease.
+        // V-Slice: zoom, then duration (steps), ease and mode ("direct": not
+        // times the stage's zoom; ease INSTANT: at once).
+        double steps = 0, zoom = 1;
+        std::string ease;
+        bool direct = false;
+        if (n == "Zoom Camera") {
+            double v[2];
+            if (!allNumbers(splitOn(e.v1, ','), 2, v) || splitOn(e.v1, ',').size() != 2) return true;
+            steps = v[0];
+            zoom = v[1];
+            ease = trim(e.v2);
+        } else {
+            const auto f = splitOn(e.v2, '|');
+            zoom = numOr(e.v1, 1.0);
+            steps = f.size() > 0 ? numOr(f[0], 4.0) : 4.0;
+            ease = f.size() > 1 ? f[1] : "linear";
+            direct = f.size() > 2 && f[2] == "direct";
+            if (ease == "INSTANT") steps = 0;
+        }
+        const double target = zoom * (direct ? 1.0 : sc.stage.zoom);
+        sc.cancelTween("__camZoomEvent");
+        if (steps <= 0) {
+            sc.defaultCamZoom = target;
+            sc.camZoomingDecay = 1;
+            zoomEventBoost_ = false;
+            return true;
+        }
+        scene::Tween tw;
+        tw.tag = "__camZoomEvent";
+        tw.target = "";
+        tw.fields.push_back({"defaultCamZoom", 0, target, false});
+        tw.dur = std::max(1e-4, steps * stepSec);
+        tw.ease = ease.empty() ? "linear" : ease;
+        sc.tween(std::move(tw));
+        sc.camZoomingDecay = 7;  // the camera keeps up with the eased zoom; back to 1 when it ends
+        zoomEventBoost_ = true;
+        return true;
+    }
+    if (n == "Set Camera Bopping" || n == "SetCameraBop" || n == "__vslice_bop") {
+        // Every value 1 beats (0: no bops), value 2 times as strong.
+        const double every = numOr(e.v1, 4), mult = numOr(e.v2, 1);
+        bopEvery_ = std::isfinite(every) ? std::max(0.0, every) : 4.0;
+        sc.camZoomingMult = std::isfinite(mult) ? mult : 1.0;
+        return true;
+    }
+    if (n == "Target Camera" || n == "__vslice_focus") {
+        // P-Slice: value 1 who (bf/0, dad/1, gf/2; anything else: a point on
+        // the stage), value 2 "x,y,steps,ease" with x, y added to their camera
+        // point; from then on the sections stop moving the camera.
+        // V-Slice: char (-1 a point, 0 bf, 1 dad, 2 gf), then x|y|steps|ease.
+        std::string who = toLower(trim(e.v1)), ease;
+        double v[3] = {0, 0, 4};
+        if (n == "Target Camera") {
+            const auto f = splitOn(e.v2, ',');
+            if (f.size() != 4 || !allNumbers(f, 3, v)) return true;
+            ease = toLower(f[3]);
+            sc.camForced = true;
+        } else {
+            const auto f = splitOn(e.v2, '|');
+            for (size_t i = 0; i < 3 && i < f.size(); ++i) v[i] = numOr(f[i], v[i]);
+            ease = f.size() > 3 ? f[3] : "CLASSIC";
+        }
+        const int w = who == "bf" || who == "boyfriend" || who == "0"   ? 0
+                      : who == "dad" || who == "opponent" || who == "1" ? 1
+                      : who == "gf" || who == "girlfriend" || who == "2" ? 2
+                                                                          : -1;
+        float x = float(v[0]), y = float(v[1]);
+        if (w == 2 && !sc.gf) return true;  // no girlfriend to look at: the camera stays (V-Slice)
+        if (w >= 0) {
+            if (n == "__vslice_focus") focusWho(w);  // onMoveCamera, as a camera move on that character
+            float cx = 0, cy = 0;
+            sc.cameraTarget(cx, cy, w);
+            if (w == 2 && n == "Target Camera") {  // P-Slice takes girlfriend's camera offset away
+                cx -= 2 * sc.stage.camGf[0];
+                cy -= 2 * sc.stage.camGf[1];
+            }
+            x += cx;
+            y += cy;
+        }
+        moveCameraFollow(x, y, ease, v[2] * stepSec);
+        return true;
+    }
+    // "Vslice Scroll Speed" (P-Slice): the scroll speed becomes value 1 (times
+    // the player's scroll multiplier) over value 2 seconds, quadInOut.
+    // __vslice_scroll: scroll (times the chart's own unless absolute), then
+    // steps|ease|absolute.
+    double target = 1, seconds = 0;
+    std::string ease = "quadInOut";
+    const double chartSpeed = chart_.speed > 0.01 ? chart_.speed : 1.0;
+    if (n == "Vslice Scroll Speed") {
+        target = numOr(e.v1, 1.0) / chartSpeed;
+        seconds = numOr(e.v2, 0.0) / rate_;
+    } else {
+        const auto f = splitOn(e.v2, '|');
+        const bool absolute = f.size() > 2 && toLower(f[2]) == "true";
+        target = numOr(e.v1, 1.0) / (absolute ? chartSpeed : 1.0);
+        ease = f.size() > 1 ? f[1] : "linear";
+        seconds = ease == "INSTANT" ? 0 : (f.empty() ? 4.0 : numOr(f[0], 4.0)) * stepSec;
+    }
+    if (!std::isfinite(target) || target <= 0) return true;
+    if (seconds <= 0) {
+        speedMult_ = target;
+        speedTweenDur_ = 0;
+    } else {
+        speedTweenFrom_ = speedMult_;
+        speedTweenTo_ = target;
+        speedTweenT_ = 0;
+        speedTweenDur_ = seconds;
+        speedTweenEase_ = ease;
+    }
+    return true;
 }
 
 // ------------------------------------------------------ Dek Engine events --
@@ -939,16 +1178,21 @@ void PlayState::handleBuiltinEvent(const psych::ChartEvent& e) {
 // Events built into Dek Engine (Vs Dek V2), which its songs use without a
 // script: Aguacate, Frustration, Invencible, Techy, Reviro. A mod's own
 // custom_events script of the same name runs instead.
+// (Dek Engine's source is in the "dev unverified" pack: these follow it.)
 bool PlayState::handleDekEvent(const psych::ChartEvent& e) {
     const std::string& n = e.name;
-    if (n != "Camera rotate on" && n != "Camera rotate off" && n != "Flash") return false;
+    static const char* const kNames[] = {"Camera rotate on", "Camera rotate off", "Flash", "Invert", "Invert Color",
+                                         "Invert No", "Glitch Shader add", "Glitch Shader add (CamHud)"};
+    if (std::none_of(std::begin(kNames), std::end(kNames), [&](const char* k) { return n == k; })) return false;
     if (std::find(scriptedEvents_.begin(), scriptedEvents_.end(), n) != scriptedEvents_.end()) return false;
+    App& a = app();
     scene::Scene& sc = *scene_;
     const std::string v1 = trim(e.v1), v2 = trim(e.v2);
     if (n == "Camera rotate on") {
-        // The camera sways v2 degrees each way, v1 radians a second (in song
-        // time, so 1 second a second): a new one only changes how much and how
-        // fast, without a jump in the swing.
+        // The camera sways v2 degrees each way: Dek Engine adds 1 to a counter
+        // each frame and turns it to sin(counter / 100 * v1), so at its 60
+        // frames a second the swing moves 0.6 * v1 radians a second. A new
+        // one only changes how much and how fast, without a jump in the swing.
         if (!camRotate_) camRotatePhase_ = 0;
         camRotate_ = true;
         camRotateSpeed_ = numOr(v1, 1.0);
@@ -956,11 +1200,42 @@ bool PlayState::handleDekEvent(const psych::ChartEvent& e) {
     } else if (n == "Camera rotate off") {
         camRotate_ = false;
         sc.camGame.angle = 0;
-    } else if (app().settings.flashing) {
-        // A white flash over everything: v1 seconds, v2 how strong (1 = full).
-        const double alpha = clampv(numOr(v2, 1.0), 0.0, 1.0);
-        sc.camOther.flashColor = (uint32_t(std::lround(alpha * 255)) << 24) | 0xFFFFFFu;
-        sc.camOther.flashDur = sc.camOther.flashTime = float(std::max(0.05, numOr(v1, 1.0)));
+    } else if (n == "Flash") {
+        // The game camera flashes v1 seconds in colour v2: 1 white, 2 green,
+        // 3 blue, 4 red, 5 yellow, 6 pink (white for anything else). As in
+        // Flixel, a flash still fading is not restarted.
+        static const uint32_t kColors[] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFF008000, 0xFF0000FF, 0xFFFF0000, 0xFFFFFF00, 0xFFFFC0CB};
+        const int c = int(numOr(v2, 1));
+        if (a.settings.flashing && sc.camGame.flashTime <= 0) {
+            sc.camGame.flashColor = kColors[c >= 1 && c <= 6 ? c : 0];
+            sc.camGame.flashDur = sc.camGame.flashTime = float(std::max(0.05, numOr(v1, 1.0)));
+        }
+    } else if (n == "Invert" || n == "Invert Color" || n == "Invert No") {
+        // The game camera's colours turn negative, until "Invert No".
+        auto& f = sc.camGame.filters;
+        if (invertFx_) f.erase(std::remove(f.begin(), f.end(), invertFx_), f.end());
+        invertFx_.reset();
+        if (n != "Invert No" && a.settings.shaders) {
+            invertFx_ = fx::make(sc, "__fx_invert", false);
+            if (invertFx_) f.push_back(invertFx_);
+        }
+    } else {
+        // "Glitch Shader add" (the game camera) / "(CamHud)": value 1 1 adds
+        // a wavy glitch, 0 takes it away.
+        const bool hud = n == "Glitch Shader add (CamHud)";
+        scene::ShaderPtr& g = hud ? glitchHudFx_ : glitchFx_;
+        auto& f = hud ? sc.camHud.filters : sc.camGame.filters;
+        if (g) f.erase(std::remove(f.begin(), f.end(), g), f.end());
+        g.reset();
+        if (numOr(v1, 0) != 0 && a.settings.shaders) {
+            g = fx::make(sc, "__fx_glitch", true);
+            if (g) {
+                g->floats["uSpeed"] = {2.0f};
+                g->floats["uFrequency"] = {5.0f};
+                g->floats["uWaveAmplitude"] = {0.1f};
+                f.push_back(g);
+            }
+        }
     }
     return true;
 }
@@ -970,6 +1245,9 @@ bool PlayState::handleDekEvent(const psych::ChartEvent& e) {
 bool PlayState::handleJsEngineEvent(const psych::ChartEvent& e) {
     App& a = app();
     const std::string& n = e.name;
+    // A mod's own script for one of these names is what the mod means by it.
+    if (!scriptedEvents_.empty() && std::find(scriptedEvents_.begin(), scriptedEvents_.end(), n) != scriptedEvents_.end())
+        return false;
     const std::string v1 = trim(e.v1), v2 = trim(e.v2);
     scene::Scene* sc = psych_ ? scene_.get() : nullptr;
     auto zoomValue = [&]() {  // empty or "default": the stage's own zoom
@@ -1086,6 +1364,51 @@ bool PlayState::handleJsEngineEvent(const psych::ChartEvent& e) {
         }
         return true;
     }
+    if (n == "EpicEyeSore" || n == "ClearEyeSore") {
+        // Hortas edition: the same eyesore until "ClearEyeSore" (it fades out then).
+        if (!sc) return true;
+        if (n == "ClearEyeSore") {
+            rainbowEndStep_ = lastStep_;
+            return true;
+        }
+        if (!a.settings.flashing || !a.settings.shaders) return true;
+        rainbowEndStep_ = std::numeric_limits<int>::max();
+        if (!rainbow_) {
+            rainbow_ = fx::make(*sc, "__fx_pulse", true);
+            if (rainbow_) sc->camGame.filters.push_back(rainbow_);
+        }
+        if (rainbow_) {
+            rainbow_->floats["uWaveAmplitude"] = {1.0f};
+            rainbow_->floats["uFrequency"] = {2.0f};
+            rainbow_->floats["uSpeed"] = {float(rate_)};
+            rainbow_->floats["uTime"] = {float(GetRandomValue(-1000000, 1000000)) / 1000.0f};
+            rainbow_->timeRate = float(rate_);
+            rainbow_->ints["uEnabled"] = {1};
+        }
+        return true;
+    }
+    if (n == "Toggle Blocked Glitch Effect") {
+        // SCReboot: value 1 1 puts JS Engine's blocked glitch on the game
+        // camera, anything else takes it away.
+        if (!sc) return true;
+        auto& f = sc->camGame.filters;
+        if (blockedFx_) f.erase(std::remove(f.begin(), f.end(), blockedFx_), f.end());
+        blockedFx_.reset();
+        if (numOr(v1, 0) == 1 && a.settings.shaders) {
+            blockedFx_ = fx::make(*sc, "__fx_blocked", true, "time", 1.0f);
+            if (blockedFx_) {
+                blockedFx_->floats["screenSize"] = {1280.0f, 1280.0f};
+                f.push_back(blockedFx_);
+            }
+        }
+        return true;
+    }
+    if (n == "Change Zoom Interval") {
+        // Denpa Engine: the camera bops every value 1 beats (0: never).
+        const double every = numOr(v1, 4);
+        bopEvery_ = std::isfinite(every) ? std::max(0.0, every) : 4.0;
+        return true;
+    }
     if (n == "Popup" || n == "Popup (No Pause)") {
         notices_.push_back({e.v1, e.v2, a.now, 2});
         if (n == "Popup" && !popupHold_) {
@@ -1107,7 +1430,7 @@ bool PlayState::handleJsEngineEvent(const psych::ChartEvent& e) {
         botEnergyOn_ = n == "Enable Bot Energy" && !cfg_.botplay;
         if (!botEnergyOn_) {
             usingBotEnergy_ = false;
-            session_.setAutoLanes(0);
+            session_.setAutoLanes(LaneMask());
         }
         return true;
     }
@@ -1149,14 +1472,14 @@ void PlayState::updateJsEngine(double dt) {
     if (!botEnergyOn_ || cfg_.botplay) return;
     const bool key = a.input.isDown(KEY_LEFT_CONTROL) || a.input.isDown(KEY_RIGHT_CONTROL);
     usingBotEnergy_ = key && !noEnergy_;
-    unsigned mask = 0;
+    LaneMask mask;
     int held = 0;
     for (int l = 0; l < chart_.keys && l < kMaxKeys; ++l)
         if (heldCount_[l] > 0) {
-            mask |= 1u << l;
+            mask.set(size_t(l));
             ++held;
         }
-    session_.setAutoLanes(usingBotEnergy_ ? mask : 0);
+    session_.setAutoLanes(usingBotEnergy_ ? mask : LaneMask());
     if (usingBotEnergy_) botEnergy_ -= dt / 5.0 * held * energyDrain_ * rate_;
     else botEnergy_ += dt / 5.0 * energyRefill_ * rate_;
     botEnergy_ = std::min(2.0, botEnergy_);
@@ -1164,7 +1487,7 @@ void PlayState::updateJsEngine(double dt) {
         botEnergy_ = 0;
         noEnergy_ = true;
         energyCooldown_ = 1;
-        session_.setAutoLanes(0);
+        session_.setAutoLanes(LaneMask());
     }
     if (noEnergy_) {
         energyCooldown_ -= dt;
@@ -2015,8 +2338,10 @@ LaneNote* PlayState::noteRef(std::string_view group, int index, int* sideOut, in
     if (index < 0) return nullptr;
     const double spawn = 2000.0 * rate_ / std::max(0.1, std::min(1.0, scrollSpeed()));
     const auto& notes = chart_.notes;
-    size_t k = size_t(std::upper_bound(notes.begin(), notes.end(), songMs_ + spawn,
-                                       [](double t, const Note& n) { return t < n.time; }) - notes.begin());
+    // While the scripts are created no note has come yet (Psych: all in unspawnNotes).
+    size_t k = creating_ ? 0
+                         : size_t(std::upper_bound(notes.begin(), notes.end(), songMs_ + spawn,
+                                                   [](double t, const Note& n) { return t < n.time; }) - notes.begin());
     size_t idx;
     if (group == "unspawnNotes") {
         idx = k + size_t(index);
@@ -2042,8 +2367,9 @@ int PlayState::noteCount(std::string_view group) {
     if (isEventGroup(group)) return int(chart_.events.size() - std::min(eventIdx_, chart_.events.size()));
     const double spawn = 2000.0 * rate_ / std::max(0.1, std::min(1.0, scrollSpeed()));
     const auto& notes = chart_.notes;
-    const size_t k = size_t(std::upper_bound(notes.begin(), notes.end(), songMs_ + spawn,
-                                             [](double t, const Note& n) { return t < n.time; }) - notes.begin());
+    const size_t k = creating_ ? 0
+                               : size_t(std::upper_bound(notes.begin(), notes.end(), songMs_ + spawn,
+                                                         [](double t, const Note& n) { return t < n.time; }) - notes.begin());
     if (group == "unspawnNotes") return int(notes.size() - k);
     const size_t start = size_t(std::lower_bound(notes.begin(), notes.end(), songMs_ - 350.0,
                                                  [](const Note& n, double t) { return n.time < t; }) - notes.begin());

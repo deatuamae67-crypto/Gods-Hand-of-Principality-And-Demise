@@ -34,6 +34,8 @@ public:
         skin_ = skin;
         ++generation_;
     }
+    // Where else a note skin may be: every installed mod's folders.
+    void setSkinRoots(std::vector<std::string> roots) { skinRoots_ = std::move(roots); }
     void setPalette(const uint32_t colors[4][3]);
     bool active() const { return active_; }
     // Changes whenever the notes may look different (loaded, skin, colours,
@@ -106,6 +108,7 @@ private:
     bool active_ = false;
     uint32_t generation_ = 0;
     std::string root_, skin_;
+    std::vector<std::string> skinRoots_;
     uint32_t palette_[4][3] = {{0xC24B99, 0xFFFFFF, 0x3C1F56},
                                {0x00FFFF, 0xFFFFFF, 0x1542B7},
                                {0x12FA05, 0xFFFFFF, 0x0A4447},
@@ -150,6 +153,7 @@ int psychFolderScore(const std::string& folder);
 // bar, a note skin, ratings, sounds...).
 bool hasPsychPieces(const std::vector<std::string>& roots);
 // The note skins a copy has (images/noteSkins/NOTE_assets-<name>.png), by name.
-std::vector<std::string> psychNoteSkins(const std::string& folder);
+// `modRoots`: every installed mod's folders too (their noteSkins/ count).
+std::vector<std::string> psychNoteSkins(const std::string& folder, const std::vector<std::string>& modRoots = {});
 
 }  // namespace gh

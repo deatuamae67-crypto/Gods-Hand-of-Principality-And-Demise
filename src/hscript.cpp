@@ -1663,6 +1663,19 @@ bool Interp::hasFunction(const std::string& fn) const {
     return it != globals_->vars.end() && it->second.t == T::Func;
 }
 
+bool Interp::checkSyntax(const std::string& code, std::string& err) {
+    try {
+        Parser p(lex(code));
+        p.program();
+        return true;
+    } catch (ScriptError& e) {
+        err = e.what();
+    } catch (std::exception& e) {
+        err = e.what();
+    }
+    return false;
+}
+
 bool Interp::run(const std::string& code, const std::string& name, Value& result, std::string& err) {
     result = Value();
     try {

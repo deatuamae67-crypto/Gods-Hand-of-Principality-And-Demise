@@ -4,7 +4,9 @@
 // Headless tests for the engine core: JSON, chart import, gameplay rules and
 // the procedural composer. Run: gh_tests [--audio] [--wav <dir>]
 // Also: --chart <files...> (benchmark), --psych-corpus <dir> (mod content check).
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -243,7 +245,7 @@ static void testExtraKeys18() {
     CHECK(c.notes.size() == 216);
     // A "keyCount" (Leather Engine) of 1 to 18.
     CHECK(parseChart(ekChart(R"("keyCount": 14)", 28), "Hard", c, err) && c.keys == 14 && c.notes.size() == 168);
-    CHECK(parseChart(ekChart(R"("keyCount": 19)", 8), "Hard", c, err) && c.keys == 4);  // out of range: ignored
+    CHECK(parseChart(ekChart(R"("keyCount": 19)", 8), "Hard", c, err) && c.keys == 19);  // past 18 too (up to 100)
 
     // Denpa Engine: Extra Keys' "mania" in "options" (7 = 8 keys).
     CHECK(parseChart(ekChart(R"("options": {"mania": 7})", 16), "Insanity", c, err) && c.keys == 8);
@@ -301,7 +303,7 @@ static void testExtraKeys18() {
     CHECK(!s.isHolding(1, 17));
 
     // The tables for 10 to 18 keys: one key and one direction per lane.
-    for (int k = 10; k <= kMaxKeys; ++k) {
+    for (int k = 10; k <= ek::kTableKeys; ++k) {
         const char* keysRow = ek::kControls[k - 10];
         CHECK(int(std::strlen(keysRow)) == k);
         for (int a = 0; a < k; ++a) {
@@ -310,6 +312,69 @@ static void testExtraKeys18() {
         }
         CHECK(ek::kLaneWidth[k] <= ek::kLaneWidth[k - 1]);
         CHECK(ek::kLaneWidth[k] * float(k) <= 640.0f);  // a side fits on half the screen
+    }
+    // Past 18 keys: directions 0-4, a centre arrow in the middle of odd counts,
+    // and a side still fits on half the screen at 100 keys.
+    for (int k = ek::kTableKeys + 1; k <= kMaxKeys; ++k) {
+        for (int a = 0; a < k; ++a) CHECK(ek::manyDir(k, a) >= 0 && ek::manyDir(k, a) <= 4);
+        CHECK((ek::manyDir(k, k / 2) == 4) == (k % 2 == 1));
+        CHECK(ek::manyLaneWidth(k) * float(k) <= 640.0f && ek::manyLaneWidth(k) <= ek::kLaneWidth[ek::kTableKeys]);
+    }
+    {
+        std::string row = ek::kManyControls;
+        std::sort(row.begin(), row.end());
+        CHECK(std::adjacent_find(row.begin(), row.end()) == row.end());  // no key twice
+    }
+
+    // Up to 100 keys a side: "mania" 99 or "keyCount" 100, values up to 199.
+    CHECK(parseChart(ekChart(R"("mania": 99)", 200), "Insane", c, err) && c.keys == 100);
+    CHECK(c.notes.size() == 1200 && c.playerNotes == 600 && c.opponentNotes == 600);
+    CHECK(parseChart(ekChart(R"("keyCount": 50)", 100), "Insane", c, err) && c.keys == 50 && c.notes.size() == 600);
+    CHECK(parseChart(ekChart(R"("keyCount": 101)", 8), "Insane", c, err) && c.keys == 4);  // past 100: ignored
+    // The same through the streaming reader and a binary chart (version 2:
+    // values past 63, and the alt flag kept apart from them).
+    {
+        std::string j = ekChart(R"("mania": 99)", 200);
+        const size_t at = j.find("[10,1,0]");
+        CHECK(at != std::string::npos);
+        if (at != std::string::npos) j.replace(at, 8, "[10,150,0,true]");  // an alt note on value 150
+        const std::string dir = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+        const std::string jpath = dir + "/gh_100k.json", bpath = dir + "/gh_100k.ghc";
+        if (FILE* f = std::fopen(jpath.c_str(), "wb")) {
+            std::fwrite(j.data(), 1, j.size(), f);
+            std::fclose(f);
+        }
+        std::string skel, err2;
+        StreamedNotes sn;
+        CHECK(streamChartSkeleton(jpath, skel, sn, err2, 0));
+        CHECK(sn.maxData == 199 && sn.dataCount[150] == 7 && sn.dataCount[199] == 6);
+        int alts = 0;
+        for (const StreamedNote& n : sn.notes) alts += n.alt() && n.noteData() == 150;
+        CHECK(alts == 1);
+        Chart a;
+        CHECK(parseChartStreamed(skel, sn, "Insane", a, err2) && a.keys == 100 && a.notes.size() == 1200);
+        CHECK(writeBinaryChart(bpath, skel, sn, 3, err2));
+        std::string skel2;
+        StreamedNotes back;
+        CHECK(readBinaryChart(bpath, skel2, back, err2));
+        bool same = back.notes.size() == sn.notes.size() && back.dataCount == sn.dataCount && back.maxData == sn.maxData;
+        for (size_t i = 0; same && i < sn.notes.size(); ++i)
+            same = back.notes[i].data == sn.notes[i].data && back.notes[i].type == sn.notes[i].type;
+        CHECK(same);
+        std::remove(jpath.c_str());
+        std::remove(bpath.c_str());
+    }
+
+    // Lanes no key reaches are played by the bot; the others by the player.
+    CHECK(parseChart(ekChart(R"("mania": 99)", 200, false), "Insane", c, err) && c.keys == 100);
+    {
+        SessionConfig human;
+        for (int l = 43; l < 100; ++l) human.keylessLanes.set(size_t(l));
+        Session s100;
+        s100.init(c, human);
+        s100.update(5000);  // nothing pressed
+        // Values 43-99 of the player's side went to the bot (3 times each), 0-42 were missed.
+        CHECK(s100.misses == 43 * 3 && s100.judged() == (long long)57 * 3);
     }
 }
 

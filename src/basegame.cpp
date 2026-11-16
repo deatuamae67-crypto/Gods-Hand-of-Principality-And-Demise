@@ -219,6 +219,7 @@ const Named kStageJson[] = {
 
 const Named kStageLua[] = {
     {"stage", R"LUA(
+-- Week 1 (Psych Engine 0.7's StageWeek1), with "Dadbattle Spotlight".
 function onCreate()
     makeLuaSprite('stageback', 'stageback', -600, -200)
     setScrollFactor('stageback', 0.9, 0.9)
@@ -227,10 +228,87 @@ function onCreate()
     setScrollFactor('stagefront', 0.9, 0.9)
     scaleObject('stagefront', 1.1, 1.1)
     addLuaSprite('stagefront', false)
+    if not lowQuality and checkFileExists('images/stage_light.png') then
+        for i, x in ipairs({-125, 1225}) do
+            local tag = 'stageLight' .. i
+            makeLuaSprite(tag, 'stage_light', x, -100)
+            setScrollFactor(tag, 0.9, 0.9)
+            scaleObject(tag, 1.1, 1.1)
+            setProperty(tag .. '.flipX', i == 2)
+            addLuaSprite(tag, false)
+        end
+    end
     makeLuaSprite('stagecurtains', 'stagecurtains', -500, -300)
     setScrollFactor('stagecurtains', 1.3, 1.3)
     scaleObject('stagecurtains', 0.9, 0.9)
     addLuaSprite('stagecurtains', false)
+end
+
+-- "Dadbattle Spotlight": 1 the lights go down and a spotlight falls on the
+-- opponent (2: on the opponent again, 3: on the player), fog rolling in;
+-- 0 back to normal.
+local spot = false
+local function makeSpot()
+    if spot then return end
+    spot = true
+    makeLuaSprite('dadbattleBlack', '', -800, -400)
+    makeGraphic('dadbattleBlack', 2560, 1440, '000000')
+    setScrollFactor('dadbattleBlack', 0, 0)
+    setProperty('dadbattleBlack.alpha', 0.25)
+    setProperty('dadbattleBlack.visible', false)
+    addLuaSprite('dadbattleBlack', true)
+    makeLuaSprite('dadbattleLight', 'spotlight', 400, -400)
+    setProperty('dadbattleLight.alpha', 0.375)
+    setBlendMode('dadbattleLight', 'add')
+    setProperty('dadbattleLight.visible', false)
+    addLuaSprite('dadbattleLight', true)
+    for i = 1, 2 do
+        local tag = 'dadbattleSmoke' .. i
+        makeLuaSprite(tag, 'smoke', (i == 1 and -1550 or 1550) + 200, 660 + getRandomFloat(-20, 20))
+        local k = getRandomFloat(1.1, 1.22)
+        scaleObject(tag, k, k)
+        setProperty(tag .. '.velocity.x', (i == 1 and 1 or -1) * getRandomFloat(15, 22))
+        setProperty(tag .. '.flipX', i == 2)
+        setBlendMode(tag, 'add')
+        setProperty(tag .. '.alpha', 0)
+        setProperty(tag .. '.visible', false)
+        addLuaSprite(tag, true)
+    end
+end
+function onEventPushed(name)
+    if name == 'Dadbattle Spotlight' then makeSpot() end
+end
+function onEvent(name, v1, v2)
+    if name ~= 'Dadbattle Spotlight' then return end
+    makeSpot()
+    local val = math.floor((tonumber(v1) or 0) + 0.5)
+    if val >= 1 and val <= 3 then
+        if val == 1 then
+            setProperty('dadbattleBlack.visible', true)
+            setProperty('dadbattleLight.visible', true)
+            for i = 1, 2 do setProperty('dadbattleSmoke' .. i .. '.visible', true) end
+            setProperty('defaultCamZoom', getProperty('defaultCamZoom') + 0.12)
+        end
+        local who = val > 2 and 'boyfriend' or 'dad'
+        setProperty('dadbattleLight.alpha', 0)
+        runTimer('dadbattleLightOn', 0.12)
+        setProperty('dadbattleLight.x', getGraphicMidpointX(who) - getProperty('dadbattleLight.width') / 2)
+        setProperty('dadbattleLight.y', getProperty(who .. '.y') + getProperty(who .. '.height') - getProperty('dadbattleLight.height') + 50)
+        for i = 1, 2 do doTweenAlpha('dadbattleSmoke' .. i, 'dadbattleSmoke' .. i, 0.7, 1.5, 'quadInOut') end
+    else
+        setProperty('dadbattleBlack.visible', false)
+        setProperty('dadbattleLight.visible', false)
+        setProperty('defaultCamZoom', getProperty('defaultCamZoom') - 0.12)
+        for i = 1, 2 do doTweenAlpha('dadbattleSmoke' .. i, 'dadbattleSmoke' .. i, 0, 0.7, 'linear') end
+    end
+end
+function onTimerCompleted(tag)
+    if tag == 'dadbattleLightOn' then setProperty('dadbattleLight.alpha', 0.375) end
+end
+function onTweenCompleted(tag)
+    if (tag == 'dadbattleSmoke1' or tag == 'dadbattleSmoke2') and getProperty(tag .. '.alpha') <= 0 then
+        setProperty(tag .. '.visible', false)
+    end
 end
 )LUA"},
     {"spooky", R"LUA(
@@ -255,6 +333,11 @@ function onBeatHit()
 end
 )LUA"},
     {"philly", R"LUA(
+-- Week 3. Psych Engine 0.7's layout (one window picture tinted a new colour
+-- every bar) when the mod has philly/window, the older one (five coloured
+-- windows) otherwise; with the "Philly Glow" event.
+local colors = {'31A2FD', '31FD8C', 'FB33F5', 'FD4531', 'FBA633'}
+local newLayout = false
 local curLight = 0
 local trainMoving = false
 local trainFrameTiming = 0
@@ -263,22 +346,35 @@ local trainFinishing = false
 local trainCooldown = 0
 local startedMoving = false
 function onCreate()
-    makeLuaSprite('sky', 'philly/sky', -100, 0)
-    setScrollFactor('sky', 0.1, 0.1)
-    addLuaSprite('sky', false)
+    newLayout = checkFileExists('images/philly/window.png')
+    if not lowQuality then
+        makeLuaSprite('sky', 'philly/sky', -100, 0)
+        setScrollFactor('sky', 0.1, 0.1)
+        addLuaSprite('sky', false)
+    end
     makeLuaSprite('city', 'philly/city', -10, 0)
     setScrollFactor('city', 0.3, 0.3)
     scaleObject('city', 0.85, 0.85)
     addLuaSprite('city', false)
-    for i = 0, 4 do
-        makeLuaSprite('win' .. i, 'philly/win' .. i, -10, 0)
-        setScrollFactor('win' .. i, 0.3, 0.3)
-        scaleObject('win' .. i, 0.85, 0.85)
-        setProperty('win' .. i .. '.visible', false)
-        addLuaSprite('win' .. i, false)
+    if newLayout then
+        makeLuaSprite('phillyWindow', 'philly/window', -10, 0)
+        setScrollFactor('phillyWindow', 0.3, 0.3)
+        scaleObject('phillyWindow', 0.85, 0.85)
+        setProperty('phillyWindow.alpha', 0)
+        addLuaSprite('phillyWindow', false)
+    else
+        for i = 0, 4 do
+            makeLuaSprite('win' .. i, 'philly/win' .. i, -10, 0)
+            setScrollFactor('win' .. i, 0.3, 0.3)
+            scaleObject('win' .. i, 0.85, 0.85)
+            setProperty('win' .. i .. '.visible', false)
+            addLuaSprite('win' .. i, false)
+        end
     end
-    makeLuaSprite('streetBehind', 'philly/behindTrain', -40, 50)
-    addLuaSprite('streetBehind', false)
+    if not lowQuality then
+        makeLuaSprite('streetBehind', 'philly/behindTrain', -40, 50)
+        addLuaSprite('streetBehind', false)
+    end
     makeLuaSprite('phillyTrain', 'philly/train', 2000, 360)
     addLuaSprite('phillyTrain', false)
     makeLuaSprite('street', 'philly/street', -40, 50)
@@ -292,7 +388,184 @@ local function trainReset()
     startedMoving = false
     characterPlayAnim('gf', 'hairFall', true)
 end
+
+-- "Philly Glow": 1 the street goes dark and glows in a new colour (the
+-- characters tinted, a gradient rising from below), 2 a burst of particles
+-- and the gradient bouncing up again, 0 back to normal.
+local glow = false
+local glowColor = 0
+local gradY, gradH, gradAlpha = 225, 400, 1
+local particles = {}
+local pn = 0
+local function makeGlow()
+    if glow then return end
+    glow = true
+    makeLuaSprite('blammedLightsBlack', '', -640, -360)
+    makeGraphic('blammedLightsBlack', 2560, 1440, '000000')
+    setProperty('blammedLightsBlack.visible', false)
+    addLuaSprite('blammedLightsBlack', false)
+    setObjectOrder('blammedLightsBlack', getObjectOrder('street'))
+    makeLuaSprite('phillyGlowGradient', 'philly/gradient', -400, gradY)
+    setScrollFactor('phillyGlowGradient', 0, 0.75)
+    setGraphicSize('phillyGlowGradient', 2000, gradH)
+    updateHitbox('phillyGlowGradient')
+    setProperty('phillyGlowGradient.visible', false)
+    addLuaSprite('phillyGlowGradient', false)
+    setObjectOrder('phillyGlowGradient', getObjectOrder('blammedLightsBlack') + 1)
+    makeLuaSprite('phillyWindowEvent', newLayout and 'philly/window' or 'philly/win0', -10, 0)
+    setScrollFactor('phillyWindowEvent', 0.3, 0.3)
+    scaleObject('phillyWindowEvent', 0.85, 0.85)
+    setProperty('phillyWindowEvent.visible', false)
+    addLuaSprite('phillyWindowEvent', false)
+    setObjectOrder('phillyWindowEvent', getObjectOrder('phillyGlowGradient') + 1)
+    if not flashingLights then gradAlpha = 0.7 end
+    precacheImage('philly/particle')
+end
+function onEventPushed(name)
+    if name == 'Philly Glow' then makeGlow() end
+end
+local function hsv(hex, sMul, vMul)  -- the colour with its saturation and brightness scaled
+    local n = tonumber(hex, 16) or 0xFFFFFF
+    local r, g, b = (n // 65536) % 256 / 255, (n // 256) % 256 / 255, n % 256 / 255
+    local mx, mn = math.max(r, g, b), math.min(r, g, b)
+    local d, h = mx - mn, 0
+    if d > 0 then
+        if mx == r then h = ((g - b) / d) % 6 elseif mx == g then h = (b - r) / d + 2 else h = (r - g) / d + 4 end
+        h = h * 60
+    end
+    local v = math.min(1, mx * vMul)
+    local sat = math.min(1, (mx == 0 and 0 or d / mx) * sMul)
+    local c = v * sat
+    local x = c * (1 - math.abs((h / 60) % 2 - 1))
+    local m = v - c
+    local rr, gg, bb
+    if h < 60 then rr, gg, bb = c, x, 0 elseif h < 120 then rr, gg, bb = x, c, 0
+    elseif h < 180 then rr, gg, bb = 0, c, x elseif h < 240 then rr, gg, bb = 0, x, c
+    elseif h < 300 then rr, gg, bb = x, 0, c else rr, gg, bb = c, 0, x end
+    return string.format('%02X%02X%02X', math.floor((rr + m) * 255 + 0.5), math.floor((gg + m) * 255 + 0.5), math.floor((bb + m) * 255 + 0.5))
+end
+local function doFlash()
+    cameraFlash('camGame', flashingLights and 'FFFFFF' or '80FFFFFF', 0.15, true)
+end
+local function zoomBump()
+    if cameraZoomOnBeat then
+        setProperty('camGame.zoom', getProperty('camGame.zoom') + 0.5)
+        setProperty('camHUD.zoom', getProperty('camHUD.zoom') + 0.1)
+    end
+end
+local function clearParticles()
+    for _, p in ipairs(particles) do removeLuaSprite(p.tag, true) end
+    particles = {}
+end
+local function bop()
+    setGraphicSize('phillyGlowGradient', 2000, gradH)
+    updateHitbox('phillyGlowGradient')
+    setProperty('phillyGlowGradient.y', gradY)
+    setProperty('phillyGlowGradient.alpha', gradAlpha)
+end
+function onEvent(name, v1, v2)
+    if name ~= 'Philly Glow' then return end
+    makeGlow()
+    local id = math.max(0, math.floor((tonumber(v1) or 0) + 0.5))
+    local chars = {'boyfriend', 'gf', 'dad'}
+    if id == 0 then
+        if getProperty('phillyGlowGradient.visible') then
+            doFlash()
+            zoomBump()
+            for _, o in ipairs({'blammedLightsBlack', 'phillyWindowEvent', 'phillyGlowGradient'}) do setProperty(o .. '.visible', false) end
+            clearParticles()
+            glowColor = 0
+            for _, c in ipairs(chars) do setProperty(c .. '.color', 0xFFFFFF) end
+            setProperty('street.color', 0xFFFFFF)
+        end
+    elseif id == 1 then
+        local pick = getRandomInt(1, 5, tostring(glowColor))
+        if pick == glowColor then pick = pick % 5 + 1 end
+        glowColor = pick
+        local color = colors[pick]
+        if not getProperty('phillyGlowGradient.visible') then
+            doFlash()
+            zoomBump()
+            setProperty('blammedLightsBlack.visible', true)
+            setProperty('blammedLightsBlack.alpha', 1)
+            setProperty('phillyWindowEvent.visible', true)
+            setProperty('phillyGlowGradient.visible', true)
+        elseif flashingLights then
+            cameraFlash('camGame', '40' .. color, 0.5, true)
+        end
+        local charColor = getColorFromHex(hsv(color, flashingLights and 0.75 or 0.5, 1))
+        for _, c in ipairs(chars) do setProperty(c .. '.color', charColor) end
+        for _, p in ipairs(particles) do setProperty(p.tag .. '.color', getColorFromHex(color)) end
+        setProperty('phillyGlowGradient.color', getColorFromHex(color))
+        setProperty('phillyWindowEvent.color', getColorFromHex(color))
+        setProperty('street.color', getColorFromHex(hsv(color, 1, 0.5)))
+    elseif id == 2 then
+        if not lowQuality and getProperty('phillyGlowGradient.visible') then
+            local num = getRandomInt(8, 12)
+            local width = 2000 / num
+            local color = getColorFromHex(colors[glowColor] or 'FFFFFF')
+            for j = 0, 2 do
+                for i = 0, num - 1 do
+                    pn = pn + 1
+                    local tag = 'phillyGlowParticle' .. pn
+                    makeLuaSprite(tag, 'philly/particle', -400 + width * i + getRandomFloat(-width / 5, width / 5),
+                        gradY + 200 + getRandomFloat(0, 125) + j * 40)
+                    setProperty(tag .. '.color', color)
+                    local k = getRandomFloat(0.75, 1)
+                    setProperty(tag .. '.scale.x', k)
+                    setProperty(tag .. '.scale.y', k)
+                    setScrollFactor(tag, getRandomFloat(0.3, 0.75), getRandomFloat(0.65, 0.75))
+                    setProperty(tag .. '.velocity.x', getRandomFloat(-40, 40))
+                    setProperty(tag .. '.velocity.y', getRandomFloat(-175, -250))
+                    setProperty(tag .. '.acceleration.x', getRandomFloat(-10, 10))
+                    setProperty(tag .. '.acceleration.y', 25)
+                    local decay = getRandomFloat(0.8, 1)
+                    if not flashingLights then
+                        decay = decay * 0.5
+                        setProperty(tag .. '.alpha', 0.5)
+                    end
+                    addLuaSprite(tag, false)
+                    setObjectOrder(tag, getObjectOrder('phillyWindowEvent'))
+                    particles[#particles + 1] = {tag = tag, life = getRandomFloat(0.6, 0.9), decay = decay, scale = k}
+                end
+            end
+        end
+        bop()
+    end
+end
+
 function onUpdate(elapsed)
+    if newLayout then
+        setProperty('phillyWindow.alpha', math.max(0, getProperty('phillyWindow.alpha') - (crochet / 1000) * elapsed * 1.5))
+    end
+    if glow then
+        local h = math.floor(getProperty('phillyGlowGradient.height') - 1000 * elapsed + 0.5)
+        if h > 0 then
+            setProperty('phillyGlowGradient.alpha', gradAlpha)
+            setGraphicSize('phillyGlowGradient', 2000, h)
+            updateHitbox('phillyGlowGradient')
+            setProperty('phillyGlowGradient.y', gradY + (gradH - getProperty('phillyGlowGradient.height')))
+        else
+            setProperty('phillyGlowGradient.alpha', 0)
+            setProperty('phillyGlowGradient.y', -5000)
+        end
+        for i = #particles, 1, -1 do
+            local p = particles[i]
+            p.life = p.life - elapsed
+            if p.life < 0 then
+                p.life = 0
+                local a = getProperty(p.tag .. '.alpha') - p.decay * elapsed
+                if a > 0 then
+                    setProperty(p.tag .. '.alpha', a)
+                    setProperty(p.tag .. '.scale.x', p.scale * a)
+                    setProperty(p.tag .. '.scale.y', p.scale * a)
+                else
+                    removeLuaSprite(p.tag, true)
+                    table.remove(particles, i)
+                end
+            end
+        end
+    end
     if trainMoving then
         trainFrameTiming = trainFrameTiming + elapsed
         if trainFrameTiming >= 1 / 24 then
@@ -316,9 +589,17 @@ end
 function onBeatHit()
     if not trainMoving then trainCooldown = trainCooldown + 1 end
     if curBeat % 4 == 0 then
-        setProperty('win' .. curLight .. '.visible', false)
-        curLight = getRandomInt(0, 4)
-        setProperty('win' .. curLight .. '.visible', true)
+        if newLayout then
+            local pick = getRandomInt(1, 5, tostring(curLight))
+            if pick == curLight then pick = pick % 5 + 1 end
+            curLight = pick
+            setProperty('phillyWindow.color', getColorFromHex(colors[pick]))
+            setProperty('phillyWindow.alpha', 1)
+        else
+            setProperty('win' .. curLight .. '.visible', false)
+            curLight = getRandomInt(0, 4)
+            setProperty('win' .. curLight .. '.visible', true)
+        end
     end
     if curBeat % 8 == 4 and getRandomBool(30) and not trainMoving and trainCooldown > 8 then
         trainCooldown = getRandomInt(-4, 0)
@@ -328,24 +609,61 @@ function onBeatHit()
 end
 )LUA"},
     {"limo", R"LUA(
+-- Week 4 (Psych Engine 0.7's Limo), with "Kill Henchmen" when the mod has
+-- the gore pictures: a pole sweeps the dancers off the limo, then the limo
+-- speeds off and comes back.
 local danced = false
 local carCanDrive = true
+local gore = false
+local killState = 'wait'
+local limoSpeed = 0
+local dancersDiff = 320
+local bits = {}
+local bitN = 0
+local function resetLimoKill()
+    for _, t in ipairs({'limoMetalPole', 'limoLight', 'limoCorpse', 'limoCorpseTwo'}) do
+        setProperty(t .. '.x', -500)
+        setProperty(t .. '.visible', false)
+    end
+end
 function onCreate()
     makeLuaSprite('skyBG', 'limo/limoSunset', -120, -50)
     setScrollFactor('skyBG', 0.1, 0.1)
     addLuaSprite('skyBG', false)
-    makeAnimatedLuaSprite('bgLimo', 'limo/bgLimo', -200, 480)
+    gore = not lowQuality and checkFileExists('images/gore/metalPole.png')
+    if gore then
+        makeLuaSprite('limoMetalPole', 'gore/metalPole', -500, 220)
+        setScrollFactor('limoMetalPole', 0.4, 0.4)
+        addLuaSprite('limoMetalPole', false)
+    end
+    makeAnimatedLuaSprite('bgLimo', 'limo/bgLimo', -150, 480)
     addAnimationByPrefix('bgLimo', 'drive', 'background limo pink', 24, true)
     setScrollFactor('bgLimo', 0.4, 0.4)
     addLuaSprite('bgLimo', false)
+    if gore then
+        makeAnimatedLuaSprite('limoCorpse', 'gore/noooooo', -500, 220 - 130)
+        addAnimationByPrefix('limoCorpse', 'idle', 'Henchmen on rail', 24, true)
+        setScrollFactor('limoCorpse', 0.4, 0.4)
+        addLuaSprite('limoCorpse', false)
+        makeAnimatedLuaSprite('limoCorpseTwo', 'gore/noooooo', -500, 220)
+        addAnimationByPrefix('limoCorpseTwo', 'idle', 'henchmen death', 24, true)
+        setScrollFactor('limoCorpseTwo', 0.4, 0.4)
+        addLuaSprite('limoCorpseTwo', false)
+    end
     for i = 0, 4 do
         local tag = 'limoDancer' .. i
-        makeAnimatedLuaSprite(tag, 'limo/limoDancer', (370 * i) + 130, 80)
+        makeAnimatedLuaSprite(tag, 'limo/limoDancer', (370 * i) + dancersDiff - 150, 480 - 400)
         addAnimationByIndices(tag, 'danceLeft', 'bg dancer sketch PINK', '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14', 24)
         addAnimationByIndices(tag, 'danceRight', 'bg dancer sketch PINK', '15,16,17,18,19,20,21,22,23,24,25,26,27,28,29', 24)
         playAnim(tag, 'danceLeft', true)
         setScrollFactor(tag, 0.4, 0.4)
         addLuaSprite(tag, false)
+    end
+    if gore then
+        makeLuaSprite('limoLight', 'gore/coldHeartKiller', -500 - 180, 220 - 80)
+        setScrollFactor('limoLight', 0.4, 0.4)
+        addLuaSprite('limoLight', false)
+        resetLimoKill()
     end
     makeLuaSprite('fastCar', 'limo/fastCarLol', -300, 160)
     addLuaSprite('fastCar', false)
@@ -354,13 +672,106 @@ function onCreate()
     addLuaSprite('limo', true)
 end
 function onCreatePost()
-    -- The car sits between girlfriend and the singers.
+    -- The car passes behind girlfriend; the limo sits between her and the singers.
+    setObjectOrder('fastCar', getObjectOrder('gfGroup'))
     setObjectOrder('limo', getObjectOrder('dadGroup'))
 end
 local function resetFastCar()
     setProperty('fastCar.x', -12600)
     setProperty('fastCar.y', getRandomInt(140, 250))
     carCanDrive = true
+end
+local function bit(img, x, y, anim)
+    bitN = bitN + 1
+    local tag = 'limoParticle' .. bitN
+    makeAnimatedLuaSprite(tag, img, x, y)
+    addAnimationByPrefix(tag, 'p', anim, 24, false)
+    playAnim(tag, 'p', true)
+    setScrollFactor(tag, 0.4, 0.4)
+    addLuaSprite(tag, false)
+    setObjectOrder(tag, getObjectOrder('limoLight') + 1)
+    bits[#bits + 1] = tag
+    return tag
+end
+local function dancersParenting()
+    local bx = getProperty('bgLimo.x')
+    for i = 0, 4 do setProperty('limoDancer' .. i .. '.x', (370 * i) + dancersDiff + bx) end
+end
+function onEvent(name, v1, v2)
+    if name == 'Kill Henchmen' and gore and killState == 'wait' then
+        setProperty('limoMetalPole.x', -400)
+        setProperty('limoMetalPole.visible', true)
+        setProperty('limoLight.visible', true)
+        setProperty('limoCorpse.visible', false)
+        setProperty('limoCorpseTwo.visible', false)
+        killState = 'killing'
+    end
+end
+function onUpdate(elapsed)
+    if not gore then return end
+    for i = #bits, 1, -1 do
+        if getProperty(bits[i] .. '.animation.finished') then
+            removeLuaSprite(bits[i], true)
+            table.remove(bits, i)
+        end
+    end
+    if killState == 'killing' then
+        local pole = getProperty('limoMetalPole.x') + 5000 * elapsed
+        local light = pole - 180
+        setProperty('limoMetalPole.x', pole)
+        setProperty('limoLight.x', light)
+        setProperty('limoCorpse.x', light - 50)
+        setProperty('limoCorpseTwo.x', light + 35)
+        for i = 0, 4 do
+            local tag = 'limoDancer' .. i
+            local dx, dy = getProperty(tag .. '.x'), getProperty(tag .. '.y')
+            if dx < 1280 * 1.5 and light > (370 * i) + 170 then
+                if i == 0 or i == 3 then
+                    if i == 0 then playSound('dancerdeath', 0.5) end
+                    local d = i == 3 and ' 2 ' or ' '
+                    bit('gore/noooooo', dx + 200, dy, 'hench leg spin' .. d .. 'PINK')
+                    bit('gore/noooooo', dx + 160, dy + 200, 'hench arm spin' .. d .. 'PINK')
+                    bit('gore/noooooo', dx, dy + 50, 'hench head spin' .. d .. 'PINK')
+                    local b = bit('gore/stupidBlood', dx - 110, dy + 20, 'blood')
+                    setProperty(b .. '.flipX', true)
+                    setProperty(b .. '.angle', -57.5)
+                elseif i == 1 then
+                    setProperty('limoCorpse.visible', true)
+                elseif i == 2 then
+                    setProperty('limoCorpseTwo.visible', true)
+                end
+                setProperty(tag .. '.x', dx + 1280 * 2)
+            end
+        end
+        if pole > 1280 * 2 then
+            resetLimoKill()
+            limoSpeed = 800
+            killState = 'offscreen'
+        end
+    elseif killState == 'offscreen' then
+        limoSpeed = limoSpeed - 4000 * elapsed
+        setProperty('bgLimo.x', getProperty('bgLimo.x') - limoSpeed * elapsed)
+        if getProperty('bgLimo.x') > 1280 * 1.5 then
+            limoSpeed = 3000
+            killState = 'speeding'
+        end
+    elseif killState == 'speeding' then
+        limoSpeed = math.max(1000, limoSpeed - 2000 * elapsed)
+        setProperty('bgLimo.x', getProperty('bgLimo.x') - limoSpeed * elapsed)
+        if getProperty('bgLimo.x') < -275 then
+            killState = 'stopping'
+            limoSpeed = 800
+        end
+        dancersParenting()
+    elseif killState == 'stopping' then
+        local x = -150 + (getProperty('bgLimo.x') + 150) * math.exp(-elapsed * 9)
+        setProperty('bgLimo.x', x)
+        if math.floor(x + 0.5) == -150 then
+            setProperty('bgLimo.x', -150)
+            killState = 'wait'
+        end
+        dancersParenting()
+    end
 end
 function onBeatHit()
     danced = not danced
@@ -426,11 +837,26 @@ function onCreate()
 end
 )LUA"},
     {"school", R"LUA(
+-- Week 6, with "BG Freaks Expression" (the girls at the back turn from
+-- cheering to dissuaded and back). Charts without the event (older engines)
+-- get the dissuaded girls in Roses, as those engines did.
 local danced = false
+local pissed = false
+local expressionEvent = false
 local function pixel(tag, widthMult)
     setGraphicSize(tag, math.floor(getProperty(tag .. '.width') * widthMult))
     updateHitbox(tag)
     setProperty(tag .. '.antialiasing', false)
+end
+local function setGirls(p)
+    pissed = p
+    local prefix = p and 'BG fangirls dissuaded' or 'BG girls group'
+    addAnimationByIndices('bgGirls', 'danceLeft', prefix, '0,1,2,3,4,5,6,7,8,9,10,11,12,13', 24)
+    addAnimationByIndices('bgGirls', 'danceRight', prefix, '15,16,17,18,19,20,21,22,23,24,25,26,27,28,29', 24)
+end
+local function girlsDance()
+    danced = not danced
+    playAnim('bgGirls', danced and 'danceRight' or 'danceLeft', true)
 end
 function onCreate()
     local rep = -200
@@ -457,31 +883,84 @@ function onCreate()
     pixel('bgSky', 6); pixel('bgSchool', 6); pixel('bgStreet', 6)
     pixel('bgTrees', 6 * 1.4); pixel('fgTrees', 6 * 0.8); pixel('treeLeaves', 6)
     makeAnimatedLuaSprite('bgGirls', 'weeb/bgFreaks', -100, 190)
-    if songName and (string.lower(songName) == 'roses') then
-        addAnimationByIndices('bgGirls', 'danceLeft', 'BG fangirls dissuaded', '0,1,2,3,4,5,6,7,8,9,10,11,12,13', 24)
-        addAnimationByIndices('bgGirls', 'danceRight', 'BG fangirls dissuaded', '15,16,17,18,19,20,21,22,23,24,25,26,27,28,29', 24)
-    else
-        addAnimationByIndices('bgGirls', 'danceLeft', 'BG girls group', '0,1,2,3,4,5,6,7,8,9,10,11,12,13', 24)
-        addAnimationByIndices('bgGirls', 'danceRight', 'BG girls group', '15,16,17,18,19,20,21,22,23,24,25,26,27,28,29', 24)
-    end
+    setGirls(false)
     playAnim('bgGirls', 'danceLeft', true)
     setScrollFactor('bgGirls', 0.9, 0.9)
     pixel('bgGirls', 6)
     addLuaSprite('bgGirls', false)
 end
+function onEventPushed(name)
+    if name == 'BG Freaks Expression' then expressionEvent = true end
+end
+function onCreatePost()
+    if not expressionEvent and songName and string.lower(songName) == 'roses' then
+        setGirls(true)
+        playAnim('bgGirls', 'danceLeft', true)
+    end
+end
+function onEvent(name, v1, v2)
+    if name == 'BG Freaks Expression' then
+        setGirls(not pissed)
+        girlsDance()
+    end
+end
 function onBeatHit()
-    danced = not danced
-    playAnim('bgGirls', danced and 'danceRight' or 'danceLeft', true)
+    girlsDance()
 end
 )LUA"},
     {"schoolEvil", R"LUA(
+-- Week 6's Thorns, with "Trigger BG Ghouls" (ghosts flicker up behind
+-- girlfriend once per event).
+local ghouls = false
+local function pixelProp(tag, img, x, y, scroll)
+    makeLuaSprite(tag, img, x, y)
+    setScrollFactor(tag, scroll, scroll)
+    scaleObject(tag, 6, 6)
+    setProperty(tag .. '.antialiasing', false)
+    addLuaSprite(tag, false)
+end
 function onCreate()
-    makeAnimatedLuaSprite('evilSchool', 'weeb/animatedEvilSchool', 400, 200)
-    addAnimationByPrefix('evilSchool', 'idle', 'background 2', 24, true)
-    setScrollFactor('evilSchool', 0.8, 0.9)
-    scaleObject('evilSchool', 6, 6, false)
-    setProperty('evilSchool.antialiasing', false)
-    addLuaSprite('evilSchool', false)
+    if checkFileExists('images/weeb/animatedEvilSchool.png') then
+        makeAnimatedLuaSprite('evilSchool', 'weeb/animatedEvilSchool', 400, 200)
+        addAnimationByPrefix('evilSchool', 'idle', 'background 2', 24, true)
+        setScrollFactor('evilSchool', 0.8, 0.9)
+        scaleObject('evilSchool', 6, 6, false)
+        setProperty('evilSchool.antialiasing', false)
+        addLuaSprite('evilSchool', false)
+    else
+        -- P-Slice's (the base game's newer) pictures, in its places.
+        pixelProp('evilTrees', 'weeb/evil/weebBackTrees', -842, -80, 0.5)
+        pixelProp('evilSchool', 'weeb/evil/weebSchool', -816, -38, 0.75)
+        pixelProp('evilStreet', 'weeb/evil/weebStreet', -662, 6, 1)
+        if checkFileExists('images/weeb/evil/weebTrees.png') then pixelProp('evilFgTrees', 'weeb/evil/weebTrees', -662, 6, 1) end
+    end
+end
+function onEventPushed(name)
+    if name == 'Trigger BG Ghouls' and not ghouls and not lowQuality and checkFileExists('images/weeb/bgGhouls.png') then
+        ghouls = true
+        makeAnimatedLuaSprite('bgGhouls', 'weeb/bgGhouls', -100, 190)
+        addAnimationByPrefix('bgGhouls', 'glitch', 'BG freaks glitch instance', 24, false)
+        setScrollFactor('bgGhouls', 0.9, 0.9)
+        setGraphicSize('bgGhouls', math.floor(getProperty('bgGhouls.width') * 6))
+        updateHitbox('bgGhouls')
+        setProperty('bgGhouls.antialiasing', false)
+        setProperty('bgGhouls.visible', false)
+        addLuaSprite('bgGhouls', false)
+    end
+end
+function onCreatePost()
+    if ghouls then setObjectOrder('bgGhouls', getObjectOrder('gfGroup')) end
+end
+function onEvent(name, v1, v2)
+    if name == 'Trigger BG Ghouls' and ghouls then
+        playAnim('bgGhouls', 'glitch', true)
+        setProperty('bgGhouls.visible', true)
+    end
+end
+function onUpdate(elapsed)
+    if ghouls and getProperty('bgGhouls.visible') and getProperty('bgGhouls.animation.finished') then
+        setProperty('bgGhouls.visible', false)
+    end
 end
 )LUA"},
 };
@@ -489,7 +968,7 @@ end
 const Named kProbe[] = {
     {"stage", "stageback"}, {"spooky", "halloween_bg"}, {"philly", "philly/sky"}, {"limo", "limo/limoSunset"},
     {"mall", "christmas/bgWalls"}, {"mallEvil", "christmas/evilBG"}, {"school", "weeb/weebSky"},
-    {"schoolEvil", "weeb/animatedEvilSchool"},
+    {"schoolEvil", "weeb/animatedEvilSchool|weeb/evil/weebSchool"},
 };
 
 template <size_t N>

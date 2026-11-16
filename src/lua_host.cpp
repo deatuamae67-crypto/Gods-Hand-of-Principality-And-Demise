@@ -4,10 +4,12 @@
 #include "lua_host.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <random>
@@ -1287,6 +1289,44 @@ int l_callMethod(lua_State* L) {
 
 int l_stubNil(lua_State* L) { (void)L; return 0; }
 
+// Helpers that some engines (or one mod's other scripts) define and others call.
+int l_getPropertyFromObject(lua_State* L) {  // getPropertyFromObject('boyfriend', 'y')
+    Value v;
+    if (getAny(L, str(L, 1) + "." + str(L, 2), v)) return ret(L, v);
+    lua_pushnil(L);
+    return 1;
+}
+int l_addAnim(lua_State* L) {  // addAnim(tag, name, prefix, fps[, loop])
+    return l_addAnimationByPrefix(L);
+}
+int axisGet(lua_State* L, const char* axis) {
+    Value v;
+    if (getAny(L, str(L, 1) + "." + axis, v)) return ret(L, v);
+    return retNum(L, 0);
+}
+int l_getX(lua_State* L) { return axisGet(L, "x"); }
+int l_getY(lua_State* L) { return axisGet(L, "y"); }
+int l_setX(lua_State* L) { setAny(L, str(L, 1) + ".x", Value(num(L, 2))); return 0; }
+int l_setY(lua_State* L) { setAny(L, str(L, 1) + ".y", Value(num(L, 2))); return 0; }
+// windowShake(): Vs Dek's scripts nudge the window a pixel; here the view
+// trembles that much instead (the window stays where the player put it).
+int l_windowShake(lua_State* L) {
+    scene::Camera& c = SC(L).camGame;
+    c.shakeIntensity = std::max(c.shakeIntensity, 1.0f / 1280.0f);
+    c.shakeTime = std::max(c.shakeTime, 0.05f);
+    return 0;
+}
+// changeMania(n) (Kade Engine extra keys): the chart is played with all its
+// keys the whole song, so the change of key count only shows in the notes used.
+int l_changeMania(lua_State* L) {
+    static bool told = false;
+    if (!told) {
+        told = true;
+        warn(L, "changeMania: the song is played with all of its keys");
+    }
+    return 0;
+}
+
 int l_stubTrue(lua_State* L) { return retBool(L, true); }
 
 // ------------------------------------------------------------------ shaders --
@@ -1685,6 +1725,42 @@ int l_addBlockedGlitchEffect(lua_State* L) {
     if (!e) return 0;
     const float res = float(num(L, 2, 1280));
     e->floats["screenSize"] = {res, res};
+    return 0;
+}
+// wavyEffect(object, amplitude, frequency, speed) and addWavyShader(object):
+// a wavy (dreamy) wiggle on a sprite or camera, as in the mods' engines.
+int l_wavyEffect(lua_State* L) {
+    const scene::ShaderPtr e = addEffect(L, "__fx_wiggle", true);
+    if (e) e->ints["effectType"] = {fx::wiggleType("dreamy")};
+    setF(e, "uWaveAmplitude", num(L, 2, 0.1));
+    setF(e, "uFrequency", num(L, 3, 5));
+    setF(e, "uSpeed", num(L, 4, 2));
+    setF(e, "verticalStrength", 1);
+    setF(e, "horizontalStrength", 1);
+    return 0;
+}
+int l_addWavyShader(lua_State* L) {
+    const scene::ShaderPtr e = addEffect(L, "__fx_wiggle", true);
+    if (e) e->ints["effectType"] = {fx::wiggleType("dreamy")};
+    setF(e, "uWaveAmplitude", 0.1);
+    setF(e, "uFrequency", 5);
+    setF(e, "uSpeed", 2);
+    setF(e, "verticalStrength", 1);
+    setF(e, "horizontalStrength", 1);
+    return 0;
+}
+// clearWiggleEffect(object or camera): takes the wiggles off it.
+int l_clearWiggleEffect(lua_State* L) {
+    const std::string target = lua_type(L, 1) == LUA_TSTRING ? str(L, 1) : std::string();
+    auto isWiggle = [](const scene::ShaderPtr& sh) { return sh && sh->name == "__fx_wiggle"; };
+    if (Sprite* sp = target.empty() ? nullptr : obj(L, target)) {
+        if (isWiggle(sp->shader)) sp->shader.reset();
+        sp->moreShaders.erase(std::remove_if(sp->moreShaders.begin(), sp->moreShaders.end(), isWiggle), sp->moreShaders.end());
+        return 0;
+    }
+    scene::Camera* c = effectCamera(SC(L), target);
+    auto& f = (c ? c : &SC(L).camGame)->filters;
+    f.erase(std::remove_if(f.begin(), f.end(), isWiggle), f.end());
     return 0;
 }
 int l_clearEffects(lua_State* L) {
@@ -2275,6 +2351,11 @@ const Fn kFunctions[] = {
     {"addInvertEffect", l_addInvertEffect}, {"addGreyscaleEffect", l_addGreyscaleEffect}, {"addGrayscaleEffect", l_addGreyscaleEffect},
     {"add3DEffect", l_add3DEffect}, {"addBloomEffect", l_addBloomEffect}, {"addBlockedGlitchEffect", l_addBlockedGlitchEffect},
     {"clearEffects", l_clearEffects}, {"clearShadersFromCamera", l_clearEffects},
+    {"wavyEffect", l_wavyEffect}, {"addWavyShader", l_addWavyShader}, {"clearWiggleEffect", l_clearWiggleEffect},
+    {"AddChromaticAberrationEffect", l_addChromaticAbberationEffect}, {"getPropertyFromObject", l_getPropertyFromObject},
+    {"addAnim", l_addAnim}, {"getX", l_getX}, {"getY", l_getY}, {"setX", l_setX}, {"setY", l_setY},
+    {"windowShake", l_windowShake}, {"changeMania", l_changeMania}, {"resizeWindow", l_stubNil},
+    {"iconScale", l_stubNil}, {"wait", l_stubNil},
     {"saveFile", l_saveFile}, {"deleteFile", l_deleteFile}, {"require", l_require}, {"doTweenScale", l_doTweenScale},
     {"loopTheSong", l_loopTheSong}, {"trace", l_debugPrint},
     {"setCameraShader", l_setCameraShader}, {"removeCameraShader", l_removeCameraShader},
@@ -2561,6 +2642,55 @@ bool ScriptHost::load(const std::string& path, bool callCreate) {
     return loadString(path, code, callCreate);
 }
 
+// A script with an `end` too many or too few (a slip that keeps the whole
+// script from running in Psych too): when taking the extra `end` away, or
+// adding the missing ones at the end, is all it takes for the file to read,
+// it runs that way. *fixes counts the changes (0: the code as it was).
+std::string repairLuaEnds(lua_State* L, const std::string& original, const std::string& chunk, int* fixes) {
+    std::string code = original;
+    *fixes = 0;
+    for (int tries = 0; tries < 4; ++tries) {
+        if (luaL_loadbufferx(L, code.data(), code.size(), chunk.c_str(), "t") == LUA_OK) {
+            lua_pop(L, 1);
+            return code;
+        }
+        const std::string err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        if (err.find("'end' expected") != std::string::npos && err.find("near <eof>") != std::string::npos) {
+            code += "\nend";
+            ++*fixes;
+            continue;
+        }
+        if (err.find("<eof> expected near 'end'") == std::string::npos) break;
+        // "name:LINE: <eof> expected near 'end'": blank out that line's last `end`.
+        int line = 0;
+        for (size_t c = err.find(':'); c != std::string::npos && !line; c = err.find(':', c + 1)) {
+            size_t d = c + 1;
+            while (d < err.size() && std::isdigit((unsigned char)err[d])) ++d;
+            if (d > c + 1 && d < err.size() && err[d] == ':') line = std::atoi(err.c_str() + c + 1);
+        }
+        if (line <= 0) break;
+        size_t start = 0;
+        for (int l = 1; l < line && start != std::string::npos; ++l) {
+            start = code.find('\n', start);
+            if (start != std::string::npos) ++start;
+        }
+        if (start == std::string::npos) break;
+        const size_t stop = std::min(code.find('\n', start), code.size());
+        size_t at = std::string::npos;
+        for (size_t q = code.find("end", start); q != std::string::npos && q + 3 <= stop; q = code.find("end", q + 1)) {
+            const bool wordStart = q == 0 || !(std::isalnum((unsigned char)code[q - 1]) || code[q - 1] == '_');
+            const bool wordEnd = q + 3 >= code.size() || !(std::isalnum((unsigned char)code[q + 3]) || code[q + 3] == '_');
+            if (wordStart && wordEnd) at = q;
+        }
+        if (at == std::string::npos) break;
+        code.replace(at, 3, "   ");
+        ++*fixes;
+    }
+    *fixes = 0;
+    return original;
+}
+
 bool ScriptHost::loadString(const std::string& path, const std::string& code, bool callCreate) {
     auto s = std::make_unique<Script>();
     s->host = this;
@@ -2635,7 +2765,11 @@ bool ScriptHost::loadString(const std::string& path, const std::string& code, bo
     raw->callStart = nowSec();
     lua_pushcfunction(L, traceback);
     const std::string chunk = "@" + raw->name;
-    int rc = luaL_loadbufferx(L, code.data(), code.size(), chunk.c_str(), "t");
+    int fixes = 0;
+    const std::string fixedCode = repairLuaEnds(L, code, chunk, &fixes);
+    if (fixes > 0)
+        game.debugNotice(raw->name + ": " + std::to_string(fixes) + " misplaced 'end' fixed so the script can run", false, true);
+    int rc = luaL_loadbufferx(L, fixedCode.data(), fixedCode.size(), chunk.c_str(), "t");
     if (rc == LUA_OK) rc = lua_pcall(L, 0, 0, 1);
     raw->callStart = 0;
     if (rc != LUA_OK) {

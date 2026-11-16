@@ -141,17 +141,24 @@ void PsychUi::setSmooth(bool smooth) {
 static const char* const kLoadSubdirs[] = {"",        "assets/",  "assets/shared/", "assets/preload/", "assets/embed/",
                                            "shared/", "preload/", "../",            "../shared/",      "../preload/"};
 
-std::vector<std::string> psychNoteSkins(const std::string& folder) {
-    std::vector<std::string> out;
-    if (folder.empty()) return out;
-    std::string root = folder;
-    if (root.back() != '/' && root.back() != '\\') root += '/';
+std::vector<std::string> psychNoteSkins(const std::string& folder, const std::vector<std::string>& modRoots) {
+    std::vector<std::string> out, dirs;
+    if (!folder.empty()) {
+        std::string root = folder;
+        if (root.back() != '/' && root.back() != '\\') root += '/';
+        for (const char* sub : kLoadSubdirs) dirs.push_back(root + sub);
+    }
+    for (std::string r : modRoots) {
+        if (r.empty()) continue;
+        if (r.back() != '/' && r.back() != '\\') r += '/';
+        dirs.push_back(r);
+    }
     namespace fs = std::filesystem;
     const std::string pre = "NOTE_assets-";
-    for (const char* sub : kLoadSubdirs)
+    for (const std::string& root : dirs)
         for (const char* skins : {"images/noteSkins", "images/noteskins"}) {
             std::error_code ec;
-            const std::string dir = root + sub + skins;
+            const std::string dir = root + skins;
             for (const auto& e : fs::directory_iterator(fs::path(std::u8string(dir.begin(), dir.end())), ec)) {
                 const auto u = e.path().filename().u8string();
                 const std::string n(u.begin(), u.end());
@@ -186,8 +193,14 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
     std::vector<std::string> missing;
 
     std::string notePng;
-    if (!skin_.empty())
+    if (!skin_.empty()) {
         notePng = findAny(f, {"images/noteSkins/NOTE_assets-" + skin_ + ".png", "images/noteskins/NOTE_assets-" + skin_ + ".png"});
+        if (notePng.empty() && !skinRoots_.empty()) {  // a skin another mod brings
+            scene::Files mods;
+            mods.setRoots(skinRoots_);
+            notePng = findAny(mods, {"images/noteSkins/NOTE_assets-" + skin_ + ".png", "images/noteskins/NOTE_assets-" + skin_ + ".png"});
+        }
+    }
     if (notePng.empty())
         notePng = findAny(f, {"images/noteskins/NOTE_assets.png", "images/noteSkins/NOTE_assets.png", "images/NOTE_assets.png"});
     if (!notePng.empty()) {

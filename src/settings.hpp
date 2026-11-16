@@ -97,6 +97,13 @@ struct Settings {
     float scrollSpeed = 0;     // 0 = use chart speed
     float masterVol = 0.8f, musicVol = 1.0f, sfxVol = 0.7f, hitsoundVol = 0.0f;
     bool muted = false;  // the 0 key (the volume keys bring the sound back)
+    // Freeplay's modifiers (TAB) and the song last picked, kept like the rest.
+    float modRate = 1.0f;
+    bool modBotplay = false, modPractice = false, modMirror = false;
+    int modScrollType = 0;  // 0 the chart's, 1 multiplied, 2 constant
+    float modScrollValue = 1.0f;
+    std::string freeplaySong;  // its id
+    int freeplayDiff = 1;
 
     Settings();
     bool load(const std::string& path);
