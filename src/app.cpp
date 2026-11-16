@@ -830,12 +830,14 @@ void App::drawRenderBadge() {
     const int vs = int(video);
     std::string s = TextFormat("REC  %d:%02d", vs / 60, vs % 60);
     if (!renderLabel.empty()) s += "  |  song " + renderLabel;
-    s += TextFormat("  |  %.2fx real time  |  ESC stops", video / real);
+    s += TextFormat("  |  %.2fx real time  |  %s", video / real, touchMode ? "STOP ends it" : "ESC stops");
+    // At the top, in the middle: the FPS counter keeps its corner.
     const Vector2 sz = gfx::measure(gfx::FontId::Ui, s, 18);
-    DrawRectangleRec({8, 8, sz.x + 40, 28}, gfx::fade(BLACK, 0.7f));
+    const float w = sz.x + 40, x = (gfx::W - w) * 0.5f;
+    DrawRectangleRec({x, 8, w, 28}, gfx::fade(BLACK, 0.7f));
     const float blink = std::fmod(float(real), 1.0f) < 0.5f ? 1.0f : 0.35f;
-    DrawCircleV({24, 22}, 7, gfx::fade(Color{230, 40, 50, 255}, blink));
-    gfx::text(gfx::FontId::Ui, s, 38, 12, 18, WHITE, gfx::Align::Left, 1.0f);
+    DrawCircleV({x + 16, 22}, 7, gfx::fade(Color{230, 40, 50, 255}, blink));
+    gfx::text(gfx::FontId::Ui, s, x + 30, 12, 18, WHITE, gfx::Align::Left, 1.0f);
 }
 
 // ------------------------------------------------------- shared visuals --

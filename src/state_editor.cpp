@@ -293,7 +293,8 @@ public:
         DrawRectangleRec({0, 0, gfx::W, gfx::H}, Color{14, 10, 22, 255});
         if (!error_.empty()) {
             gfx::text(FontId::Ui, "Chart editor: " + error_, gfx::W / 2, gfx::H / 2 - 20, 28, gfx::rgb(0xFF8080), Align::Center);
-            gfx::text(FontId::Ui, "ESC back", gfx::W / 2, gfx::H / 2 + 24, 22, gfx::fade(WHITE, 0.6f), Align::Center);
+            gfx::text(FontId::Ui, app().touchMode ? "BACK to leave" : "ESC back", gfx::W / 2, gfx::H / 2 + 24, 22,
+                      gfx::fade(WHITE, 0.6f), Align::Center);
             gfx::endCanvas();
             return;
         }

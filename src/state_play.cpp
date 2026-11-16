@@ -669,9 +669,13 @@ TouchLayout PlayState::touchLayout() const {
         t.tapCode = KEY_ENTER;
         return t;
     }
+    if (rendering_) {  // Render Mode: the song plays itself; the button ends the video
+        t.keys = {{"STOP", KEY_ESCAPE}};
+        return t;
+    }
     t.keys = {{"PAUSE", KEY_ESCAPE}};
     // The chart editor on this song, as 7 does on a keyboard.
-    if (!replaying_ && !rendering_) t.keys.push_back({"CHART", KEY_SEVEN});
+    if (!replaying_) t.keys.push_back({"CHART", KEY_SEVEN});
     if (botEnergyOn_ && !cfg_.botplay) t.keys.push_back({"BOT", KEY_LEFT_CONTROL});
     if (!replaying_ && !cfg_.botplay) t.lanes = chart_.keysOf(1);
     return t;
