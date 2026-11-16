@@ -2004,9 +2004,9 @@ void PlayState::drawDead() {
     const float t = float(a.now - deadAt_);
     DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(Color{20, 0, 6, 255}, std::min(0.85f, t * 1.2f)));
     const float al = saturate(t * 1.5f - 0.3f);
-    gfx::glowText(FontId::Title, "YOU HAVE FALLEN", gfx::W / 2, 220, 72, fade(Color{255, 80, 90, 255}, al),
+    gfx::glowText(FontId::Title, "GAME OVER", gfx::W / 2, 220, 72, fade(Color{255, 80, 90, 255}, al),
                   Color{255, 40, 60, 255});
-    gfx::text(FontId::Ui, a.touchMode ? "OK rise again      BACK leave" : "ENTER rise again      ESC leave", gfx::W / 2, 360, 34,
+    gfx::text(FontId::Ui, a.touchMode ? "OK retry      BACK leave" : "ENTER retry      ESC leave", gfx::W / 2, 360, 34,
               fade(kIvory, al), Align::Center, 2.0f);
 }
 
@@ -2076,7 +2076,7 @@ void PlayState::drawLoading() {
     gfx::beginCanvas();
     drawMenuBackground(now, entry_ ? entry_->color : 0x8C6CFF, 0);
     if (phase_ == Phase::Error) {
-        gfx::text(FontId::Title, "THE HEAVENS ARE SILENT", gfx::W / 2, 230, 50, kMissColor, Align::Center, 2.0f);
+        gfx::text(FontId::Title, "THIS SONG WON'T PLAY", gfx::W / 2, 230, 50, kMissColor, Align::Center, 2.0f);
         gfx::text(FontId::Ui, error_, gfx::W / 2, 330, 28, kIvory, Align::Center, 1.5f);
         gfx::text(FontId::Ui, a.touchMode ? "OK return" : "ENTER return", gfx::W / 2, 420, 26, fade(kIvory, 0.7f), Align::Center);
     } else {
@@ -2085,7 +2085,7 @@ void PlayState::drawLoading() {
             gfx::drawNote(i, {640 + std::cos(ang) * 70, 300 + std::sin(ang) * 70}, 56);
         }
         const std::string title = entry_ ? entry_->title : "";
-        gfx::text(FontId::Title, "Summoning " + title + "...", gfx::W / 2, 420, 40, kGold, Align::Center, 2.0f);
+        gfx::text(FontId::Title, "Loading " + title + "...", gfx::W / 2, 420, 40, kGold, Align::Center, 2.0f);
         static const char* tips[] = {"Hold the note until its trail ends.", "Calibrate your audio offset in Options.",
                                      "Botplay and playback rate live under TAB in Freeplay.",
                                      "Psych Engine mods go in the mods folder, scripts and all."};

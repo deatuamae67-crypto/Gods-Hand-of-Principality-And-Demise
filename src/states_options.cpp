@@ -168,7 +168,7 @@ public:
             {Row::Choice, "Lua warnings", "Missing images, sounds and objects that mods ask for. Psych: only with luaDebugMode.",
              nullptr, nullptr, 0, 0, 0, &s.luaWarnings, {0, 1, 2}, {"Always", "luaDebugMode", "Off"}},
             {Row::Bool, "Lua note callbacks", "Scripts hear every hit and miss (goodNoteHit, noteMiss...). OFF is faster on spam "
-             "charts, but mods that count notes or drain health with them stop doing it.", &s.luaNoteCallbacks},
+             "charts: plain notes are not passed on, but notes with a note type always are.", &s.luaNoteCallbacks},
         };
         for (Row& r : rows_) {
             if (r.label == "Scroll speed") r.fmt = [](float v) { return v <= 0.001f ? std::string("Chart") : std::string(TextFormat("%.1f", v)); };

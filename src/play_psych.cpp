@@ -63,6 +63,23 @@ std::vector<std::string> scriptsNamed(const scene::Files& files, const std::stri
     return out;
 }
 
+// PulseForge (this game's predecessor) put stand-ins in some of its packs
+// for events its own renderer could not draw, marked "PulseForge portable
+// compatibility" at the top: rough imitations, not the mods' own scripts. The
+// taimuresu pack's "Rainbow Eyesore" is one: a faint RGB tint for value 1
+// milliseconds, where JS Engine shows its eyesore until step value 1.
+bool isPulseForgeStandIn(const std::string& path) {
+    std::string code;
+    if (!scene::readFile(path, code)) return false;
+    return code.substr(0, 1024).find("PulseForge portable compatibility") != std::string::npos;
+}
+
+// Options -> "Lua note callbacks" OFF skips the calls for every plain note
+// (spam charts), never for a note with a type: those are the notes scripts
+// wait for (slidenoteification 9 makes Dave, Bambi and Bandu sing their
+// "Dave Sing", "Bambi Sing" and "Bandu Sing" notes in goodNoteHit).
+bool noteCallbacksFor(uint32_t noteType) { return app().settings.luaNoteCallbacks || noteType != 0; }
+
 double numOr(const std::string& s, double def) {
     const std::string t = trim(s);
     if (t.empty()) return def;
@@ -435,6 +452,8 @@ void PlayState::loadScripts(bool afterHud) {
         // P-Slice's or Dek Engine's). Any other event borrows a script from
         // the other installed mods, as images and sounds are.
         auto files = scriptsNamed(sc.files, "custom_events/" + e.name, true);
+        if (builtin::engineEvent(e.name))  // the engine's own handling, not PulseForge's imitation
+            files.erase(std::remove_if(files.begin(), files.end(), isPulseForgeStandIn), files.end());
         if (files.empty() && builtin::engineEvent(e.name)) {
             if (const char* code = builtin::eventLua(e.name))
                 h.loadString("custom_events/" + e.name + ".lua", code);
@@ -740,7 +759,7 @@ void PlayState::psychHoldRefresh() {
                 ch->holdTimer = 0;
             }
             const char* fn = side == 1 ? "goodNoteHit" : "opponentNoteHit";
-            if (app().settings.luaNoteCallbacks)
+            if (noteCallbacksFor(n.type))
                 scripts_->call(fn, {Value(double(n.id)), Value(double(l)), Value(chart_.noteTypes[n.type]), Value(true)});
         }
 }
@@ -770,11 +789,11 @@ void PlayState::psychNoteHit(const GameEvent& ev, bool opponent) {
     if (toLower(entry_->songKey) != "tutorial") sc.camZooming = true;
     if (opponent) {
         app().mixer.setTrackVolume(Mixer::kVoiceOpponent, 1.0f);
-        if (app().settings.luaNoteCallbacks)
+        if (noteCallbacksFor(ev.noteType))
             scripts_->call("opponentNoteHit", {Value(double(ev.id)), Value(double(ev.lane)), Value(type), Value(false)});
     } else {
         lastCombo_ = session_.combo;
-        if (app().settings.luaNoteCallbacks)
+        if (noteCallbacksFor(ev.noteType))
             scripts_->call("goodNoteHit", {Value(double(ev.id)), Value(double(ev.lane)), Value(type), Value(false)});
     }
 }
@@ -801,7 +820,7 @@ void PlayState::psychMiss(const GameEvent& ev, bool ghost) {
     }
     lastCombo_ = 0;
     const std::string& type = chart_.noteTypes[ev.noteType < chart_.noteTypes.size() ? ev.noteType : 0];
-    if (app().settings.luaNoteCallbacks)
+    if (noteCallbacksFor(ev.noteType))
         scripts_->call("noteMiss", {Value(double(ev.id)), Value(double(ev.lane)), Value(type),
                                     Value(ev.type == GameEvent::HoldDrop)});
 }
