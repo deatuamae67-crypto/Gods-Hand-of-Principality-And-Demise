@@ -2,8 +2,10 @@
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
 #include "render_mode.hpp"
+#include "sysinfo.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -99,9 +101,35 @@ void put16(FILE* f, uint16_t v) { std::fwrite(&v, 2, 1, f); }
 const std::vector<RenderEncoder>& renderEncoders() {
     static const std::vector<RenderEncoder> list = {
         {"H.264 (x264)", "mp4"}, {"H.265 (x265)", "mp4"}, {"VP9 (WebM)", "webm"}, {"H.264 NVIDIA", "mp4"},
-        {"H.265 NVIDIA", "mp4"}, {"H.264 AMD", "mp4"},    {"H.264 Intel", "mp4"},
+        {"H.265 NVIDIA", "mp4"}, {"H.264 AMD", "mp4"},    {"H.264 Intel", "mp4"}, {"Auto", "mp4"},
     };
     return list;
+}
+
+// Auto: the graphics card's own H.264 encoder (NVIDIA NVENC, AMD AMF, Intel
+// Quick Sync) when ffmpeg can really open it on this computer (a short test
+// encode, once), else x264 on the processor.
+int bestRenderEncoder(const std::string& ffmpeg) {
+    static int best = -1;
+    if (best >= 0) return best;
+    best = 0;
+    std::string card = sysinfo::hardware().gpu;
+    for (char& c : card) c = char(std::tolower(static_cast<unsigned char>(c)));
+    std::vector<int> tries;
+    if (card.find("nvidia") != std::string::npos || card.find("geforce") != std::string::npos) tries = {3};
+    else if (card.find("amd") != std::string::npos || card.find("radeon") != std::string::npos) tries = {5};
+    else if (card.find("intel") != std::string::npos) tries = {6};
+    static const char* const kCodec[] = {"libx264", "libx265", "libvpx-vp9", "h264_nvenc", "hevc_nvenc", "h264_amf", "h264_qsv"};
+    for (int e : tries) {
+        const std::vector<std::string> args = {"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                                               "color=c=black:s=320x240:r=30:d=0.2", "-frames:v", "4", "-c:v", kCodec[e],
+                                               "-f", "null", "-"};
+        if (runProcess(ffmpeg, args) == 0) {
+            best = e;
+            break;
+        }
+    }
+    return best;
 }
 
 std::vector<std::string> renderVideoArgs(const RenderOptions& o, const std::string& out) {
@@ -155,6 +183,7 @@ bool VideoRenderer::start(const std::string& ffmpeg, const std::string& outBase,
     opt_.fps = std::clamp(o.fps, 1, 1000);
     if (opt_.encoder < 0 || opt_.encoder >= int(renderEncoders().size())) opt_.encoder = 0;
     if (platform::kAndroid) opt_.encoder = 0;  // the phone's H.264 encoder, in an .mp4
+    else if (opt_.encoder == 7) opt_.encoder = bestRenderEncoder(ffmpeg);
     const std::string ext = renderEncoders()[size_t(opt_.encoder)].ext;
     ffmpeg_ = ffmpeg;
     outBase_ = outBase;

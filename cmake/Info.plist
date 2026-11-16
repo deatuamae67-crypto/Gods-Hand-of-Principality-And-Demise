@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded in the godshand program (__TEXT,__info_plist): macOS reads it for
+     a program outside an app bundle. The games category lets Game Mode
+     (macOS 14+) give the game the processor and graphics card first. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.godshand.game</string>
+    <key>CFBundleName</key>
+    <string>God's Hand</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+    <key>GCSupportsGameMode</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>

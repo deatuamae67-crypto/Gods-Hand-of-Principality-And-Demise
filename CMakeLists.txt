@@ -293,6 +293,7 @@ if(GH_BUILD_GAME)
     src/touch_ui.cpp
     src/visualizer.cpp
     src/check_scripts.cpp
+    src/performance.cpp
   )
   if(ANDROID)
     # NativeActivity loads libgodshand.so; raylib's android_main() calls main().
@@ -326,6 +327,8 @@ if(GH_BUILD_GAME)
   endif()
   if(APPLE)
     target_link_libraries(godshand PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL" "-framework CoreFoundation")
+    # A game for macOS (Game Mode): the Info.plist inside the program itself.
+    target_link_options(godshand PRIVATE "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_SOURCE_DIR}/cmake/Info.plist")
   endif()
   if(UNIX AND NOT APPLE AND NOT ANDROID)
     target_link_libraries(godshand PRIVATE ${CMAKE_DL_LIBS})  # the FPS counter asks NVIDIA's library, when there is one
@@ -351,7 +354,7 @@ endif()
 # Streamed song audio is tested with raylib's decoders when raylib is built.
 if(GH_BUILD_TESTS AND TARGET raylib)
   target_sources(gh_tests PRIVATE tests/audio_tests.cpp src/audio.cpp src/audio_decode.cpp src/platform.cpp src/folder_picker.cpp
-                 src/render_mode.cpp src/process.cpp)
+                 src/render_mode.cpp src/process.cpp src/sysinfo.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   if(WIN32)
     target_link_libraries(gh_tests PRIVATE shell32 ole32)  # platform.cpp's folder dialog

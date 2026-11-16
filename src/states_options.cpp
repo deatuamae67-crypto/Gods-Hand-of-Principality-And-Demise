@@ -149,9 +149,10 @@ public:
              &s.renderSize, {0, 1, 2, 3},
              {"1280x720", "1920x1080", "2560x1440", "3840x2160"}},
             {Row::Choice, "Video frame rate", "", nullptr, nullptr, 0, 0, 0, &s.renderFps, {30, 60, 120, 240}},
-            {Row::Choice, "Video encoder", "x264 and x265 use the processor; the NVIDIA, AMD and Intel ones use the graphics card "
-             "(much faster, when the card has one).", nullptr, nullptr, 0, 0, 0, &s.renderEncoder, {0, 1, 2, 3, 4, 5, 6},
-             {"H.264 (x264)", "H.265 (x265)", "VP9 (WebM)", "H.264 NVIDIA", "H.265 NVIDIA", "H.264 AMD", "H.264 Intel"}},
+            {Row::Choice, "Video encoder", "Auto: the graphics card's own encoder when this computer has one that works (much faster), "
+             "else x264. x264 and x265 use the processor; the NVIDIA, AMD and Intel ones the graphics card.", nullptr, nullptr, 0, 0, 0,
+             &s.renderEncoder, {7, 0, 1, 2, 3, 4, 5, 6},
+             {"Auto", "H.264 (x264)", "H.265 (x265)", "VP9 (WebM)", "H.264 NVIDIA", "H.265 NVIDIA", "H.264 AMD", "H.264 Intel"}},
             {Row::Choice, "Video bitrate", "Higher is sharper and bigger. Spam charts move a lot: 20 Mbps or more.", nullptr, nullptr, 0,
              0, 0, &s.renderBitrate, {5, 10, 20, 40, 80}, {"5 Mbps", "10 Mbps", "20 Mbps", "40 Mbps", "80 Mbps"}},
             {Row::Bool, "Video audio", "The song (instrumental and voices) in the video.", &s.renderAudio},

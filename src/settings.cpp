@@ -71,7 +71,7 @@ bool Settings::load(const std::string& path) {
         else if (k == "renderMode") renderMode = b;
         else if (k == "renderSize") renderSize = clampv(int(d), 0, 3);
         else if (k == "renderFps") renderFps = clampv(int(d), 1, 1000);
-        else if (k == "renderEncoder") renderEncoder = clampv(int(d), 0, 6);
+        else if (k == "renderEncoder") renderEncoder = clampv(int(d), 0, 7);
         else if (k == "renderBitrate") renderBitrate = clampv(int(d), 1, 500);
         else if (k == "renderAudio") renderAudio = b;
         else if (k == "extraKeys") extraKeys = b;

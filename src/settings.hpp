@@ -50,7 +50,7 @@ struct Settings {
     bool renderMode = false;
     int renderSize = 0;       // 0 1280x720, 1 1920x1080, 2 2560x1440, 3 3840x2160
     int renderFps = 60;
-    int renderEncoder = 0;    // renderEncoders()
+    int renderEncoder = 7;    // renderEncoders(); 7: Auto (the graphics card's encoder when it works, else x264)
     int renderBitrate = 20;   // Mbps
     bool renderAudio = true;
     bool extraKeys = true;     // OFF: every chart has 4 keys, like Psych and JS Engine

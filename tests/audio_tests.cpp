@@ -249,7 +249,7 @@ void testRenderMode(const std::string& dir) {
     ACHECK(has("libvpx-vp9"));
     a = renderMuxArgs(o, "v.webm", "a.wav", "out.webm");
     ACHECK(has("libopus") && has("-shortest") && a.back() == "out.webm");
-    ACHECK(renderEncoders().size() == 7 && std::string(renderEncoders()[2].ext) == "webm");
+    ACHECK(renderEncoders().size() == 8 && std::string(renderEncoders()[2].ext) == "webm" && std::string(renderEncoders()[7].label) == "Auto");
 #if !defined(_WIN32)
     // What is written goes to the program's standard input (here cat, into a file).
     const std::string log = dir + "/pipe.txt";

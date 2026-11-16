@@ -17,6 +17,9 @@
         android:isGame="true"
         android:appCategory="game"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+        <!-- A game for the system and the makers' game launchers (Samsung Game
+             Launcher / Game Booster, Game Dashboard): Game Mode support. -->
+        <meta-data android:name="android.game_mode_config" android:resource="@xml/game_mode_config" />
         <activity
             android:name=".GameActivity"
             android:label="@string/app_name"

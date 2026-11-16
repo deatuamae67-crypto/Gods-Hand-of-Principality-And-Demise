@@ -3,6 +3,7 @@
 
 #include "app.hpp"
 #include "check_scripts.hpp"
+#include "performance.hpp"
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
 
@@ -325,11 +326,13 @@ int App::run(int argc, char** argv) {
     if (settings.vsync) flags |= FLAG_VSYNC_HINT;
     SetConfigFlags(flags);
     SetTraceLogLevel(LOG_WARNING);
+    device::beforeWindow();  // a laptop's fast graphics card, before the OpenGL context exists
     // Android: the whole screen, whatever its size.
     InitWindow(platform::kAndroid ? 0 : std::max(320, winW_), platform::kAndroid ? 0 : std::max(180, winH_),
                "God's Hand of Principality and Demise");
     platform::afterWindowInit();
     platform::setVsync(settings.vsync);  // explicit both ways: some drivers default to on
+    device::startGame(frameBudget());    // the system told a game runs (game scheduling, GameMode, performance hints)
     SetExitKey(KEY_NULL);
     if (!platform::kAndroid) {
         SetWindowMinSize(640, 360);
@@ -458,6 +461,7 @@ int App::run(int argc, char** argv) {
         frame();
     }
 
+    device::stopGame();
     stopRender();  // closing the game mid-song keeps what was recorded
     VideoRenderer::waitIdle(120);
     state_.reset();
@@ -471,6 +475,15 @@ int App::run(int argc, char** argv) {
     CloseAudioDevice();
     CloseWindow();
     return 0;
+}
+
+// How long a frame may take: the frame limit's, or the screen's refresh with V-sync.
+double App::frameBudget() const {
+    if (settings.vsync || settings.fpsCap <= 0) {
+        const int hz = platform::kAndroid ? 60 : GetMonitorRefreshRate(GetCurrentMonitor());
+        return 1.0 / double(hz >= 30 ? hz : 60);
+    }
+    return 1.0 / double(settings.fpsCap);
 }
 
 void App::frame() {
@@ -589,6 +602,7 @@ void App::frame() {
         const bool pace = settings.vsync && settings.lowLatency && !rendering && pacerMonitor_ >= 0;
         if (pace) platform::gpuFinish();
         const double work = nowSec() - frameStart_;
+        if (platform::kAndroid) device::frameWork(work, frameBudget());  // Android's performance hints
         SwapScreenBuffer();
         if (pace) {
             platform::gpuFinish();
@@ -685,6 +699,7 @@ void App::drawFpsPanel() {
         if (!hw.gpu.empty()) lines.push_back({hw.gpu, dim});
         if (!hw.gl.empty()) lines.push_back({"OpenGL " + hw.gl, dim});
         if (!hw.os.empty()) lines.push_back({hw.os, dim});
+        if (!device::status().empty()) lines.push_back({"Game mode: " + device::status(), dim});
     }
     // Small and narrow, so that it stays in its corner of a song's HUD: the
     // FPS in 18 pixels, the rest in 14, lines cut at 240 pixels.
