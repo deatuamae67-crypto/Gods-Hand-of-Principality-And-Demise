@@ -10,6 +10,10 @@
 //  - D-Mize (id "demise"): a punk skeleton with a red mohawk, a leather jacket
 //    and a spiked collar;
 //  - a Shade: Hype's outline in a song's colour, for songs with no cast.
+// They have a glossy "Frutiger Aero" finish: every shape is lit from above
+// with a glassy shine on its upper part, the outlines are a deep blue, the
+// colours lean to aqua, lime and white, and soap bubbles drift around them
+// (more pour out of a microphone while it sings).
 // Each one is drawn facing right (+x) in its own units with the feet at (0, 0);
 // a mirrored transform turns it to the left.
 
@@ -49,7 +53,7 @@ const char* charDisplayName(CharId id) {
 
 Color charColor(CharId id) {
     switch (id) {
-        case CharId::Herald: return Color{40, 214, 184, 255};        // Hype's hoodie
+        case CharId::Herald: return Color{48, 182, 240, 255};        // Hype's hoodie
         case CharId::Principality: return Color{164, 100, 255, 255};  // the beehive
         case CharId::Hand: return Color{70, 170, 255, 255};          // the glove's cuff
         case CharId::Demise: return Color{255, 48, 84, 255};         // the mohawk
@@ -75,7 +79,7 @@ void CharacterState::beat(double now) {
 
 namespace {
 
-constexpr Color kInk{24, 16, 36, 255};       // the outlines
+constexpr Color kInk{18, 38, 76, 255};       // the outlines: a deep, glassy blue
 constexpr Color kMissTone{96, 84, 170, 255};  // a miss turns the colours to this
 constexpr float kLine = 4.2f;                 // outline width, in character units
 constexpr float kPi = 3.14159265f;
@@ -119,6 +123,131 @@ void line(const Xf& X, float ax, float ay, float bx, float by, float w, Color c)
     DrawLineEx(X(ax, ay), X(bx, by), X.len(w), c);
 }
 
+// ------------------------------------------------- the glossy Aero finish --
+
+Color withAlpha(Color c, unsigned char a) {
+    c.a = a;
+    return c;
+}
+
+// A colour lit from above: t is 0 at a shape's top (lighter) and 1 at its
+// bottom (deeper).
+Color shadeAt(Color c, float t) {
+    const Color hi = withAlpha(mix(c, WHITE, 0.45f), c.a), lo = withAlpha(mix(c, kInk, 0.3f), c.a);
+    return t < 0.5f ? mix(hi, c, t * 2.0f) : mix(c, lo, (t - 0.5f) * 2.0f);
+}
+
+void ellLit(const Xf& X, float cx, float cy, float rx, float ry, Color c, int seg = 34) {
+    const Vector2 o = X(cx, cy);
+    Vector2 prev = X(cx + rx, cy);
+    Color prevC = shadeAt(c, 0.5f);
+    for (int i = 1; i <= seg; ++i) {
+        const float a = float(i) / float(seg) * 2.0f * kPi;
+        const Vector2 p = X(cx + std::cos(a) * rx, cy + std::sin(a) * ry);
+        const Color pc = shadeAt(c, 0.5f + 0.5f * std::sin(a));
+        gfx::triColors(o, prev, p, c, prevC, pc);
+        prev = p;
+        prevC = pc;
+    }
+}
+
+void convexLit(const Xf& X, const std::vector<Vector2>& pts, Color c) {
+    float y0 = 1e9f, y1 = -1e9f;
+    for (const Vector2& q : pts) {
+        y0 = std::min(y0, q.y);
+        y1 = std::max(y1, q.y);
+    }
+    const float h = std::max(0.001f, y1 - y0);
+    std::vector<Vector2> v;
+    std::vector<Color> col;
+    for (const Vector2& q : pts) {
+        v.push_back(X(q.x, q.y));
+        col.push_back(shadeAt(c, (q.y - y0) / h));
+    }
+    for (size_t i = 1; i + 1 < v.size(); ++i) gfx::triColors(v[0], v[i], v[i + 1], col[0], col[i], col[i + 1]);
+}
+
+// The glassy shine on a shape's upper part: white, fading out downwards.
+void shineEll(const Xf& X, float cx, float cy, float rx, float ry) {
+    const float sx = cx - rx * 0.16f, sy = cy - ry * 0.42f, srx = rx * 0.62f, sry = ry * 0.36f;
+    auto white = [](float t) { return Color{255, 255, 255, (unsigned char)(std::max(0.0f, 1.0f - t) * 175.0f)}; };
+    const Vector2 o = X(sx, sy);
+    Vector2 prev = X(sx + srx, sy);
+    Color prevC = white(0.5f);
+    for (int i = 1; i <= 24; ++i) {
+        const float a = float(i) / 24.0f * 2.0f * kPi;
+        const Vector2 p = X(sx + std::cos(a) * srx, sy + std::sin(a) * sry);
+        const Color pc = white(0.5f + 0.5f * std::sin(a));
+        gfx::triColors(o, prev, p, white(0.5f), prevC, pc);
+        prev = p;
+        prevC = pc;
+    }
+}
+
+void shinePoly(const Xf& X, const std::vector<Vector2>& pts) {
+    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+    for (const Vector2& q : pts) {
+        x0 = std::min(x0, q.x);
+        x1 = std::max(x1, q.x);
+        y0 = std::min(y0, q.y);
+        y1 = std::max(y1, q.y);
+    }
+    const float w = x1 - x0, h = y1 - y0;
+    if (w < 22 || h < 22) return;
+    const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+    std::vector<Vector2> v;
+    std::vector<Color> col;
+    for (const Vector2& q : pts) {
+        const float x = cx + (q.x - cx) * 0.8f, y = cy + (q.y - cy) * 0.8f - h * 0.08f;
+        const float t = (y - y0) / h;
+        v.push_back(X(x, y));
+        col.push_back(Color{255, 255, 255, (unsigned char)(std::max(0.0f, 0.55f - t) / 0.55f * 150.0f)});
+    }
+    for (size_t i = 1; i + 1 < v.size(); ++i) gfx::triColors(v[0], v[i], v[i + 1], col[0], col[i], col[i + 1]);
+}
+
+// A tube's shine: a pale stripe along the side the light comes from.
+void shineCap(const Xf& X, float ax, float ay, float bx, float by, float r) {
+    const float dx = bx - ax, dy = by - ay;
+    const float len = std::max(0.001f, std::sqrt(dx * dx + dy * dy));
+    float nx = -dy / len, ny = dx / len;
+    if (nx * -0.4f + ny * -0.9f < 0) {  // the light is up and to the left
+        nx = -nx;
+        ny = -ny;
+    }
+    const float o = r * 0.42f;
+    cap(X, ax + nx * o, ay + ny * o, bx + nx * o, by + ny * o, r * 0.3f, Color{255, 255, 255, 80});
+}
+
+float hash01(float x) {
+    const float s = std::sin(x) * 43758.5453f;
+    return s - std::floor(s);
+}
+
+// A soap bubble: a clear film with a bright rim and a shine.
+void bubble(Vector2 c, float r, float a) {
+    if (a <= 0.01f || r < 0.5f) return;
+    auto A = [&](float v) { return (unsigned char)std::clamp(v * a, 0.0f, 255.0f); };
+    DrawCircleV(c, r, Color{170, 235, 255, A(36)});
+    DrawRing(c, r * 0.8f, r, 0, 360, 28, Color{190, 245, 255, A(90)});
+    DrawRing(c, r * 0.94f, r * 1.04f, 0, 360, 28, Color{255, 255, 255, A(170)});
+    DrawCircleV({c.x - r * 0.38f, c.y - r * 0.38f}, r * 0.22f, Color{255, 255, 255, A(220)});
+    DrawCircleV({c.x + r * 0.4f, c.y + r * 0.42f}, r * 0.08f, Color{255, 255, 255, A(150)});
+}
+
+// Bubbles rising from (x, y) across w for h units (the character's units);
+// each one's place comes from the time alone.
+void bubbles(const Xf& X, float x, float y, float w, float h, int n, double now, float speed, float seed) {
+    for (int i = 0; i < n; ++i) {
+        const float s = seed + float(i) * 7.31f;
+        const float ph = std::fmod(float(now) * speed * (0.55f + 0.45f * hash01(s)) + hash01(s * 1.7f), 1.0f);
+        const float bx = x + (hash01(s * 2.3f) - 0.5f) * w + std::sin(ph * 9.0f + s) * 6.0f;
+        const float by = y - ph * h;
+        const float r = 4.0f + 8.0f * hash01(s * 3.1f);
+        bubble(X(bx, by), X.len(r), std::sin(ph * kPi));
+    }
+}
+
 // A ring between radii r0 and r1 from angle a0 to a1; ry squashes it.
 void arc(const Xf& X, float cx, float cy, float r0, float r1, float a0, float a1, Color c, float ry = 1.0f, int seg = 24) {
     for (int i = 0; i < seg; ++i) {
@@ -142,7 +271,7 @@ std::vector<Vector2> halfEllipse(float cx, float cy, float rx, float ry, bool lo
 // first and the colours over them, so the line runs only round the whole.
 class Ink {
 public:
-    explicit Ink(const Xf& X, float width = kLine) : X_(X), w_(width) {}
+    explicit Ink(const Xf& X, float width = kLine, bool gloss = true) : X_(X), w_(width), gloss_(gloss) {}
     Ink& e(float cx, float cy, float rx, float ry, Color col) {
         items_.push_back({0, {cx, cy, rx, ry, 0}, {}, col});
         return *this;
@@ -174,6 +303,23 @@ private:
     void one(const Item& it, bool outline) const {
         const float o = outline ? w_ : 0.0f;
         const Color col = outline ? kInk : it.col;
+        if (!outline && gloss_) {  // lit from above, with a shine
+            switch (it.kind) {
+                case 0:
+                    ellLit(X_, it.f[0], it.f[1], it.f[2], it.f[3], col);
+                    if (it.f[2] >= 9 && it.f[3] >= 9) shineEll(X_, it.f[0], it.f[1], it.f[2], it.f[3]);
+                    break;
+                case 1:
+                    cap(X_, it.f[0], it.f[1], it.f[2], it.f[3], it.f[4], col);
+                    if (it.f[4] >= 6) shineCap(X_, it.f[0], it.f[1], it.f[2], it.f[3], it.f[4]);
+                    break;
+                default:
+                    convexLit(X_, it.pts, col);
+                    shinePoly(X_, it.pts);
+                    break;
+            }
+            return;
+        }
         switch (it.kind) {
             case 0: ell(X_, it.f[0], it.f[1], it.f[2] + o, it.f[3] + o, col, 34); break;
             case 1: cap(X_, it.f[0], it.f[1], it.f[2], it.f[3], it.f[4] + o, col); break;
@@ -196,6 +342,7 @@ private:
     }
     Xf X_;
     float w_;
+    bool gloss_;
     std::vector<Item> items_;
 };
 
@@ -303,7 +450,7 @@ void mouth(const Xf& X, float cx, float cy, float w, const Face& f, Color lips, 
     const Color inside{70, 16, 40, 255};
     if (f.open < 0.01f) {
         if (grin) {
-            Ink(X, 3.2f).pv(halfEllipse(cx, cy - 3, w * 1.2f, w * 0.75f, true), inside).draw();
+            Ink(X, 3.2f, false).pv(halfEllipse(cx, cy - 3, w * 1.2f, w * 0.75f, true), inside).draw();
             poly(X, {{cx - w * 1.02f, cy - 3}, {cx + w * 1.02f, cy - 3}, {cx + w * 0.9f, cy + w * 0.16f}, {cx - w * 0.9f, cy + w * 0.16f}},
                  WHITE);
         } else if (lips.a > 0) {
@@ -320,7 +467,7 @@ void mouth(const Xf& X, float cx, float cy, float w, const Face& f, Color lips, 
         ell(X, cx, cy, rx + 3.2f, ry + 3.2f, lips);
         ell(X, cx, cy, rx, ry, inside);
     } else {
-        Ink(X, 3.2f).e(cx, cy, rx, ry, inside).draw();
+        Ink(X, 3.2f, false).e(cx, cy, rx, ry, inside).draw();
     }
     ell(X, cx, cy - ry * 0.55f, rx * 0.55f, ry * 0.25f, Color{250, 250, 245, 255});
     ell(X, cx + rx * 0.1f, cy + ry * 0.55f, rx * 0.55f, ry * 0.32f, Color{255, 110, 130, 255});
@@ -347,7 +494,7 @@ void mic(const Xf& X, float hx, float hy, float dx, float dy, Color grille) {
 // ------------------------------------------------------------------- Hype --
 
 struct HypeLook {
-    Color skin, skinShade, hair, beanie, beanieDark, hoodie, hoodieDark, pants, shoe, sole, phones, eyeWhite;
+    Color skin, skinShade, hair, beanie, beanieDark, pom, hoodie, hoodieDark, pants, shoe, sole, phones, eyeWhite;
     bool shade = false;
     Color glow = WHITE;
 };
@@ -357,16 +504,17 @@ HypeLook hypeLook(bool shade, Color tint, bool missing) {
     k.skin = {186, 120, 78, 255};
     k.skinShade = {150, 92, 60, 255};
     k.hair = {46, 30, 36, 255};
-    k.beanie = {255, 140, 42, 255};
-    k.beanieDark = {212, 92, 26, 255};
-    k.hoodie = {40, 214, 184, 255};
-    k.hoodieDark = {22, 156, 138, 255};
-    k.pants = {60, 64, 96, 255};
-    k.shoe = {248, 248, 252, 255};
-    k.sole = {150, 108, 255, 255};
-    k.phones = {150, 108, 255, 255};
+    k.beanie = {130, 214, 50, 255};
+    k.beanieDark = {80, 156, 28, 255};
+    k.pom = {242, 250, 255, 255};
+    k.hoodie = {48, 182, 240, 255};
+    k.hoodieDark = {26, 128, 196, 255};
+    k.pants = {46, 70, 128, 255};
+    k.shoe = {248, 250, 255, 255};
+    k.sole = {130, 214, 50, 255};
+    k.phones = {120, 220, 250, 255};
     k.eyeWhite = WHITE;
-    Color* all[] = {&k.skin, &k.skinShade, &k.hair, &k.beanie, &k.beanieDark, &k.hoodie,
+    Color* all[] = {&k.skin, &k.skinShade, &k.hair, &k.beanie, &k.beanieDark, &k.pom, &k.hoodie,
                     &k.hoodieDark, &k.pants, &k.shoe, &k.sole, &k.phones};
     if (shade) {
         k.shade = true;
@@ -393,7 +541,7 @@ void hypeHead(const Xf& H, const Face& f, const HypeLook& k) {
         const float a = kPi + kPi * float(i) / 18.0f;
         dome.push_back({-3 + std::cos(a) * 49, -22 + std::sin(a) * 44});
     }
-    Ink(H).e(-12, -68, 14, 13, k.beanie).pv(dome, k.beanie).draw();
+    Ink(H).e(-12, -68, 14, 13, k.pom).pv(dome, k.beanie).draw();
     for (int i = -2; i <= 2; ++i)
         line(H, -3 + float(i) * 15.0f, -30, -3 + float(i) * 9.0f, -58 + float(std::abs(i)) * 6.0f, 2.4f, k.beanieDark);
     Ink(H).p({{-54, -32}, {49, -32}, {51, -15}, {-55, -13}}, k.beanieDark).draw();
@@ -427,6 +575,7 @@ void drawHype(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
     Xf base{feet, sc};
     ell(base, 0, 0, 66, 11, fade(BLACK, 0.3f));
     if (shade) gfx::glow({feet.x, feet.y - 150 * sc}, 220 * sc, fade(s.tint, 0.28f + 0.2f * P.bop));
+    bubbles(base, 0, -30, 220, 320, 7, now, 0.16f, 1.0f);
     Xf X{{feet.x + P.dx * sc, feet.y + P.dy * sc}, sc, P.sx, P.sy, P.rot, flip};
     const Slot slot = slotOf(P, flip);
     const float sway = P.singing ? 0.0f : std::sin(float(now) * 2.0f) * 2.0f;
@@ -486,6 +635,8 @@ void drawHype(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
     }
     mic(X, nh.x, nh.y, kMicDir[slot].x, kMicDir[slot].y, Color{206, 212, 228, 255});
     Ink(X).e(nh.x, nh.y, 11, 10, k.skin).draw();
+    if (P.singing && !P.missing)  // the voice comes out as bubbles
+        bubbles(X, nh.x + kMicDir[slot].x * 40, nh.y + kMicDir[slot].y * 30, 34, 110, 4, now, 0.9f, 11.0f);
 }
 
 // ------------------------------------------------------------ Principal P --
@@ -552,7 +703,7 @@ void drawHorn(const Xf& X, const Horn& h, bool loud, double now) {
     const Vector2 g = hornGrip(h);
     Ink(X, 3.2f).c(h.from.x + h.d.x * 14 + h.side.x * 6, h.from.y + h.d.y * 14 + h.side.y * 6, g.x, g.y, 4.5f, Color{60, 58, 76, 255}).draw();
     Ink(X).p({at(0, -1), at(0, 1), at(1, 1), at(1, -1)}, Color{248, 248, 252, 255}).draw();
-    poly(X, {at(0.6f, -1), at(0.6f, 1), at(0.78f, 1), at(0.78f, -1)}, Color{236, 52, 82, 255});
+    poly(X, {at(0.6f, -1), at(0.6f, 1), at(0.78f, 1), at(0.78f, -1)}, Color{60, 200, 255, 255});
     const Vector2 r0 = at(1, -1), r1 = at(1, 1);
     line(X, r0.x, r0.y, r1.x, r1.y, 5, Color{196, 196, 212, 255});
     if (loud) {  // shout lines
@@ -573,6 +724,7 @@ void drawPrincipal(const CharacterState& s, const Pose& P, Vector2 feet, float s
     const Color shirt = tone({250, 250, 252, 255}), tie = tone({255, 208, 44, 255}), skin = tone({246, 206, 178, 255});
     Xf base{feet, sc};
     ell(base, 0, 0, 52, 9, fade(BLACK, 0.3f));
+    bubbles(base, 0, -30, 200, 400, 6, now, 0.14f, 2.0f);
     Xf X{{feet.x + P.dx * sc, feet.y + P.dy * sc}, sc, P.sx, P.sy, P.rot, flip};
     const Slot slot = slotOf(P, flip);
     // the far arm: a hand on the hip when quiet
@@ -619,6 +771,8 @@ void drawPrincipal(const CharacterState& s, const Pose& P, Vector2 feet, float s
     }
     drawHorn(X, horn, P.singing && !P.missing, now);
     Ink(X).e(grip.x, grip.y, 8, 7.5f, skin).draw();
+    if (P.singing && !P.missing)
+        bubbles(X, horn.from.x + horn.d.x * 70, horn.from.y + horn.d.y * 70, 40, 110, 4, now, 0.9f, 12.0f);
 }
 
 // ---------------------------------------------------------------- DJ Hand --
@@ -686,20 +840,20 @@ void drawHand(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
     ell(base, 0, 0, 96, 13, fade(BLACK, 0.32f));
     // the DJ booth stays on the floor
     Xf B{feet, sc, 1, 1, 0, flip};
-    Ink(B).p({{-84, -98}, {84, -98}, {76, 0}, {-76, 0}}, Color{38, 36, 56, 255}).draw();
+    Ink(B).p({{-84, -98}, {84, -98}, {76, 0}, {-76, 0}}, Color{36, 104, 156, 255}).draw();
     line(B, -78, -74, 78, -74, 4, look.cuff);
     gfx::glow(B(0, -74), 110 * sc, fade(look.cuff, 0.25f + 0.25f * P.bop));
     for (float x : {-42.0f, 42.0f}) {
         const float pump = 1.0f + 0.12f * P.bop;
-        Ink(B, 3.0f).e(x, -36, 20 * pump, 20 * pump, Color{72, 70, 94, 255}).draw();
-        ell(B, x, -36, 9 * pump, 9 * pump, Color{24, 22, 36, 255});
+        Ink(B, 3.0f).e(x, -36, 20 * pump, 20 * pump, Color{196, 210, 230, 255}).draw();
+        ell(B, x, -36, 9 * pump, 9 * pump, Color{20, 40, 70, 255});
         ell(B, x - 4, -40, 3, 3, fade(WHITE, 0.4f));
     }
-    Ink(B).p({{-92, -112}, {92, -112}, {86, -96}, {-86, -96}}, Color{150, 156, 180, 255}).draw();
+    Ink(B).p({{-92, -112}, {92, -112}, {86, -96}, {-86, -96}}, Color{200, 214, 232, 255}).draw();
     // the record spins, and scratches while the Hand sings
     const float spin = float(now) * 4.0f + (P.singing ? std::sin(float(now - s.singStart) * 22.0f) * 1.4f : 0.0f);
     Ink(B, 3.0f).e(-32, -118, 40, 10, Color{20, 18, 28, 255}).draw();
-    ell(B, -32, -118, 12, 3.2f, Color{255, 60, 90, 255});
+    ell(B, -32, -118, 12, 3.2f, Color{130, 214, 50, 255});
     line(B, -32 + std::cos(spin) * 16, -118 + std::sin(spin) * 4, -32 + std::cos(spin) * 36, -118 + std::sin(spin) * 9, 2,
          fade(WHITE, 0.4f));
     line(B, 24, -124, -2, -118, 3, Color{214, 218, 234, 255});
@@ -715,6 +869,7 @@ void drawHand(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
         if (P.dir == 2) { lift = -24; spread = 1.5f; }
         if (P.dir == 1) { lift = 16; curl = 0.5f; }
     }
+    bubbles(B, 0, -70, 160, 330, 8, now, 0.22f, 3.0f);  // the speakers blow bubbles
     Xf G{{feet.x + P.dx * sc * 0.6f, feet.y + (-236 + hover + lift + P.dy * 0.5f) * sc}, sc, P.sx, P.sy, P.rot + tilt, flip};
     gfx::glow(G(0, 0), 170 * sc, fade(look.cuff, 0.18f + 0.18f * P.bop));
     djGlove(G, faceFor(P, now, flip, 2.6f), look, spread, curl, point, now);
@@ -808,11 +963,12 @@ void boneArm(const Xf& X, float ax, float ay, float bx, float by, float bend, Co
 void drawDemise(const CharacterState& s, const Pose& P, Vector2 feet, float sc, double now, bool flip) {
     auto tone = [&](Color c) { return P.missing ? mix(c, kMissTone, 0.38f) : c; };
     const Color jacket = tone({42, 38, 54, 255}), jacketHi = tone({92, 86, 112, 255}), tee = tone({232, 38, 66, 255});
-    const Color jeans = tone({46, 44, 60, 255}), boots = tone({30, 26, 38, 255});
+    const Color jeans = tone({40, 50, 84, 255}), boots = tone({30, 26, 38, 255});
     const Color silver{208, 214, 230, 255}, red{255, 48, 84, 255}, strap{30, 26, 38, 255};
     const SkullLook skull = skullLook(P.missing);
     Xf base{feet, sc};
     ell(base, 0, 0, 80, 12, fade(BLACK, 0.35f));
+    bubbles(base, 0, -30, 240, 420, 6, now, 0.13f, 4.0f);
     Xf X{{feet.x + P.dx * sc, feet.y + P.dy * sc}, sc, P.sx, P.sy, P.rot, flip};
     const Slot slot = slotOf(P, flip);
     // the far arm
@@ -865,6 +1021,8 @@ void drawDemise(const CharacterState& s, const Pose& P, Vector2 feet, float sc, 
     static const float kNearBend[5] = {14, 10, 14, 12, -12};
     mic(X, kNear[slot].x, kNear[slot].y, kMicDir[slot].x, kMicDir[slot].y, red);
     boneArm(X, 32, -236, kNear[slot].x, kNear[slot].y, kNearBend[slot], jacket, skull.bone);
+    if (P.singing && !P.missing)
+        bubbles(X, kNear[slot].x + kMicDir[slot].x * 40, kNear[slot].y + kMicDir[slot].y * 30, 34, 110, 4, now, 0.9f, 13.0f);
 }
 
 }  // namespace

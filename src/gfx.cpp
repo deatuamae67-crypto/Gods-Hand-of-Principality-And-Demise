@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "rlgl.h"
 
 namespace gh::gfx {
 
@@ -271,6 +272,34 @@ void tri(Vector2 a, Vector2 b, Vector2 c, Color col) {
     const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if (cross > 0) DrawTriangle(a, c, b, col);
     else DrawTriangle(a, b, c, col);
+}
+// A triangle with its own colour at each corner, blended across it (drawn as
+// raylib draws its triangles: a quad on the shapes texture, counter-clockwise).
+void triColors(Vector2 a, Vector2 b, Vector2 c, Color ca, Color cb, Color cc) {
+    const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (cross > 0) {
+        std::swap(b, c);
+        std::swap(cb, cc);
+    }
+    const Texture2D tex = GetShapesTexture();
+    const Rectangle r = GetShapesTextureRectangle();
+    const float u0 = r.x / float(tex.width), v0 = r.y / float(tex.height);
+    const float u1 = (r.x + r.width) / float(tex.width), v1 = (r.y + r.height) / float(tex.height);
+    rlSetTexture(tex.id);
+    rlBegin(RL_QUADS);
+    rlColor4ub(ca.r, ca.g, ca.b, ca.a);
+    rlTexCoord2f(u0, v0);
+    rlVertex2f(a.x, a.y);
+    rlColor4ub(cb.r, cb.g, cb.b, cb.a);
+    rlTexCoord2f(u0, v1);
+    rlVertex2f(b.x, b.y);
+    rlTexCoord2f(u1, v1);
+    rlVertex2f(b.x, b.y);
+    rlColor4ub(cc.r, cc.g, cc.b, cc.a);
+    rlTexCoord2f(u1, v0);
+    rlVertex2f(c.x, c.y);
+    rlEnd();
+    rlSetTexture(0);
 }
 void quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color col) {
     tri(a, b, c, col);

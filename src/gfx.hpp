@@ -62,6 +62,7 @@ Color brighten(Color c, float amount);  // -1..1
 
 // ---- shapes (vertex order does not matter)
 void tri(Vector2 a, Vector2 b, Vector2 c, Color col);
+void triColors(Vector2 a, Vector2 b, Vector2 c, Color ca, Color cb, Color cc);  // blended corner colours
 void quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color col);
 void convex(const std::vector<Vector2>& pts, Color col);  // convex polygon
 void capsule(Vector2 a, Vector2 b, float radius, Color col);
