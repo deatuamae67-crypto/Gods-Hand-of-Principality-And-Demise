@@ -1993,7 +1993,7 @@ void PlayState::drawWatermark() {
     const Settings& s = app().settings;
     if (!s.watermark || s.hideHud) return;
     // As the issue asked: "Gods Hand engine v.(version) (platform) edition".
-    static const std::string text = std::string("God's Hand Engine v." GH_VERSION " ") + platform::kName + " Edition";
+    static const std::string text = std::string("God's Hand Engine v." GH_VERSION " ") + platform::kName + " Slop Edition";
     const PsychUi& ui = psychUi();
     if (psych_ && ui.active() && ui.font()) ui.text(text, 2, gfx::H - 22, 16, fade(WHITE, 0.85f), -1, 1.0f);
     else gfx::text(FontId::Ui, text, 8, gfx::H - 26, 18, fade(kIvory, 0.75f), Align::Left, 1.2f);
