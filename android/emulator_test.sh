@@ -56,11 +56,43 @@ tap_wait() {  # x, y, pattern, seconds
 adb shell cmd activity wait-for-broadcast-idle > /dev/null 2>&1 || true
 sleep 10
 
+# Screen size in the game's (landscape) orientation.
+read -r W H < <(adb shell wm size | tr -d '\r' | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -n1)
+if [ "${W:-0}" -lt "${H:-0}" ]; then t=$W; W=$H; H=$t; fi
+# Button positions, as laid out by src/touch_ui.cpp.
+u=$(( (H < W ? H : W) * 1000 / 720 ))   # unit x1000
+m=$(( 24 * u / 1000 )); s=$(( 92 * u / 1000 )); g=$(( 10 * u / 1000 ))
+cx=$(( m + s * 3 / 2 + g )); cy=$(( H - m - s * 3 / 2 - g ))
+down_x=$cx; down_y=$(( cy + s + g ))
+ok=$(( 124 * u / 1000 ))
+ok_x=$(( W - m - ok / 2 )); ok_y=$(( H - m - 36 * u / 1000 - ok / 2 ))
+pause_x=$(( m + 50 * u / 1000 )); pause_y=$(( m + 29 * u / 1000 ))
+# The intro's SKIP button: a labelled button in the top right corner.
+skip_x=$(( W - m - 50 * u / 1000 )); skip_y=$(( m + 29 * u / 1000 ))
+echo "screen ${W}x${H}: down ($down_x,$down_y) ok ($ok_x,$ok_y) pause ($pause_x,$pause_y) skip ($skip_x,$skip_y)"
+
+# The game starts with the engine's intro when the build has one: its SKIP
+# button must take the game on to the title.
+skip_intro() {
+  local end=$((SECONDS + 40))
+  while [ $SECONDS -lt $end ]; do
+    [ "$(seen 'screen .*TitleState')" -ge 1 ] && return 0
+    if [ "$(seen 'screen .*IntroState')" -ge 1 ]; then
+      sleep 2
+      tap_wait $skip_x $skip_y "screen .*TitleState" 20
+      wait_log "intro skipped at" 5
+      return 0
+    fi
+    sleep 1
+  done
+  fail "the game did not log its first screen"
+}
+
 adb install -r "$apk" || fail "install"
 # The first launch creates the game's folder (Android does not let adb create it).
 adb logcat -c
 adb shell am start -W -n "$pkg/.GameActivity" || fail "start"
-wait_log "screen .*TitleState" 30
+skip_intro
 # A song made of a plain audio file (AutoChart) checks that audio files load.
 python3 - "$out/tone.wav" <<'PY'
 import math, struct, sys, wave
@@ -76,24 +108,13 @@ if adb push "$out/tone.wav" "/sdcard/Android/data/$pkg/files/songs/Test Tone.wav
   adb shell am force-stop "$pkg"; sleep 1
   adb logcat -c
   adb shell am start -W -n "$pkg/.GameActivity" || fail "restart"
+  skip_intro
 else
   echo "note: cannot copy files into the game's folder here, skipping the audio file check"
 fi
 sleep 3
 alive "start"
 
-# Screen size in the game's (landscape) orientation.
-read -r W H < <(adb shell wm size | tr -d '\r' | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -n1)
-if [ "${W:-0}" -lt "${H:-0}" ]; then t=$W; W=$H; H=$t; fi
-# Button positions, as laid out by src/touch_ui.cpp.
-u=$(( (H < W ? H : W) * 1000 / 720 ))   # unit x1000
-m=$(( 24 * u / 1000 )); s=$(( 92 * u / 1000 )); g=$(( 10 * u / 1000 ))
-cx=$(( m + s * 3 / 2 + g )); cy=$(( H - m - s * 3 / 2 - g ))
-down_x=$cx; down_y=$(( cy + s + g ))
-ok=$(( 124 * u / 1000 ))
-ok_x=$(( W - m - ok / 2 )); ok_y=$(( H - m - 36 * u / 1000 - ok / 2 ))
-pause_x=$(( m + 50 * u / 1000 )); pause_y=$(( m + 29 * u / 1000 ))
-echo "screen ${W}x${H}: down ($down_x,$down_y) ok ($ok_x,$ok_y) pause ($pause_x,$pause_y)"
 
 wait_log "screen .*TitleState" 30
 # The game must draw for the landscape window, even when it was started upright.

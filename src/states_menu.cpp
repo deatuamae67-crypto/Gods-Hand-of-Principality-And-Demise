@@ -14,6 +14,7 @@
 #include "gfx.hpp"
 #include "platform.hpp"
 #include "raylib.h"
+#include "video.hpp"
 
 #ifndef GH_VERSION
 #define GH_VERSION "dev"  // set by CMake from project(VERSION)
@@ -116,6 +117,73 @@ struct PcmJob {
 void waitForBackgroundJobs() {
     for (int i = 0; i < 600 && g_jobs.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
+
+// ------------------------------------------------------------------ Intro --
+
+// The engine's intro (issue #31): assets/videos/intro.mpg before the title,
+// full screen with its sound (MPEG-1, which every platform plays). ENTER skips
+// it on a computer (Space, ESC and the gamepad's buttons too); on a
+// touchscreen the SKIP button does, and so does the back button.
+std::string introPath() { return app().base + "assets/videos/intro.mpg"; }
+
+class IntroState : public State {
+public:
+    bool wantsMenuMusic() const override { return false; }
+    TouchLayout touchLayout() const override {
+        TouchLayout t;
+        t.pad = false;
+        t.keys = {{"SKIP", KEY_ENTER}};
+        return t;
+    }
+    void enter() override {
+        App& a = app();
+        shownAt_ = a.now;
+        if (video_.open(introPath(), false, true)) {
+            video_.setVolume(a.settings.musicVol);
+            platform::log("intro " + std::to_string(video_.width()) + "x" + std::to_string(video_.height()) + ", " +
+                          std::to_string(int(video_.duration() * 1000)) + " ms");
+        } else {
+            leave();
+        }
+    }
+    void update(double dt) override {
+        App& a = app();
+        if (leaving_) return;
+        video_.update(std::min(dt, 0.1));  // a hitch does not jump ahead
+        if (a.input.accept() || a.input.back()) {
+            platform::log("intro skipped at " + std::to_string(int((a.now - shownAt_) * 1000)) + " ms");
+            leave();
+        } else if (video_.ended()) {
+            leave();
+        }
+    }
+    void draw() override {
+        App& a = app();
+        gfx::beginCanvas();
+        DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
+        if (video_.width() > 0 && video_.height() > 0) {  // the whole picture, as large as it fits
+            const float vw = float(video_.width()), vh = float(video_.height());
+            const float s = std::min(gfx::W / vw, gfx::H / vh);
+            DrawTexturePro(video_.texture(), {0, 0, vw, vh}, {(gfx::W - vw * s) * 0.5f, (gfx::H - vh * s) * 0.5f, vw * s, vh * s}, {0, 0},
+                           0, WHITE);
+        }
+        if (!a.touchMode) {  // the way out, after a moment
+            const float al = saturate((float(a.now - shownAt_) - 0.6f) / 0.4f) * 0.8f;
+            if (al > 0.01f) gfx::text(FontId::Ui, "ENTER  skip", gfx::W - 28, gfx::H - 48, 26, fade(WHITE, al), Align::Right, 2.0f);
+        }
+        gfx::endCanvas();
+    }
+
+private:
+    void leave() {
+        leaving_ = true;
+        video_.setVolume(0);  // the picture stays while the screen fades
+        app().change(makeTitle());
+    }
+    VideoPlayer video_;
+    bool leaving_ = false;
+    double shownAt_ = 0;
+};
 
 // ------------------------------------------------------------------ Title --
 
@@ -787,6 +855,8 @@ private:
 };
 
 std::unique_ptr<State> makeTitle() { return std::make_unique<TitleState>(); }
+std::unique_ptr<State> makeIntro() { return std::make_unique<IntroState>(); }
+bool introWanted() { return app().settings.introVideo && FileExists(introPath().c_str()); }
 std::unique_ptr<State> makeMainMenu() { return std::make_unique<MainMenuState>(); }
 std::unique_ptr<State> makeStory() { return std::make_unique<StoryState>(); }
 std::unique_ptr<State> makeFreeplay() { return std::make_unique<FreeplayState>(); }

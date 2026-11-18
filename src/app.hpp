@@ -214,6 +214,8 @@ App& app();
 
 // State factories
 std::unique_ptr<State> makeTitle();
+std::unique_ptr<State> makeIntro();  // the engine's intro video (assets/videos/intro.mpg), then the title
+bool introWanted();                  // Options: Intro video, and the video is there
 std::unique_ptr<State> makeMainMenu();
 std::unique_ptr<State> makeStory();
 std::unique_ptr<State> makeFreeplay();

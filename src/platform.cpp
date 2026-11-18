@@ -369,6 +369,7 @@ void prepareDataDir(const std::string& base) {
     if (!app || !app->activity || !app->activity->assetManager) return;
     copyAssetDir(app->activity->assetManager, "assets/fonts", base + "assets/fonts/");
     copyAssetDir(app->activity->assetManager, "songs", base + "songs/");
+    copyAssetDir(app->activity->assetManager, "assets/videos", base + "assets/videos/");  // the engine's intro
 }
 
 void setVsync(bool on) {

@@ -64,12 +64,17 @@ mkdir -p "$work/assets/licenses"
 cp "$root/LICENSE" "$work/assets/"
 cp "$root"/licenses/*.txt "$work/assets/licenses/"
 cp "$root"/songs/* "$work/assets/songs/"
+# The engine's intro video (MPEG-1), when the source has one.
+if ls "$root"/assets/videos/*.mpg > /dev/null 2>&1; then
+  mkdir -p "$work/assets/assets/videos"
+  cp "$root"/assets/videos/*.mpg "$work/assets/assets/videos/"
+fi
 
 # ---- resources, manifest and packaging
 "$bt/aapt2" compile --dir "$here/res" -o "$work/res.zip"
 "$bt/aapt2" link -o "$work/unsigned.apk" -I "$jar" --manifest "$here/AndroidManifest.xml" \
   --min-sdk-version 24 --target-sdk-version 34 --version-code "$code" --version-name "$version" \
-  -A "$work/assets" "$work/res.zip"
+  -0 mpg -A "$work/assets" "$work/res.zip"
 (cd "$work/dex" && zip -q -X "$work/unsigned.apk" classes.dex)
 (cd "$work" && zip -q -X -r "$work/unsigned.apk" lib)
 "$bt/zipalign" -f -p 4 "$work/unsigned.apk" "$work/aligned.apk"
