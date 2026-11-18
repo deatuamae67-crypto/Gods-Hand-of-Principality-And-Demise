@@ -71,6 +71,7 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Health bar opacity | The health bar and the icons. | 0 to 1 |
 | Hide HUD | Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD. | on / off |
 | Watermark | "God's Hand Engine v.(version) (system) Edition" in the bottom-left corner of songs, as JS Engine shows its own. | on / off |
+| Intro video | The engine's intro before the title screen. ENTER skips it (the SKIP button on a touchscreen). | on / off |
 | Audio visualizer | Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it is, how thick the notes are, your hits and misses, and your health. | on / off |
 | Score text zoom on hit | The score line grows a little on each note you hit, as in Psych. | on / off |
 | Botplay text | BOTPLAY (or REPLAY) on screen while the game plays by itself. | on / off |
