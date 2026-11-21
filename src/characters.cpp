@@ -62,6 +62,13 @@ Color charColor(CharId id) {
 }
 
 void CharacterState::sing(int dir, double now, double holdSec) {
+    const bool lit = now < singUntil && missUntil < now;
+    singUntil = std::max(singUntil, now + std::max(0.32, holdSec + 0.18));
+    // Fast songs and spam charts (issue #36): the same pose starts over at
+    // most every 0.08 s, and another direction comes at most 30 times a
+    // second, so the pose shows instead of flickering.
+    if (lit && dir == singDir && now - singStart < 0.08) return;
+    if (lit && dir != singDir && now - singStart < 1.0 / 30.0) return;
     singDir = dir;
     singStart = now;
     singUntil = now + std::max(0.32, holdSec + 0.18);

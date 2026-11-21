@@ -188,6 +188,7 @@ private:
     // processor use, hardware), sampled twice a second.
     void drawFpsPanel();
     double statsAt_ = -10, cpuAt_ = 0, cpuSecs_ = 0;
+    float fpsPanelW_ = 0, fpsPanelH_ = 0;  // the FPS panel's size as drawn (it eases to fit)
     float cpuUse_ = 0;
     unsigned long long memNow_ = 0, memPeak_ = 0, sysUsed_ = 0;
     double gpuBusy_ = -1;  // the graphics card's use (-1: the system does not say)

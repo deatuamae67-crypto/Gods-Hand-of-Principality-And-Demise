@@ -198,8 +198,13 @@ private:
     void updateJsEngine(double dt);
     void drawNotices();
     void drawBotEnergy();
-    double shownLengthMs() const { return fakeLenMs_ >= 0 ? fakeLenMs_ : chart_.lengthMs; }
-    struct NoteRef { uint8_t side, lane; uint32_t idx; };
+    // The song's length: its audio's (Psych's FlxG.sound.music.length), or
+    // the end of the last note when it has no audio.
+    double songEndMs() const {
+        return audioLenMs_ > 0 ? audioLenMs_ : chart_.lengthMs;
+    }
+    double shownLengthMs() const { return fakeLenMs_ >= 0 ? fakeLenMs_ : songEndMs(); }
+    struct NoteRef { uint8_t side; uint16_t lane; uint32_t idx; };
     LaneNote* noteRef(std::string_view group, int index, int* sideOut = nullptr, int* laneOut = nullptr);
 
     struct Popup {
@@ -260,7 +265,14 @@ private:
     void findGfSections();
     float camZoom_ = 1, hudZoom_ = 1, beatPulse_ = 0, minePulse_ = 0, healthShown_ = 1;
     Vector2 camFocus_{640, 370};
-    float confirm_[2][kMaxKeys] = {};
+    // The receptors' hit animation, as Psych's StrumNote (issue #36): it starts
+    // over at every hit (confirmAt_) and goes back to static at confirmUntil_
+    // - 1.25 steps after the opponent's and the bot's hits, so it follows the
+    // BPM - or, after the player's own press, when the key is let go.
+    double confirmAt_[2][kMaxKeys] = {}, confirmUntil_[2][kMaxKeys] = {};
+    bool confirmHeld_[kMaxKeys] = {};  // the key held now hit a note
+    void strumConfirm(int side, int lane);
+    float confirmGlow(int side, int lane, double* since = nullptr) const;  // 0: not lit
     int heldCount_[kMaxKeys] = {};
     std::vector<int> keyLane_ = std::vector<int>(Input::kMaxCodes, -1);
     std::vector<Popup> popups_;
@@ -361,6 +373,7 @@ private:
     scene::ShaderPtr invertFx_, glitchFx_, glitchHudFx_;  // Dek Engine's "Invert" and "Glitch Shader add"
     scene::ShaderPtr blockedFx_;                          // SCReboot's "Toggle Blocked Glitch Effect"
     double fakeLenMs_ = -1, fakeLenFrom_ = 0, fakeLenTo_ = 0, fakeLenT_ = 0, fakeLenDur_ = 0;
+    double audioLenMs_ = 0;  // the song's audio, 0 without audio
     std::string songNameShown_;  // "Change Song Name" ("" = the chart's title)
     int rainbowEndStep_ = -1;
     scene::ShaderPtr rainbow_;

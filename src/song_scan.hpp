@@ -58,6 +58,13 @@ void scanModsDir(const std::string& modsDir, SongScan& out);
 // folders of its own mod first, then every other mod's (mods reuse each
 // other's characters, stages, images and sounds).
 std::vector<std::string> sharedRootsFor(const SongScan& scan, const SongEntry& e);
+// Freeplay's icon for a mod song (issue #36): the health icon of the
+// character its chart names ("player2"), as Psych's Freeplay shows it - that
+// character's "healthicon" (characters/<name>.json) and images/icons/
+// icon-<icon>.png, from the song's own folders or the shared ones. "" when the
+// chart names no character or no folder has an icon for it. Reads only the
+// chart's first and last 96 KB, so it is quick for charts of any size.
+std::string findSongIcon(const SongEntry& e, const std::vector<std::string>& sharedRoots);
 
 // Length of an audio file from its headers (WAV, Ogg Vorbis/Opus, MP3, FLAC,
 // QOA), in seconds; -1 when it cannot tell.

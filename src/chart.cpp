@@ -347,7 +347,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
         Note n;
         n.time = t;
         n.length = (std::isfinite(l) && l >= stepMs * 0.999) ? l : 0.0;
-        n.lane = uint8_t(di % keys);
+        n.lane = uint16_t(di % keys);
         n.stack = std::max<uint16_t>(1, stack);
         if (v1) n.side = di < keys ? 1 : 0;
         else n.side = ((di < keys) ? must : !must) ? 1 : 0;
@@ -355,7 +355,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
             const bool focusPlayer = must;
             const bool player = di < sideKeys[focusPlayer ? 1 : 0] ? focusPlayer : !focusPlayer;
             n.side = player ? 1 : 0;
-            n.lane = uint8_t(di % sideKeys[n.side]);
+            n.lane = uint16_t(di % sideKeys[n.side]);
         }
         if (hasTypeName) {
             applyNoteType(typeName, n, out);
@@ -641,7 +641,7 @@ static bool parsePulseForge(const json::Document& doc, Chart& out, std::string& 
         Note n;
         n.time = t;
         n.length = std::isfinite(len) && len > 0 ? len : 0;
-        n.lane = uint8_t(lane % out.keys);
+        n.lane = uint16_t(lane % out.keys);
         n.side = owner == 0 ? 1 : 0;
         n.stack = std::max<uint16_t>(1, stack);
         if (owner == 2) n.flags |= kFlagGF;

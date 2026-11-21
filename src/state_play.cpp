@@ -203,7 +203,7 @@ void PlayState::update(double dt) {
     // The audio offset is for the player's ears; a recording is in sync by itself.
     songMs_ = a.mixer.time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
     if (rendering_) {
-        const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(chart_.lengthMs / 1000.0);
+        const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(std::max(songEndMs(), chart_.lengthMs) / 1000.0);
         a.renderLabel = TextFormat("%d:%02d / %d:%02d", at / 60, at % 60, len / 60, len % 60);
     }
     handleInput();
@@ -245,7 +245,9 @@ void PlayState::update(double dt) {
     for (int side = 0; side < 2; ++side)
         for (int l = 0; l < chart_.keys; ++l)
             if (session_.isHolding(side, l)) {
-                confirm_[side][l] = std::max(confirm_[side][l], 0.7f);
+                // Psych hits a hold's pieces one step apart, each starting the
+                // receptor's animation over.
+                if (now - confirmAt_[side][l] >= chart_.stepMs(songMs_) / 1000.0 / rate_) strumConfirm(side, l);
                 CharacterState& c = charOf(side);
                 c.singUntil = std::max(c.singUntil, now + 0.12);
             }
@@ -273,8 +275,6 @@ void PlayState::update(double dt) {
     updateVisualizer(dt);
     beatPulse_ = std::max(0.0f, beatPulse_ - float(dt) * 4.0f);
     minePulse_ = std::max(0.0f, minePulse_ - float(dt) * 3.0f);
-    for (auto& side : confirm_)
-        for (float& c : side) c = std::max(0.0f, c - float(dt) * 5.0f);
     healthShown_ = approach(healthShown_, float(session_.health), 10.0f, float(dt));
     if (speedTweenDur_ > 0) {
         speedTweenT_ = std::min(speedTweenDur_, speedTweenT_ + dt);
@@ -292,9 +292,11 @@ void PlayState::update(double dt) {
             return;
         }
     }
-    const double audioEnd = prep_.inst ? a.mixer.lengthSec() * 1000.0 : 0.0;
-    const double endAt = std::max(chart_.lengthMs + 800.0 * rate_, std::min(audioEnd, chart_.lengthMs + 8000.0 * rate_));
-    if ((songMs_ >= endAt && session_.allResolved()) || songMs_ > chart_.lengthMs + 20000.0) finish();
+    // The song ends with its audio, as in Psych (issue #36), not some time
+    // after the last note; without audio, or with notes past its end, just
+    // after the last note.
+    const double endAt = std::max(songEndMs(), chart_.lengthMs + 800.0 * rate_);
+    if ((songMs_ >= endAt && session_.allResolved()) || songMs_ > endAt + 20000.0) finish();
 }
 
 void PlayState::draw() {
@@ -430,12 +432,19 @@ void PlayState::setup() {
             for (int l = 0; l < chart_.keys; ++l) {
                 const auto& v = session_.lane(side, l);
                 for (size_t i = 0; i < v.size(); ++i)
-                    if (v[i].id < refs.size()) refs[v[i].id] = NoteRef{uint8_t(side), uint8_t(l), uint32_t(i)};
+                    if (v[i].id < refs.size()) refs[v[i].id] = NoteRef{uint8_t(side), uint16_t(l), uint32_t(i)};
             }
         noteOrder_ = std::move(refs);
     }
 
     findGfSections();
+    // The audio's length as Psych counts it (the instrumental's, or the
+    // longest voice track's without one), known before the scripts start.
+    audioLenMs_ = 0;
+    if (prep_.inst) audioLenMs_ = double(prep_.inst->frames()) * 1000.0 / Mixer::kRate;
+    else
+        for (const PcmPtr* t : {&prep_.voiceP, &prep_.voiceO})
+            if (*t) audioLenMs_ = std::max(audioLenMs_, double((*t)->frames()) * 1000.0 / Mixer::kRate);
     creating_ = true;  // onCreate / onCreatePost: no note has come yet
     psych_ = !entry_->builtin && setupPsych();
     creating_ = false;
@@ -537,8 +546,9 @@ void PlayState::restart() {
     sessionFresh_ = false;
     popups_.clear();
     fx_.clear();
-    for (auto& s : confirm_)
-        for (float& c : s) c = 0;
+    for (int s = 0; s < 2; ++s)
+        for (int l = 0; l < kMaxKeys; ++l) confirmAt_[s][l] = confirmUntil_[s][l] = 0;
+    for (bool& b : confirmHeld_) b = false;
     for (int& h : heldCount_) h = 0;
     for (bool& t : touchDown_) t = false;
     record_.events.clear();
@@ -642,15 +652,36 @@ void PlayState::handleInput() {
     }
 }
 
+void PlayState::strumConfirm(int side, int lane) {
+    if (lane < 0 || lane >= kMaxKeys) return;
+    const double now = app().now;
+    confirmAt_[side][lane] = now;
+    // A note hit by the player's own key: lit while the key stays down. The
+    // opponent's, the bot's and lanes with no key: 1.25 steps of the song's
+    // tempo (Psych: Conductor.stepCrochet * 1.25 / 1000 / playbackRate).
+    if (side == 1 && heldCount_[lane] > 0 && !cfg_.botplay) confirmHeld_[lane] = true;
+    else confirmUntil_[side][lane] = now + chart_.stepMs(songMs_) * 1.25 / 1000.0 / rate_;
+}
+
+float PlayState::confirmGlow(int side, int lane, double* since) const {
+    const double now = app().now;
+    const bool lit = (side == 1 && confirmHeld_[lane] && heldCount_[lane] > 0) || now < confirmUntil_[side][lane];
+    if (!lit) return 0;
+    const double t = now - confirmAt_[side][lane];
+    if (since) *since = t;
+    return 0.65f + 0.35f * float(std::max(0.0, 1.0 - t * 6.0));  // a flash at the hit, then steady
+}
+
 void PlayState::laneDown(int lane, double t) {
     session_.press(lane, t);
-    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint8_t(lane), true});
+    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint16_t(lane), true});
     if (scripts_) scripts_->call("onKeyPress", {scene::Value(double(lane))});
 }
 
 void PlayState::laneUp(int lane, double t) {
     session_.release(lane, t);
-    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint8_t(lane), false});
+    if (lane >= 0 && lane < kMaxKeys) confirmHeld_[lane] = false;  // Psych: back to static on release
+    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint16_t(lane), false});
     if (scripts_) scripts_->call("onKeyRelease", {scene::Value(double(lane))});
 }
 
@@ -774,7 +805,7 @@ void PlayState::handleNoteEvents() {
         if (ev.type == GameEvent::PlayerHit || ev.type == GameEvent::OpponentHit) zoomingOn_ = true;
         switch (ev.type) {
             case GameEvent::PlayerHit: {
-                confirm_[1][ev.lane] = 1.0f;
+                strumConfirm(1, ev.lane);
                 vis_.hit(int(ev.rating));
                 if (!(ev.flags & kFlagNoAnim)) charOf(1).sing(dir, now, ev.length / 1000.0 / rate_);
                 a.mixer.setTrackVolume(Mixer::kVoicePlayer, 1.0f);
@@ -789,7 +820,7 @@ void PlayState::handleNoteEvents() {
                 // Every note its own hitsound, on its sample of the song
                 // (the moment of the press; the note's own time for bots).
                 if (a.settings.hitsoundVol > 0)
-                    a.mixer.hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol);
+                    a.mixer.hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol, double(ev.stack));
                 if (psych_) psychNoteHit(ev, false);
                 scoreDirty_ = true;
                 scoreDirtyMiss_ = false;
@@ -818,7 +849,7 @@ void PlayState::handleNoteEvents() {
                 if (psych_) psychMiss(ev, false);
                 break;
             case GameEvent::OpponentHit:
-                confirm_[0][ev.lane] = 1.0f;
+                strumConfirm(0, ev.lane);
                 vis_.opponentHit();
                 if (!(ev.flags & kFlagNoAnim)) charOf(0).sing(dir, now, ev.length / 1000.0 / rate_);
                 if (psych_) psychNoteHit(ev, true);
@@ -1221,12 +1252,13 @@ void PlayState::drawLanes() {
             }
             if (st.visible && alphaStrum > 0.001f) {
                 keepOrder({c.x - size * 0.5f, c.y - size * 0.5f, size, size}, -1);
-                float conf = confirm_[side][lane];
+                double since = 0;
+                float conf = confirmGlow(side, lane, &since);
                 if (side == 0 && !s.opponentStrums) conf = 0;
                 const bool pressed = side == 1 && heldCount_[lane] > 0 && !cfg_.botplay;
                 const int sstate = conf > 0.01f ? 2 : pressed ? 1 : 0;
                 if (sstate) ui.beginDir(dir);  // idle receptors stay grey
-                const bool drawn = ui.strum(dir, c, size, sstate, alphaStrum, st.angle, a.now);
+                const bool drawn = ui.strum(dir, c, size, sstate, alphaStrum, st.angle, since);
                 if (sstate) ui.endDir();
                 if (drawn) {
                     // the Psych Engine interface drew it

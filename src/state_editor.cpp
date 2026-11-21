@@ -98,7 +98,7 @@ struct EdNote {
     double len = 0;
     uint32_t stack = 1;  // notes of the file stacked here (written back that many times)
     uint16_t type = 0;   // the editor's note type list (0: a normal note)
-    uint8_t col = 0;     // 0..K-1 opponent, K..2K-1 player
+    uint16_t col = 0;    // 0..K-1 opponent, K..2K-1 player
     bool sel = false;
 };
 
@@ -212,9 +212,29 @@ public:
         }
         if (in.pressed(KEY_SPACE)) togglePlay();
 
-        // Navigation (the wheel scrolls the grid unless it is over the panel)
+        // Navigation (the wheel scrolls the grid unless it is over the panel;
+        // with CTRL, a chart too wide for the screen sideways)
         const bool overPanel = ui_.mouse.x >= kPanelX - 10;
-        const float wheel = overPanel ? 0.0f : in.wheel();
+        float wheel = overPanel ? 0.0f : in.wheel();
+        if (wheel != 0 && ctrl && wideGrid()) {
+            scrollColumns(-wheel * 4.0f);
+            wheel = 0;
+        }
+        {
+            const Rectangle bar = laneBar();
+            const bool onBar = wideGrid() && ui_.mouse.y >= bar.y - 6 && ui_.mouse.y <= bar.y + bar.height + 4 &&
+                               ui_.mouse.x >= bar.x && ui_.mouse.x <= bar.x + bar.width;
+            if (onBar && ui_.click) {
+                laneDrag_ = true;
+                ui_.click = false;
+            }
+            if (laneDrag_ && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) laneDrag_ = false;
+            if (laneDrag_) {
+                const float total = float(2 * keys_), shown = (viewR() - viewL()) / laneW();
+                colScroll_ = (ui_.mouse.x - bar.x) / bar.width * total - shown * 0.5f;
+            }
+            scrollColumns(0);  // keeps it in range (the key count may have changed)
+        }
         if (wheel != 0 || in.pressed(KEY_UP) || in.pressed(KEY_DOWN) || in.pressed(KEY_W) || in.pressed(KEY_S)) {
             if (!(ctrl && in.pressed(KEY_S))) {
                 if (playing_) stopPlay();
@@ -371,7 +391,7 @@ private:
         for (const Note& n : c.notes) {
             EdNote e;
             e.t = n.time;
-            e.col = uint8_t(n.side ? keys_ + n.lane : n.lane);
+            e.col = uint16_t(n.side ? keys_ + n.lane : n.lane);
             e.len = n.length;
             e.type = n.type < ids.size() ? ids[n.type] : 0;
             if (e.type == 0 && n.kind == kMine) e.type = hurt;
@@ -921,13 +941,27 @@ private:
     }
 
     // ------------------------------------------------------------- layout --
-    // The event lane and both sides share the space between the panels.
-    float laneW() const { return std::min(48.0f, 590.0f / float(2 * keys_ + 1)); }
+    // The event lane and both sides share the space between the panels
+    // (x 250 to 860). Lanes are never narrower than 12 pixels: a chart with
+    // more of them than fit (from 25 keys a side, up to 512) scrolls sideways
+    // under a fixed event lane (Ctrl + wheel, or the bar at the top).
+    static constexpr float kGridL = 250, kGridW = 610, kMinLaneW = 12;
+    float laneW() const { return std::max(kMinLaneW, std::min(48.0f, (kGridW - 20) / float(2 * keys_ + 1))); }
+    bool wideGrid() const { return float(2 * keys_ + 1) * laneW() + 10 > kGridW + 0.5f; }
     float gridX() const {
-        const float lw = laneW(), total = float(2 * keys_ + 1) * lw + 10;
-        return 250 + (610 - total) * 0.5f + lw + 10;
+        const float lw = laneW();
+        if (wideGrid()) return kGridL + lw + 10 - colScroll_ * lw;
+        const float total = float(2 * keys_ + 1) * lw + 10;
+        return kGridL + (kGridW - total) * 0.5f + lw + 10;
     }
-    float eventX() const { return gridX() - laneW() - 10; }
+    float eventX() const { return wideGrid() ? kGridL : gridX() - laneW() - 10; }
+    // The part of the screen the lanes are shown in.
+    float viewL() const { return wideGrid() ? kGridL + laneW() + 10 : gridX(); }
+    float viewR() const { return wideGrid() ? kGridL + kGridW : gridX() + laneW() * float(2 * keys_); }
+    float maxColScroll() const { return wideGrid() ? std::max(0.0f, float(2 * keys_) - (viewR() - viewL()) / laneW()) : 0.0f; }
+    void scrollColumns(float by) { colScroll_ = std::clamp(colScroll_ + by, 0.0f, maxColScroll()); }
+    // The lane bar: where the view is among all the lanes (wide charts only).
+    Rectangle laneBar() const { return {viewL(), 31, viewR() - viewL(), 7}; }
     float lineY() const { return 220.0f; }
     float pxPerMs() const { return 0.45f * zoom_; }
     double snappedTimeAtY(float y) {
@@ -937,8 +971,9 @@ private:
     bool mouseCell(int& col, double& t) {
         const Vector2 m = ui_.mouse;
         const float x0 = gridX();
-        if (m.x < x0 || m.x >= x0 + laneW() * 2 * keys_ || m.y < 40 || m.y > gfx::H) return false;
-        col = int((m.x - x0) / laneW());
+        if (m.x < std::max(x0, viewL()) || m.x >= std::min(x0 + laneW() * 2 * keys_, viewR()) || m.y < 40 || m.y > gfx::H)
+            return false;
+        col = std::clamp(int((m.x - x0) / laneW()), 0, 2 * keys_ - 1);
         t = snappedTimeAtY(m.y);
         return t >= 0;
     }
@@ -1039,7 +1074,7 @@ private:
                 clearSelection();
                 EdNote n;
                 n.t = t;
-                n.col = uint8_t(col);
+                n.col = uint16_t(col);
                 n.type = typeId(noteTypes_[size_t(typeIdx_)]);
                 n.sel = true;
                 insertNote(n);
@@ -1108,7 +1143,8 @@ private:
             for (; it != notes_.end() && it->t <= ahead; ++it) {
                 const bool player = it->col >= keys_;
                 if (player ? !hitPlayer_ : !hitOpponent_) continue;
-                m.hitAt(it->t / 1000.0, player ? 0 : 1, float(player ? hitVolPlayer_ : hitVolOpponent_));
+                m.hitAt(it->t / 1000.0, player ? 0 : 1, float(player ? hitVolPlayer_ : hitVolOpponent_),
+                        double(std::max<uint32_t>(1, it->stack)));
             }
         }
         schedUpTo_ = std::max(schedUpTo_, ahead);
@@ -1371,6 +1407,20 @@ private:
         const int cols = 2 * keys_;
         const float gw = lw * cols;
         const double tTop = cur_ - (ly - 40) / pp, tBot = cur_ + (gfx::H - ly) / pp;
+        // The lanes on screen [c0, c1): all of them, or a chart too wide for
+        // the screen's part shown under its scroll (clipped to it).
+        const bool wide = wideGrid();
+        const float vl = viewL(), vr = viewR();
+        const int c0 = wide ? std::clamp(int(std::floor((vl - x0) / lw)), 0, cols) : 0;
+        const int c1 = wide ? std::clamp(int(std::ceil((vr - x0) / lw)), 0, cols) : cols;
+        const Vector2 co = gfx::canvasOrigin();
+        const float cs = gfx::canvasScale();
+        auto clipLanes = [&](bool on) {
+            if (!wide) return;
+            if (on) BeginScissorMode(int(co.x + vl * cs), int(co.y + 40 * cs), int((vr - vl) * cs + 1), int((gfx::H - 40) * cs));
+            else EndScissorMode();
+        };
+        const float gridR = std::min(x0 + gw, vr);  // where the lanes end on screen
         // Section backgrounds: the camera's side is lighter, gf sections tinted.
         const int s0 = sectionAt(std::max(0.0, tTop)), s1 = sectionAt(std::max(0.0, tBot));
         for (int s = s0; s <= s1; ++s) {
@@ -1379,8 +1429,10 @@ private:
             if (yb <= ya) continue;
             const EdSection& sec = section(s);
             const Color on = sec.gf ? Color{54, 40, 52, 255} : Color{44, 34, 66, 255}, off{28, 22, 40, 255};
+            clipLanes(true);
             DrawRectangleRec({x0, ya, lw * keys_, yb - ya}, sec.mustHit ? off : on);
             DrawRectangleRec({x0 + lw * keys_, ya, lw * keys_, yb - ya}, sec.mustHit ? on : off);
+            clipLanes(false);
             DrawRectangleRec({ex, ya, lw, yb - ya}, Color{24, 18, 34, 255});
         }
         // Beat / snap lines
@@ -1389,18 +1441,20 @@ private:
             const float y = ly + float((msAtBeat(b) - cur_) * pp);
             if (y < 40 || y > gfx::H) continue;
             const bool beat = std::fabs(b - std::round(b)) < 1e-6;
-            DrawRectangleRec({ex, y - 0.5f, x0 + gw - ex, 1.0f},
+            DrawRectangleRec({ex, y - 0.5f, gridR - ex, 1.0f},
                              beat ? Color{110, 90, 150, 140} : Color{80, 66, 110, 70});
         }
         for (int s = s0; s <= s1 + 1; ++s) {  // section starts, numbered
             const float y = ly + float((sectionStart(s) - cur_) * pp);
             if (y < 40 || y > gfx::H) continue;
-            DrawRectangleRec({ex, y - 1.5f, x0 + gw - ex, 3.0f}, Color{170, 140, 220, 200});
+            DrawRectangleRec({ex, y - 1.5f, gridR - ex, 3.0f}, Color{170, 140, 220, 200});
             gfx::text(FontId::Ui, std::to_string(s), ex - 8, y - 10, 18, gfx::fade(WHITE, 0.6f), Align::Right);
         }
-        for (int c = 0; c <= cols; ++c)
+        clipLanes(true);
+        for (int c = c0; c <= c1; ++c)
             DrawRectangleRec({x0 + c * lw - (c == keys_ ? 1.5f : 0.5f), 40, c == keys_ ? 3.0f : 1.0f, gfx::H - 40.0f},
                              c == keys_ ? Color{200, 170, 255, 200} : Color{70, 58, 96, 160});
+        clipLanes(false);
         DrawRectangleRec({ex + lw, 40, 1, gfx::H - 40.0f}, Color{70, 58, 96, 160});
         // Events
         for (size_t i = 0; i < events_.size(); ++i) {
@@ -1423,11 +1477,12 @@ private:
         const double msPerPx = 1.0 / std::max(1e-9, double(pp));
         float lastY[2 * kMaxKeys];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
+        clipLanes(true);
         if (st.maxLen > 0) {
             auto it = std::lower_bound(notes_.begin(), notes_.end(), tTop - st.maxLen, byTime);
             for (; it != notes_.end() && it->t <= tBot; ++it) {
                 const EdNote& n = *it;
-                if (n.len <= 0 || n.t + n.len < tTop) continue;
+                if (n.len <= 0 || n.t + n.len < tTop || n.col < c0 || n.col >= c1) continue;
                 const int lane = n.col % keys_;
                 const int dir = gfx::laneDir(keys_, lane);
                 const float cx = x0 + (n.col + 0.5f) * lw;
@@ -1452,7 +1507,7 @@ private:
             }
             ++it;
             const float y = ly + float((n.t - cur_) * pp);
-            if (y < 30 || y > gfx::H + 30 || n.col >= 2 * kMaxKeys) continue;
+            if (y < 30 || y > gfx::H + 30 || n.col >= 2 * kMaxKeys || n.col < c0 || n.col >= c1) continue;
             // Spam charts: one note per pixel row is enough to see them.
             if (std::fabs(y - lastY[n.col]) < rowPx && !n.sel) continue;
             lastY[n.col] = y;
@@ -1487,6 +1542,7 @@ private:
             gfx::text(FontId::Ui, "x" + std::to_string(v.stack), v.cx + lw * 0.42f, v.y + 2, 14, kAccent, Align::Right, 1.0f);
         }
         vis_.clear();
+        clipLanes(false);
         // Mouse cursor cell / selection box
         int col = 0;
         double t = 0;
@@ -1497,22 +1553,50 @@ private:
             DrawRectangleLinesEx(r, 1.5f, Color{255, 255, 255, 160});
         } else if (mouseCell(col, t)) {
             const float y = ly + float((t - cur_) * pp);
+            clipLanes(true);
             DrawRectangleRec({x0 + col * lw + 2, y - lw * 0.45f, lw - 4, lw * 0.9f}, Color{255, 255, 255, 40});
+            clipLanes(false);
         } else if (mouseEventCell(t)) {
             const float y = ly + float((t - cur_) * pp);
             DrawRectangleRec({ex + 2, y - lw * 0.45f, lw - 4, lw * 0.9f}, Color{255, 255, 255, 40});
         }
         // Strum line and receptors
-        DrawRectangleRec({ex - 6, ly - 2, x0 + gw - ex + 12, 4}, Color{255, 220, 120, 220});
-        for (int c = 0; c < cols; ++c) {
+        DrawRectangleRec({ex - 6, ly - 2, gridR - ex + 12, 4}, Color{255, 220, 120, 220});
+        clipLanes(true);
+        for (int c = c0; c < c1; ++c) {
             const int dir = gfx::laneDir(keys_, c % keys_);
             gfx::drawReceptor(dir, {x0 + (c + 0.5f) * lw, ly}, lw * 0.82f, Color{200, 190, 230, 120});
         }
+        clipLanes(false);
         // Top bar
         DrawRectangleRec({0, 0, gfx::W, 40}, Color{8, 5, 14, 235});
         gfx::text(FontId::Ui, "EVENTS", ex + lw * 0.5f, 10, 16, gfx::fade(WHITE, 0.6f), Align::Center);
-        gfx::text(FontId::Ui, "OPPONENT", x0 + lw * keys_ * 0.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
-        gfx::text(FontId::Ui, "PLAYER", x0 + lw * keys_ * 1.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+        if (!wide) {
+            gfx::text(FontId::Ui, "OPPONENT", x0 + lw * keys_ * 0.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+            gfx::text(FontId::Ui, "PLAYER", x0 + lw * keys_ * 1.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+            return;
+        }
+        // A wide chart: each side's name over its part on screen, the lane
+        // numbers (1 to the key count, each side) and the lane bar.
+        for (int side = 0; side < 2; ++side) {
+            const float a = std::max(vl, x0 + lw * keys_ * side), b = std::min(vr, x0 + lw * keys_ * (side + 1));
+            if (b - a > 70) gfx::text(FontId::Ui, side ? "PLAYER" : "OPPONENT", (a + b) * 0.5f, 1, 17, gfx::fade(WHITE, 0.75f), Align::Center);
+        }
+        const int every = lw >= 24 ? 2 : 4;
+        for (int c = c0; c < c1; ++c) {
+            const int lane = c % keys_;
+            if (lane % every != 0 && lane != keys_ - 1) continue;
+            const float cx = x0 + (c + 0.5f) * lw;
+            if (cx < vl + 4 || cx > vr - 4) continue;
+            gfx::text(FontId::Ui, std::to_string(lane + 1), cx, 18, 12, gfx::fade(WHITE, 0.55f), Align::Center);
+        }
+        const Rectangle bar = laneBar();
+        const float total = float(cols), shown = (vr - vl) / lw;
+        DrawRectangleRounded(bar, 1.0f, 4, Color{40, 32, 60, 255});
+        const float split = bar.x + bar.width * float(keys_) / total;  // where the player's lanes start
+        DrawRectangleRec({split - 1, bar.y - 1, 2, bar.height + 2}, Color{200, 170, 255, 200});
+        DrawRectangleRounded({bar.x + bar.width * colScroll_ / total, bar.y, std::max(8.0f, bar.width * shown / total), bar.height},
+                             1.0f, 4, laneDrag_ ? kAccent : Color{170, 140, 220, 255});
     }
 
     // The chart as it will be played, in a small window under the info: the
@@ -1591,6 +1675,7 @@ private:
                                      "Click add/select", "SHIFT+drag select", "Ctrl+C/X/V copy, cut",
                                      "DEL delete", "M mirror", "Ctrl+Z/Y undo", "ENTER save+play"};
         for (const char* h : help) line(h, gfx::fade(WHITE, 0.55f), 15);
+        if (wideGrid() && !preview_) line("Ctrl+wheel / top bar: lanes", gfx::fade(WHITE, 0.55f), 15);
     }
 
     // The tabbed panel. Immediate mode: drawing and clicks happen together.
@@ -1624,7 +1709,7 @@ private:
                 if (ui_.stepper(row(), "BPM", bpm, 1, 10, 2000, "%.2f")) setSectionBpm(0, bpm);
                 if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) dirty_ = statsDirty_ = true;
                 double k = keys_;
-                if (ui_.stepper(row(), "Keys", k, 1, 1, 9, "%.0f")) setKeys(int(k));
+                if (ui_.stepper(row(), "Keys", k, 1, 1, kMaxKeys, "%.0f")) setKeys(int(k));  // 1 to 512 a side
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
                 ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both"}, saveFormat_);
@@ -2050,6 +2135,8 @@ private:
     double cur_ = 0, lastT_ = 0, speed_ = 1, flashAt_ = -10, escAt_ = -10;
     double playRate_ = 1, instVol_ = 1, voiceVol_ = 1, stackAmount_ = 10, copyBack_ = 1;
     float zoom_ = 1.0f;
+    float colScroll_ = 0;    // the first lane shown, on charts wider than the screen
+    bool laneDrag_ = false;  // the lane bar is being dragged
     Vector2 boxA_{};
     Ui ui_;
     std::vector<EdNote> notes_, clipboard_;

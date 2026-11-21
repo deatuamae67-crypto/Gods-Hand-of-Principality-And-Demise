@@ -14,6 +14,7 @@
 #include "gfx.hpp"
 #include "platform.hpp"
 #include "raylib.h"
+#include "song_icons.hpp"
 #include "video.hpp"
 
 #ifndef GH_VERSION
@@ -600,8 +601,13 @@ public:
             const bool on = i == a.freeplaySel;
             const float alpha = std::max(0.0f, 1.0f - std::fabs(d) * 0.2f);
             const SongEntry* e = list_[size_t(i)];
-            const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
-            drawIcon(cid, gfx::rgb(e->color), {x - 50, y + 26}, on ? 70.0f : 56.0f, false, now);
+            int frames = 1;
+            if (const Texture2D* t = icons_.get(*e, &frames)) {  // the chart's character (issue #36)
+                drawSongIcon(*t, frames, {x - 50, y + 26}, on ? 84.0f : 68.0f, alpha);
+            } else {
+                const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
+                drawIcon(cid, gfx::rgb(e->color), {x - 50, y + 26}, on ? 70.0f : 56.0f, false, now);
+            }
             gfx::text(FontId::Ui, e->title, x, y, on ? 52.0f : 42.0f, fade(on ? WHITE : kIvory, alpha), Align::Left, 2.0f);
             if (on && !e->builtin)
                 gfx::text(FontId::Ui, e->subtitle, x + 4, y + 50, 20, fade(kGold, 0.8f), Align::Left, 1.0f);
@@ -610,8 +616,13 @@ public:
         DrawRectangleRounded({830, 70, 410, 560}, 0.06f, 12, Color{8, 6, 16, 190});
         if (n > 0) {
             const SongEntry* e = list_[size_t(a.freeplaySel)];
-            const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
-            drawIcon(cid, gfx::rgb(e->color), {1035, 175}, 150, false, now);
+            int frames = 1;
+            if (const Texture2D* t = icons_.get(*e, &frames)) {
+                drawSongIcon(*t, frames, {1035, 175}, 150);
+            } else {
+                const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
+                drawIcon(cid, gfx::rgb(e->color), {1035, 175}, 150, false, now);
+            }
             gfx::text(FontId::Title, e->title, 1035, 262, e->title.size() > 16 ? 26.0f : 34.0f, kGold, Align::Center, 2.0f);
             float y = 312;
             for (const std::string& l : wrap(e->builtin ? e->subtitle : ("From: " + e->subtitle), 36)) {
@@ -773,6 +784,7 @@ private:
     }
 
     std::vector<const SongEntry*> list_;
+    SongIcons icons_;  // the charts' characters' icons
     float anim_ = 0;
     Color bg_ = kGold;
     double selChangedAt_ = 0;

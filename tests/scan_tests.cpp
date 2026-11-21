@@ -530,10 +530,39 @@ void testBinaryChartsInMods() {
     fs::remove_all(base);
 }
 
+// Freeplay's icons (issue #36): the chart's "player2", that character's
+// "healthicon", then images/icons/icon-<icon>.png or <icon>.png, in the
+// song's own folders first and the shared ones after.
+void testSongIcons() {
+    const fs::path base = fs::temp_directory_path() / "gh_song_icons";
+    fs::remove_all(base);
+    const fs::path mod = base / "mymod", other = base / "othermod";
+    put(mod / "data/duel/duel.json", R"({"song": {"song": "Duel", "player1": "bf", "player2": "rival", "bpm": 120, "notes": []}})");
+    put(mod / "characters/rival.json", R"({"image": "characters/rival", "healthicon": "rival-face", "animations": []})");
+    put(mod / "images/icons/icon-rival-face.png", "png");
+    put(mod / "data/solo/solo.json", R"({"song": {"song": "Solo", "player2": "loner", "notes": []}})");
+    put(other / "images/icons/loner.png", "png");  // another mod's, named without "icon-"
+    put(mod / "data/none/none.json", R"({"song": {"song": "None", "player2": "nobody", "notes": []}})");
+    SongEntry e;
+    e.assetRoots = {str(mod)};
+    e.chartPaths = {str(mod / "data/duel/duel.json")};
+    SCHECK(endsWith(findSongIcon(e, {}), "icons/icon-rival-face.png"));
+    e.chartPaths = {str(mod / "data/solo/solo.json")};
+    SCHECK(findSongIcon(e, {}).empty());                           // not in its own folders...
+    SCHECK(endsWith(findSongIcon(e, {str(other)}), "icons/loner.png"));  // ...but in another mod's
+    e.chartPaths = {str(mod / "data/none/none.json")};
+    SCHECK(findSongIcon(e, {str(other)}).empty());  // no icon anywhere: the game's own
+    e.builtin = true;
+    e.chartPaths = {str(mod / "data/duel/duel.json")};
+    SCHECK(findSongIcon(e, {}).empty());  // built-in songs keep their own icons
+    fs::remove_all(base);
+}
+
 void runScanTests() {
     testBinaryChartsInMods();
     testFlStudio();
     testPulseForgeCharts();
+    testSongIcons();
     testAudioSeconds();
     testModLayouts();
 }

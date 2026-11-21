@@ -166,6 +166,93 @@ void endTexture() {
     if (g_frameRt.id) BeginTextureMode(g_frameRt);  // back to the frame being rendered
 }
 
+Shader loadFragmentShader(const char* body) {
+    std::string src;
+    switch (rlGetVersion()) {
+        case RL_OPENGL_ES_20:
+            src = "#version 100\nprecision mediump float;\n#define GH_VARYING varying\n#define GH_TEX texture2D\n#define GH_FRAG gl_FragColor\n";
+            break;
+        case RL_OPENGL_21:
+            src = "#version 120\n#define GH_VARYING varying\n#define GH_TEX texture2D\n#define GH_FRAG gl_FragColor\n";
+            break;
+        default:
+            src = "#version 330\n#define GH_VARYING in\n#define GH_TEX texture\nout vec4 gh_frag;\n#define GH_FRAG gh_frag\n";
+            break;
+    }
+    src += body;
+    Shader sh = LoadShaderFromMemory(nullptr, src.c_str());
+    if (sh.id == rlGetShaderIdDefault()) sh.id = 0;  // raylib falls back to its own: not this one
+    return sh;
+}
+
+namespace {
+// A 9-tap Gaussian in 5 reads (bilinear filtering takes two taps at once).
+const char* kBlurBody = R"GLSL(
+GH_VARYING vec2 fragTexCoord;
+GH_VARYING vec4 fragColor;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+uniform vec2 dir;
+void main() {
+    vec2 uv = fragTexCoord;
+    vec4 c = GH_TEX(texture0, uv) * 0.2270270270;
+    c += (GH_TEX(texture0, uv + dir * 1.3846153846) + GH_TEX(texture0, uv - dir * 1.3846153846)) * 0.3162162162;
+    c += (GH_TEX(texture0, uv + dir * 3.2307692308) + GH_TEX(texture0, uv - dir * 3.2307692308)) * 0.0702702703;
+    // Opaque: what was drawn see-through into the texture must not let the
+    // screen behind it show when the picture is put back.
+    GH_FRAG = vec4(c.rgb, 1.0) * colDiffuse * fragColor;
+}
+)GLSL";
+}  // namespace
+
+void drawBlurred(const std::function<void()>& scene, float spread) {
+    static RenderTexture2D rt[2] = {};
+    static Shader shader{};
+    static int locDir = -1;
+    static bool tried = false;
+    constexpr int w = int(W / 2), h = int(H / 2);
+    if (!tried) {
+        tried = true;
+        shader = loadFragmentShader(kBlurBody);
+        if (shader.id) {
+            locDir = GetShaderLocation(shader, "dir");
+            for (RenderTexture2D& t : rt) {
+                t = LoadRenderTexture(w, h);
+                SetTextureFilter(t.texture, TEXTURE_FILTER_BILINEAR);
+                SetTextureWrap(t.texture, TEXTURE_WRAP_CLAMP);
+            }
+        }
+    }
+    if (!shader.id || !rt[0].id || !rt[1].id) {
+        scene();
+        return;
+    }
+    EndMode2D();
+    beginTexture(rt[0]);
+    ClearBackground(BLACK);
+    Camera2D half{};
+    half.zoom = float(w) / W;
+    BeginMode2D(half);
+    scene();
+    EndMode2D();
+    endTexture();
+    auto pass = [&](const RenderTexture2D& from, const RenderTexture2D& to, Vector2 d) {
+        beginTexture(to);
+        ClearBackground(BLACK);
+        BeginShaderMode(shader);
+        SetShaderValue(shader, locDir, &d, SHADER_UNIFORM_VEC2);
+        DrawTextureRec(from.texture, {0, 0, float(w), -float(h)}, {0, 0}, WHITE);
+        EndShaderMode();
+        endTexture();
+    };
+    for (int i = 1; i <= 2; ++i) {
+        pass(rt[0], rt[1], {spread * float(i) / w, 0});
+        pass(rt[1], rt[0], {0, spread * float(i) / h});
+    }
+    BeginMode2D(screenCamera());
+    DrawTexturePro(rt[0].texture, {0, 0, float(w), -float(h)}, {0, 0, W, H}, {0, 0}, 0, WHITE);
+}
+
 int targetWidth() { return g_targetW > 0 ? g_targetW : GetScreenWidth(); }
 int targetHeight() { return g_targetH > 0 ? g_targetH : GetScreenHeight(); }
 

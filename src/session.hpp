@@ -44,7 +44,7 @@ struct LaneNote {
 
 struct GameEvent {
     enum Type : uint8_t { PlayerHit, PlayerMiss, PlayerMine, GhostMiss, HoldDrop, HoldDone, OpponentHit } type;
-    uint8_t lane = 0;
+    uint16_t lane = 0;
     Rating rating = kDivine;
     double time = 0;     // note time (ms)
     double errMs = 0;    // real-time error (negative = early)
@@ -52,6 +52,7 @@ struct GameEvent {
     uint8_t flags = 0;
     uint16_t noteType = 0;
     uint32_t id = 0;
+    uint32_t stack = 1;  // the notes hit at once (a stack): each one's hitsound sounds
 };
 
 using LaneMask = std::bitset<kMaxKeys>;  // one bit per lane

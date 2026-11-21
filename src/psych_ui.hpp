@@ -62,7 +62,8 @@ public:
     bool note(int dir, Vector2 c, float size, float alpha, float angle) const;
     // The width and height note() covers around its centre ({0, 0} without the skin).
     Vector2 noteExtent(int dir, float size) const;
-    bool strum(int dir, Vector2 c, float size, int state, float alpha, float angle, double t) const;  // 0 idle, 1 pressed, 2 hit
+    // state: 0 idle, 1 pressed, 2 hit; t: seconds since the hit (its animation's frame).
+    bool strum(int dir, Vector2 c, float size, int state, float alpha, float angle, double t) const;
     bool hold(int dir, float x, float y0, float y1, float width, float alpha) const;
     bool rating(int which, Vector2 c, float scale, float alpha) const;  // 0 sick .. 3 shit
     bool combo(long long value, Vector2 c, float scale, float alpha) const;

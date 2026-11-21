@@ -510,9 +510,9 @@ private:
         n.time = t;
         n.length = std::isfinite(l) && l > 0 ? float(l) : 0.0f;
         const int data = int(d);
-        n.data = uint8_t(data);
-        if (hasType && !typeText.empty()) n.type = out_.typeIndex(typeText);
+        if (hasType && !typeText.empty()) n.setTypeIdx(out_.typeIndex(typeText));
         if (altBool) n.type |= StreamedNote::kAltBit;
+        n.setNoteData(data);
         out_.maxData = std::max(out_.maxData, data);
         ++out_.dataCount[size_t(data)];
         ++out_.rawCount;
@@ -523,7 +523,7 @@ private:
                 StreamedNote& k = out_.notes[i];
                 if (k.noteData() == data && std::fabs(k.time - n.time) < 1.0 && k.stack < 255) {
                     k.length = std::max(k.length, n.length);
-                    if (n.typeIdx() && !k.typeIdx()) k.type = uint16_t((k.type & StreamedNote::kAltBit) | n.typeIdx());
+                    if (n.typeIdx() && !k.typeIdx()) k.setTypeIdx(n.typeIdx());
                     ++k.stack;
                     return;
                 }
@@ -946,7 +946,7 @@ private:
         if (!r.notes.types.empty())
             for (size_t i = at; i < out_.notes.size(); ++i) {
                 StreamedNote& q = out_.notes[i];
-                q.type = uint16_t((q.type & StreamedNote::kAltBit) | types[q.typeIdx()]);
+                q.setTypeIdx(types[q.typeIdx()]);
             }
         out_.maxData = std::max(out_.maxData, r.notes.maxData);
         for (size_t d = 0; d < out_.dataCount.size(); ++d) out_.dataCount[d] += r.notes.dataCount[d];
@@ -1007,15 +1007,15 @@ std::string StreamedNotesBuilder::beginArray() {
 }
 
 // The reader's addStreamed, step for step (a note the reader would not take
-// as a note, with a noteData outside 0..255, is left out).
+// as a note, with a noteData outside 0..1023, is left out).
 void StreamedNotesBuilder::add(double time, int noteData, double length, const std::string& type) {
     if (!std::isfinite(time) || noteData < 0 || noteData >= kNoteDataValues || out_.rangeStart.empty()) return;
     StreamedNote n;
     n.time = time;
     n.length = std::isfinite(length) && length > 0 ? float(length) : 0.0f;
     const int data = noteData;
-    n.data = uint8_t(data);
-    if (!type.empty()) n.type = out_.typeIndex(type);
+    if (!type.empty()) n.setTypeIdx(out_.typeIndex(type));
+    n.setNoteData(data);
     out_.maxData = std::max(out_.maxData, data);
     ++out_.dataCount[size_t(data)];
     ++out_.rawCount;
@@ -1025,7 +1025,7 @@ void StreamedNotesBuilder::add(double time, int noteData, double length, const s
             StreamedNote& k = out_.notes[i];
             if (k.noteData() == data && std::fabs(k.time - n.time) < 1.0 && k.stack < 255) {
                 k.length = std::max(k.length, n.length);
-                if (n.typeIdx() && !k.typeIdx()) k.type = uint16_t((k.type & StreamedNote::kAltBit) | n.typeIdx());
+                if (n.typeIdx() && !k.typeIdx()) k.setTypeIdx(n.typeIdx());
                 ++k.stack;
                 return;
             }
@@ -1041,7 +1041,7 @@ void StreamedNotesBuilder::finish() { out_.rangeStart.push_back(uint32_t(out_.no
 uint16_t StreamedNotes::typeIndex(const std::string& name) {
     for (size_t i = 0; i < types.size(); ++i)
         if (types[i] == name) return uint16_t(i + 1);
-    if (types.size() >= 32000) return 0;  // the top bit of a note's type is its alt flag
+    if (types.size() >= StreamedNote::kTypeMask) return 0;  // the top bits of a note's type are other things
     types.push_back(name);
     return uint16_t(types.size());
 }
@@ -1091,7 +1091,7 @@ namespace fs = std::filesystem;
 std::mutex g_cacheMtx;
 std::string g_cacheDir;
 constexpr uint32_t kCacheMagic = 0x43434847u;  // "GHCC"
-constexpr uint32_t kCacheVersion = 1;
+constexpr uint32_t kCacheVersion = 2;  // 2: noteData up to 1023 (512 keys), 1024 counts
 constexpr uint64_t kCacheLimit = 4ull << 30;
 
 struct CacheHeader {

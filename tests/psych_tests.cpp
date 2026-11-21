@@ -270,6 +270,46 @@ void testSceneModel() {
     PCHECK(pnear(c.offsetX, 12));
     c.updateChar(0.5, 100, false);  // 0.5 s > 100 ms * 0.0011 * 4: back to dancing
     PCHECK(c.curAnimName().rfind("dance", 0) == 0);
+    // Fast songs and spam (issue #36): a note's pose is not started over at
+    // every note (its frames play), another direction waits for the frame to
+    // end, and at 1000 BPM the pose stays 0.2 s (Psych's would be 0.066 s).
+    {
+        scene::Character k;
+        k.setGraphic(fakeAtlas(4, 100, 100));
+        for (const char* n : {"idle", "singLEFT", "singRIGHT"}) {
+            scene::Anim an;
+            an.name = n;
+            an.frames = {0, 1, 2, 3};
+            an.fps = 24;
+            k.addAnim(an);
+        }
+        k.recalcDance(true);
+        k.dance();
+        auto tick = [&](double dt) {
+            k.updateAnim(dt);
+            k.updateChar(dt, 15.0, false);  // 1000 BPM
+        };
+        k.sing("singLEFT");
+        for (int i = 0; i < 6; ++i) {  // a note every 10 ms
+            tick(0.01);
+            k.sing("singLEFT");
+        }
+        PCHECK(k.curAnimName() == "singLEFT" && k.animFrame >= 1);  // it moved on
+        tick(0.03);
+        k.sing("singLEFT");  // two frames shown: it starts over
+        PCHECK(k.curAnimName() == "singLEFT" && k.animFrame == 0);
+        k.sing("singRIGHT");  // at once: after this frame
+        PCHECK(k.curAnimName() == "singLEFT" && k.pendingSing == "singRIGHT");
+        tick(0.05);
+        PCHECK(k.curAnimName() == "singRIGHT" && k.pendingSing.empty());
+        tick(0.1);
+        PCHECK(k.curAnimName() == "singRIGHT");  // 0.1 s: still singing
+        tick(0.15);
+        PCHECK(k.curAnimName() == "idle");  // 0.25 s: back to idle
+        k.playAnim("singLEFT", true);  // scripts are never held back
+        k.playAnim("singRIGHT", true);
+        PCHECK(k.curAnimName() == "singRIGHT");
+    }
 
     scene::Scene sc;
     auto spr = std::make_shared<scene::Sprite>();

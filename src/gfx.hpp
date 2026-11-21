@@ -5,6 +5,7 @@
 // particles and a few shape primitives that are robust to vertex order.
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,6 +33,14 @@ void endFrameTarget();
 bool frameTargetActive();
 void beginTexture(const RenderTexture2D& rt);
 void endTexture();
+// A fragment shader for the OpenGL the game runs on (3.3, ES 2 or 2.1): the
+// body is written once, with GH_VARYING, GH_TEX and GH_FRAG for the words
+// the GLSL versions spell differently. 0 in .id when it does not compile.
+Shader loadFragmentShader(const char* body);
+// Draws what `scene` draws (in canvas units, inside the default canvas)
+// blurred: at half size into a texture, then a Gaussian blur across and
+// down, twice (`spread` widens it). Without shaders, the scene as it is.
+void drawBlurred(const std::function<void()>& scene, float spread = 1.6f);
 int targetWidth();   // pixels of what is drawn into now (window or frame target)
 int targetHeight();
 void beginCanvas(float zoom = 1.0f, Vector2 focus = {W / 2, H / 2}, float rotationDeg = 0.0f);

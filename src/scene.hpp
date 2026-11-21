@@ -188,6 +188,12 @@ public:
     void recalcDance(bool initial);
     void dance();
     void playAnim(const std::string& n, bool force = false, bool rev = false, int startFrame = 0);
+    // A note's sing pose (the engine's; scripts call playAnim). Paced so that
+    // fast songs and spam charts still show poses (issue #36): the same pose
+    // starts over only after two frames of it, and a new direction comes at
+    // most once a frame (the latest one waits for its turn).
+    void sing(const std::string& anim);
+    std::string pendingSing;
     // Psych Character.update: hey/special/miss endings, hold timer, -loop anims.
     void updateChar(double dt, double stepMs, bool playerHolding);
     bool get(std::string_view field, Value& out) const override;

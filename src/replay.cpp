@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include "common.hpp"
+#include "keys.hpp"
 
 namespace gh {
 
@@ -75,7 +76,7 @@ bool Replay::load(const std::string& path) {
     events.reserve(count);
     double t;
     int lane, down;
-    while (f >> t >> lane >> down) events.push_back({t, uint8_t(clampv(lane, 0, 8)), down != 0});
+    while (f >> t >> lane >> down) events.push_back({t, uint16_t(clampv(lane, 0, kMaxKeys - 1)), down != 0});  // was cut at 9 keys
     if (!(rate > 0)) rate = 1.0;
     return !songId.empty();
 }

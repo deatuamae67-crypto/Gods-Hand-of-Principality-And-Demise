@@ -500,6 +500,7 @@ double App::frameBudget() const {
 void App::frame() {
     frameStart_ = nowSec();
     input.beginFrame(dt);
+    mixer.setHitMode(settings.hitsoundMode);  // Options: Hit sound polyphony
     if (GetScreenWidth() != shownW_ || GetScreenHeight() != shownH_) {
         shownW_ = GetScreenWidth();
         shownH_ = GetScreenHeight();
@@ -712,33 +713,53 @@ void App::drawFpsPanel() {
         if (!hw.os.empty()) lines.push_back({hw.os, dim});
         if (!device::status().empty()) lines.push_back({"Game mode: " + device::status(), dim});
     }
-    // Small and narrow, so that it stays in its corner of a song's HUD: the
-    // FPS in 18 pixels, the rest in 14, lines cut at 240 pixels.
-    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = 240;
+    // The panel fits what it shows (issue #36): no line is cut short; one
+    // wider than the screen wraps at its spaces. The FPS in 18 pixels, the
+    // rest in 14.
+    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = float(gfx::W) - 24;
     const bool fpsFirst = s.showFps;
+    std::vector<std::pair<std::string, Color>> fit;
+    std::vector<bool> big;
     for (size_t i = 0; i < lines.size(); ++i) {
-        std::string& t = lines[i].first;
         const float sz = i == 0 && fpsFirst ? firstSize : size;
-        if (gfx::measure(gfx::FontId::Ui, t, sz).x <= maxW) continue;
-        while (t.size() > 4 && gfx::measure(gfx::FontId::Ui, t + "...", sz).x > maxW) {
-            t.pop_back();
-            while (!t.empty() && (static_cast<unsigned char>(t.back()) & 0xC0) == 0x80) t.pop_back();  // whole characters
+        std::string rest = lines[i].first;
+        bool wrapped = false;
+        while (gfx::measure(gfx::FontId::Ui, rest, sz).x > maxW) {
+            size_t cut = std::string::npos;  // the last space that keeps the line narrow enough
+            for (size_t sp = rest.find(' ', 1); sp != std::string::npos; sp = rest.find(' ', sp + 1)) {
+                if (gfx::measure(gfx::FontId::Ui, rest.substr(0, sp), sz).x > maxW) break;
+                cut = sp;
+            }
+            if (cut == std::string::npos) break;  // one long word: it stays whole
+            fit.push_back({rest.substr(0, cut), lines[i].second});
+            big.push_back(i == 0 && fpsFirst);
+            const size_t next = rest.find_first_not_of(' ', cut);
+            rest = next == std::string::npos ? std::string() : "  " + rest.substr(next);
+            wrapped = true;
         }
-        t += "...";
+        if (!rest.empty() || !wrapped) {
+            fit.push_back({rest, lines[i].second});
+            big.push_back(i == 0 && fpsFirst);
+        }
     }
+    lines.swap(fit);
     float w = 0, textH = 0;
     for (size_t i = 0; i < lines.size(); ++i) {
-        const bool first = i == 0 && fpsFirst;
-        w = std::max(w, gfx::measure(gfx::FontId::Ui, lines[i].first, first ? firstSize : size).x);
-        textH += first ? firstH : lineH;
+        w = std::max(w, gfx::measure(gfx::FontId::Ui, lines[i].first, big[i] ? firstSize : size).x);
+        textH += big[i] ? firstH : lineH;
     }
     const float graphW = 200, graphH = s.fpsFrameTimes ? 36.0f : 0.0f;
     if (graphH > 0) w = std::max(w, graphW);
     const bool panel = lines.size() > 1 || graphH > 0;
-    const float pw = w + 12, ph = textH + graphH + 6;
-    // Always the top left corner. Narrow enough to stay clear of a song's
-    // health bar and score (they start 260 pixels in); below the touch
-    // buttons when they sit in that corner.
+    // It grows at once and shrinks smoothly, so that numbers whose width
+    // changes at every update do not make it flicker.
+    const float wantW = w + 12, wantH = textH + graphH + 6;
+    const float k = 1.0f - std::exp(-float(std::max(0.0, dt)) * 10.0f);
+    fpsPanelW_ = wantW >= fpsPanelW_ ? wantW : fpsPanelW_ + (wantW - fpsPanelW_) * k;
+    fpsPanelH_ = wantH >= fpsPanelH_ ? wantH : fpsPanelH_ + (wantH - fpsPanelH_) * k;
+    const float pw = fpsPanelW_, ph = fpsPanelH_;
+    // Always the top left corner, below the touch buttons when they sit in
+    // that corner.
     float px = 2, py = 2;
     if (touchMode) {
         std::vector<Rectangle> keys;
@@ -751,9 +772,8 @@ void App::drawFpsPanel() {
     if (panel) DrawRectangleRec({px, py, pw, ph}, gfx::fade(BLACK, 0.55f));
     float y = py + 3;
     for (size_t i = 0; i < lines.size(); ++i) {
-        const bool first = i == 0 && fpsFirst;
-        gfx::text(gfx::FontId::Ui, lines[i].first, px + 6, y, first ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
-        y += first ? firstH : lineH;
+        gfx::text(gfx::FontId::Ui, lines[i].first, px + 6, y, big[i] ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
+        y += big[i] ? firstH : lineH;
     }
     if (graphH > 0) {
         // One bar per frame (the newest on the right), 0 to 50 ms high; green
@@ -868,7 +888,7 @@ constexpr Color rgb3(int r, int g, int b) { return Color{(unsigned char)r, (unsi
 // The menus' backdrop, retro: a night sky of twinkling stars over a striped
 // sun, a grid floor running at you on the beat, and glassy cubes turning in
 // the air, mirrored in the floor. tintHex colours the whole scene.
-void drawMenuBackground(double now, unsigned tintHex, float pulse) {
+static void drawMenuScene(double now, unsigned tintHex, float pulse) {
     const Color tint = gfx::rgb(tintHex);
     const float t = float(now);
     constexpr float kHorizon = 468.0f;
@@ -929,6 +949,11 @@ void drawMenuBackground(double now, unsigned tintHex, float pulse) {
         gfx::cube({x, y}, size, ax, ay, c, 0.22f, true, kHorizon + 8.0f);
         gfx::cube({x, y}, size, ax, ay, c, 0.85f, false, kHorizon);
     }
+}
+
+void drawMenuBackground(double now, unsigned tintHex, float pulse) {
+    if (app().settings.menuBlur) gfx::drawBlurred([&] { drawMenuScene(now, tintHex, pulse); });  // Options: Menu background blur
+    else drawMenuScene(now, tintHex, pulse);
 }
 
 }  // namespace gh

@@ -11,12 +11,14 @@
 #include <set>
 #include <system_error>
 
+#include "basegame.hpp"
 #include "chart.hpp"
 #include "chart_binary.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
 #include "json.hpp"
+#include "scene.hpp"
 
 namespace gh {
 
@@ -1095,6 +1097,37 @@ std::vector<std::string> sharedRootsFor(const SongScan& scan, const SongEntry& e
     if (auto it = scan.packRoots.find(e.pack); it != scan.packRoots.end()) out = it->second;
     out.insert(out.end(), scan.sharedRoots.begin(), scan.sharedRoots.end());
     return out;  // Files::setSharedRoots drops repeats and the song's own roots
+}
+
+std::string findSongIcon(const SongEntry& e, const std::vector<std::string>& sharedRoots) {
+    if (e.builtin || e.autoChart) return "";
+    std::string character;
+    for (const std::string& path : e.chartPaths) {  // the first chart that names one
+        character = peekChart(path).player2;
+        if (!character.empty()) break;
+    }
+    if (character.empty()) return "";
+    scene::Files files;
+    files.setRoots(e.assetRoots);
+    files.setSharedRoots(sharedRoots);
+    // The character's "healthicon"; its own name when it has none.
+    std::string icon = character, text;
+    const std::string cj = files.find("characters/" + character + ".json");
+    const char* builtin = cj.empty() ? basegame::characterJson(character) : nullptr;
+    if (!cj.empty()) scene::readFile(cj, text);
+    else if (builtin) text = builtin;
+    if (!text.empty()) {
+        json::Document doc;
+        if (doc.parse(text)) {
+            const std::string_view hi = doc.strOr(doc.get(doc.root(), "healthicon"), "");
+            if (!hi.empty()) icon = std::string(hi);
+        }
+    }
+    for (const std::string& rel : {"images/icons/icon-" + icon + ".png", "images/icons/" + icon + ".png"}) {
+        const std::string f = files.find(rel);
+        if (!f.empty()) return f;
+    }
+    return "";
 }
 
 }  // namespace gh

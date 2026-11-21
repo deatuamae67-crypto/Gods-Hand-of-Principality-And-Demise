@@ -272,7 +272,7 @@ void PlayState::setScriptGlobals() {
     set("scrollSpeed", chart_.speed);
     set("crochet", 60000.0 / bpm);
     set("stepCrochet", 15000.0 / bpm);
-    set("songLength", chart_.lengthMs);
+    set("songLength", songEndMs());
     set("songName", chart_.title.empty() ? entry_->title : chart_.title);
     set("songPath", entry_->songKey);
     set("startedCountdown", false);
@@ -755,8 +755,7 @@ void PlayState::psychHoldRefresh() {
             if (ch && !(n.flags & kFlagNoAnim)) {
                 std::string anim = singAnim(side, l, n.flags);
                 if ((n.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(side, l, 0);
-                ch->playAnim(anim, true);
-                ch->holdTimer = 0;
+                ch->sing(anim);
             }
             const char* fn = side == 1 ? "goodNoteHit" : "opponentNoteHit";
             if (noteCallbacksFor(n.type))
@@ -771,8 +770,7 @@ void PlayState::psychNoteHit(const GameEvent& ev, bool opponent) {
     if (ch && !(ev.flags & kFlagNoAnim)) {
         std::string anim = singAnim(side, ev.lane, ev.flags);
         if ((ev.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(side, ev.lane, 0);
-        ch->playAnim(anim, true);
-        ch->holdTimer = 0;
+        ch->sing(anim);
         if (ev.flags & kFlagHey) {
             const char* chk = ch == sc.gf.get() ? "cheer" : "hey";
             if (ch->hasAnim(chk)) {
@@ -2056,7 +2054,7 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     if (path == "startingSong") return flag(songMs_ < 0);
     if (path == "endingSong") return flag(phase_ == Phase::Ending);
     if (path == "generatedMusic") return flag(true);
-    if (path == "songLength") return num(chart_.lengthMs);
+    if (path == "songLength") return num(songEndMs());
     if (path == "curBeat") return num(lastBeat_);
     if (path == "curStep") return num(lastStep_);
     if (path == "curSection") return num(std::max(0, lastSection_));

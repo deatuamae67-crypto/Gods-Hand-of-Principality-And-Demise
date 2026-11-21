@@ -270,12 +270,15 @@ void testRenderMode(const std::string& dir) {
 
 }  // namespace
 
-// Hitsounds (issue #22): each starts on its note's own sample, a new one cuts
-// the one still playing (the level does not pile up), and a spam of 16 notes
-// a step at 520 BPM sounds as a tone of 554.67 Hz, as in FL Studio.
+// Hitsounds (issue #22): each starts on its note's own sample. In the "cut"
+// mode a new one cuts the one still playing (the level does not pile up),
+// and a spam of 16 notes a step at 520 BPM sounds as a tone of 554.67 Hz, as
+// in FL Studio. Polyphony (issue #36): notes on one tick add up, under a
+// limiter or not.
 void testHitsounds() {
     Mixer m;  // offline: no sound device needed
     m.setOffline(true);
+    m.setHitMode(Mixer::kHitCut);
     auto silent = std::make_shared<Pcm>();
     silent->channels = 2;
     silent->data.assign(size_t(2) * 44100 * 3, 0);
@@ -334,6 +337,40 @@ void testHitsounds() {
     m.seek(0);
     std::vector<float> after = render(2.0);
     ACHECK(std::all_of(after.begin(), after.end(), [](float x) { return x == 0; }));
+
+    // Polyphony. The loudest sample of a short render after a few notes.
+    auto loudest = [&](const std::vector<std::pair<double, double>>& notes, float vol) {
+        m.play(0);
+        m.clearHits();
+        for (const auto& [t, count] : notes) m.hitAt(t, 0, vol, count);
+        const std::vector<float> o = render(0.4);
+        float top = 0;
+        for (size_t i = 0; i < o.size(); i += 2) top = std::max(top, std::fabs(o[i]));
+        return top;
+    };
+    m.setHitMode(Mixer::kHitLimiter);
+    const float single = loudest({{0.1, 1}}, 0.4f);  // 0.2: under the limiter
+    ACHECK(std::fabs(single - peak * 0.4f) < 1e-4f);
+    // Two notes on the same tick, or a stack of three: as loud as all of them.
+    ACHECK(std::fabs(loudest({{0.1, 1}, {0.1, 1}}, 0.4f) - 2 * single) < 1e-4f);
+    ACHECK(std::fabs(loudest({{0.1, 3}}, 0.4f) - 3 * single) < 1e-4f);
+    // Notes 100 samples apart: the first still sounds under the second.
+    ACHECK(loudest({{0.1, 1}, {0.1 + 100.0 / 44100.0, 1}}, 0.4f) > single * 1.05f);
+    // Ten at once: 2.0 together; the limiter keeps it at 1, unlimited does not.
+    const float limited = loudest({{0.1, 10}}, 0.4f);
+    ACHECK(limited <= 1.0001f && limited > 0.9f);
+    m.setHitMode(Mixer::kHitUnlimited);
+    ACHECK(std::fabs(loudest({{0.1, 10}}, 0.4f) - 10 * single) < 1e-3f);
+    // A seek stops what is sounding as well.
+    m.play(0);
+    m.hitAt(0.05, 0, 0.4f);
+    render(0.06);
+    m.seek(0);
+    const std::vector<float> stopped = render(0.3);
+    ACHECK(std::all_of(stopped.begin(), stopped.end(), [](float x) { return x == 0; }));
+    std::printf("  hitsound polyphony: 2 at once %.2fx, 3 stacked %.2fx, 10 at once %.2f limited (%.2f unlimited)\n",
+                loudest({{0.1, 1}, {0.1, 1}}, 0.4f) / single, loudest({{0.1, 3}}, 0.4f) / single, limited,
+                loudest({{0.1, 10}}, 0.4f));
 }
 
 void runAudioTests() {

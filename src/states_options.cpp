@@ -149,8 +149,9 @@ public:
             {Row::Bool, "Hide HUD", "Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD.", &s.hideHud},
             {Row::Bool, "Watermark", "\"God's Hand Engine v.(version) (system) Slop Edition\" in the bottom-left corner of songs, as JS Engine shows its own.",
              &s.watermark},
-            {Row::Bool, "Intro video", "The engine's intro before the title screen. ENTER skips it (the SKIP button on a touchscreen).",
+            {Row::Bool, "Play intro at start", "The engine's intro video before the title screen. ENTER skips it (the SKIP button on a touchscreen).",
              &s.introVideo},
+            {Row::Bool, "Menu background blur", "Blurs the background of the main menu, Freeplay and the other menus.", &s.menuBlur},
             {Row::Bool, "Audio visualizer",
              "Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it "
              "is, how thick the notes are, your hits and misses, and your health.",
@@ -187,8 +188,12 @@ public:
             {Row::Number, "Master volume", "", nullptr, &s.masterVol, 0, 1, 0.05f},
             {Row::Number, "Music volume", "", nullptr, &s.musicVol, 0, 1, 0.05f},
             {Row::Number, "Sound effects", "", nullptr, &s.sfxVol, 0, 1, 0.05f},
-            {Row::Number, "Hit sounds", "A tick on every note you hit, on the note's own sample of the song: a fast spam becomes a "
-             "tone at the rate of its notes instead of a louder, crackling pile.", nullptr, &s.hitsoundVol, 0, 1, 0.05f},
+            {Row::Number, "Hit sounds", "A tick on every note you hit, on the note's own sample of the song.", nullptr,
+             &s.hitsoundVol, 0, 1, 0.05f},
+            {Row::Choice, "Hit sound polyphony",
+             "Limiter: every hit plays to its end over the others, and notes on the same tick add up (louder), held under a "
+             "limiter. Unlimited: the same with no limiter. One at a time: each hit cuts the last (a fast spam becomes a tone).",
+             nullptr, nullptr, 0, 0, 0, &s.hitsoundMode, {0, 1, 2}, {"Limiter", "Unlimited", "One at a time"}},
             {Row::Header, "DEBUG", ""},
             {Row::Choice, "Lua errors", "Errors of mod scripts on screen. Psych shows them only for scripts that set luaDebugMode.",
              nullptr, nullptr, 0, 0, 0, &s.luaErrors, {0, 1, 2}, {"Always", "luaDebugMode", "Off"}},
@@ -936,15 +941,19 @@ public:
             const Vector2 c{p.x + p.width * 0.5f + (float(dir) - 1.5f) * gap, strumY};
             // The receptor lights up while a note of its lane is being hit.
             float conf = 0;
+            double since = 1e9;  // the lighting note's hit, for the animation's frame
             for (const PreviewNote& n : kPattern) {
                 if (n.lane != dir) continue;
                 const double at = std::fmod(ms - n.t + loop * 4, loop);  // time since this note's last hit
                 const double lit = std::max(n.len, 140.0);
-                if (at < lit) conf = std::max(conf, float(n.len > 0 && at < n.len ? 1.0 : 1.0 - (at - std::max(0.0, n.len)) / 140.0));
+                if (at < lit) {
+                    conf = std::max(conf, float(n.len > 0 && at < n.len ? 1.0 : 1.0 - (at - std::max(0.0, n.len)) / 140.0));
+                    since = std::min(since, at / 1000.0);
+                }
             }
             const int state = conf > 0.01f ? 2 : 0;
             if (state) ui.beginDir(dir);  // idle receptors stay grey
-            const bool drawn = ui.strum(dir, c, size, state, alphaAll, 0, a.now);
+            const bool drawn = ui.strum(dir, c, size, state, alphaAll, 0, since);
             if (state) ui.endDir();
             if (!drawn) {
                 if (conf > 0.01f) {

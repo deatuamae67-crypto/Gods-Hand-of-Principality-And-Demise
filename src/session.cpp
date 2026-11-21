@@ -109,7 +109,7 @@ void Session::hitNote(int lane, size_t idx, double songMs, bool bot) {
     }
     GameEvent e{};
     e.type = GameEvent::PlayerHit;
-    e.lane = uint8_t(lane);
+    e.lane = uint16_t(lane);
     e.rating = r;
     e.time = n.t;
     e.errMs = err;
@@ -117,6 +117,7 @@ void Session::hitNote(int lane, size_t idx, double songMs, bool bot) {
     e.flags = n.flags;
     e.noteType = n.type;
     e.id = n.id;
+    e.stack = n.stack;
     events.push_back(e);
 }
 
@@ -129,11 +130,12 @@ void Session::missNote(int lane, size_t idx) {
     addHealth(-0.0475);  // once per stack, like Psych removing the stacked duplicates
     GameEvent e{};
     e.type = GameEvent::PlayerMiss;
-    e.lane = uint8_t(lane);
+    e.lane = uint16_t(lane);
     e.time = n.t;
     e.flags = n.flags;
     e.noteType = n.type;
     e.id = n.id;
+    e.stack = n.stack;
     events.push_back(e);
 }
 
@@ -164,7 +166,7 @@ void Session::press(int lane, double songMs) {
         addHealth(-0.3);
         GameEvent e{};
         e.type = GameEvent::PlayerMine;
-        e.lane = uint8_t(lane);
+        e.lane = uint16_t(lane);
         e.time = n.t;
         e.noteType = n.type;
         e.id = n.id;
@@ -176,7 +178,7 @@ void Session::press(int lane, double songMs) {
         addHealth(-0.04);
         GameEvent e{};
         e.type = GameEvent::GhostMiss;
-        e.lane = uint8_t(lane);
+        e.lane = uint16_t(lane);
         e.time = songMs;
         events.push_back(e);
     }
@@ -191,7 +193,7 @@ void Session::release(int lane, double songMs) {
     LaneNote& n = lanes_[1][lane][size_t(h)];
     const double end = n.t + n.len;
     GameEvent e{};
-    e.lane = uint8_t(lane);
+    e.lane = uint16_t(lane);
     e.time = n.t;
     e.length = n.len;
     e.flags = n.flags;
@@ -225,7 +227,7 @@ void Session::update(double songMs) {
                 n.state = kHeldDone;
                 GameEvent e{};
                 e.type = GameEvent::HoldDone;
-                e.lane = uint8_t(lane);
+                e.lane = uint16_t(lane);
                 e.time = n.t;
                 e.length = n.len;
                 events.push_back(e);
@@ -267,12 +269,13 @@ void Session::update(double songMs) {
                     if (n.len > 0) oh = (long long)oc;
                     GameEvent e{};
                     e.type = GameEvent::OpponentHit;
-                    e.lane = uint8_t(lane);
+                    e.lane = uint16_t(lane);
                     e.time = n.t;
                     e.length = n.len;
                     e.flags = n.flags;
                     e.noteType = n.type;
                     e.id = n.id;
+                    e.stack = n.stack;
                     events.push_back(e);
                 }
             }

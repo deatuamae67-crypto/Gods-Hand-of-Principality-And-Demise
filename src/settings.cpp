@@ -85,6 +85,7 @@ bool Settings::load(const std::string& path) {
         else if (k == "hideHud") hideHud = b;
         else if (k == "watermark") watermark = b;
         else if (k == "introVideo") introVideo = b;
+        else if (k == "menuBlur") menuBlur = b;
         else if (k == "visualizer") visualizer = b;
         else if (k == "scoreZoom") scoreZoom = b;
         else if (k == "botplayText") botplayText = b;
@@ -120,6 +121,7 @@ bool Settings::load(const std::string& path) {
         else if (k == "musicVol") musicVol = clampv(float(d), 0.0f, 1.0f);
         else if (k == "sfxVol") sfxVol = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hitsoundVol") hitsoundVol = clampv(float(d), 0.0f, 1.0f);
+        else if (k == "hitsoundMode") hitsoundMode = clampv(int(d), 0, 2);
         else if (k == "muted") muted = b;
         else if (k == "modRate") modRate = clampv(float(d), 0.5f, 2.0f);
         else if (k == "modBotplay") modBotplay = b;
@@ -162,7 +164,7 @@ bool Settings::save(const std::string& path) const {
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
-      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nintroVideo=" << introVideo << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
+      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nintroVideo=" << introVideo << "\nmenuBlur=" << menuBlur << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
       << "\nbotplayText=" << botplayText << "\ncomboStacking=" << comboStacking << "\nopponentNotes=" << opponentNotes
       << "\npauseMusic=" << pauseMusic << "\nsickWindow=" << sickWindow << "\ngoodWindow=" << goodWindow << "\nbadWindow=" << badWindow
       << "\nsafeFrames=" << safeFrames << "\nratingOffset=" << ratingOffset << "\nautoPause=" << autoPause << "\nnoReset=" << noReset
@@ -171,7 +173,7 @@ bool Settings::save(const std::string& path) const {
       << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums << "\ntouchControls=" << touchControls
       << "\nfpsCap=" << fpsCap << "\noffsetMs=" << offsetMs << "\nscrollSpeed=" << scrollSpeed
       << "\nmasterVol=" << masterVol << "\nmusicVol=" << musicVol << "\nsfxVol=" << sfxVol
-      << "\nhitsoundVol=" << hitsoundVol << "\nmuted=" << muted << "\nmodRate=" << modRate << "\nmodBotplay=" << modBotplay << "\nmodPractice=" << modPractice
+      << "\nhitsoundVol=" << hitsoundVol << "\nhitsoundMode=" << hitsoundMode << "\nmuted=" << muted << "\nmodRate=" << modRate << "\nmodBotplay=" << modBotplay << "\nmodPractice=" << modPractice
       << "\nmodMirror=" << modMirror << "\nmodScrollType=" << modScrollType << "\nmodScrollValue=" << modScrollValue
       << "\nfreeplaySong=" << freeplaySong << "\nfreeplayDiff=" << freeplayDiff << "\npsychUi=" << psychUi << "\npsychFolder=" << psychFolder << "\n";
     return bool(f);

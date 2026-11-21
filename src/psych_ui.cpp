@@ -455,9 +455,10 @@ bool PsychUi::strum(int dir, Vector2 c, float size, int state, float alpha, floa
     const std::vector<Frame> idle = frames(kArrows[dir]);
     if (idle.empty()) return false;
     const float scale = size / std::max(1.0f, idle[0].fw);
-    if (state == 2) {
+    if (state == 2) {  // as Psych: 24 frames a second from the hit, then the last one held
         const std::vector<Frame> hit = frames(std::string(kDirs[dir]) + " confirm");
-        if (!hit.empty()) return drawFrame(hit[size_t(int(t * 24.0) % int(hit.size()))], c, scale, alpha, angle);
+        if (!hit.empty())
+            return drawFrame(hit[size_t(std::clamp(int(std::max(0.0, t) * 24.0), 0, int(hit.size()) - 1))], c, scale, alpha, angle);
     } else if (state == 1) {
         const std::vector<Frame> press = frames(std::string(kDirs[dir]) + " press");
         if (!press.empty()) return drawFrame(press[0], c, scale, alpha, angle);
