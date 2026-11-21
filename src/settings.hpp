@@ -59,7 +59,8 @@ struct Settings {
     // that set luaDebugMode (as in Psych), 2 never.
     int luaErrors = 0;
     int luaWarnings = 1;
-    bool psychUi = false;      // "Psych Engine" interface (needs psychFolder)
+    bool psychUi = true;       // "Psych Engine interface": songs' HUD from the Psych / JS Engine copy found (the default, issue #36)
+    bool psychMenus = true;    // its "Psych menus": the menus laid out as Psych's too
     bool hitPopups = true;     // rating pictures and combo numbers on each hit
     int timeBar = 0;           // 0 time left, 1 time elapsed, 2 song name, 3 off (as in Psych)
     float healthBarAlpha = 1.0f;

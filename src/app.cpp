@@ -21,6 +21,7 @@
 #include "common.hpp"
 #include "gfx.hpp"
 #include "platform.hpp"
+#include "psych_menus.hpp"
 #include "process.hpp"
 #include "sysinfo.hpp"
 #include "raylib.h"
@@ -952,8 +953,13 @@ static void drawMenuScene(double now, unsigned tintHex, float pulse) {
 }
 
 void drawMenuBackground(double now, unsigned tintHex, float pulse) {
-    if (app().settings.menuBlur) gfx::drawBlurred([&] { drawMenuScene(now, tintHex, pulse); });  // Options: Menu background blur
-    else drawMenuScene(now, tintHex, pulse);
+    // The Psych look (issue #36): every other screen over menuDesat, in its colour.
+    const auto scene = [&] {
+        if (pm::on()) pm::background(pm::kDesat, gfx::mix(gfx::rgb(tintHex), WHITE, 0.15f));
+        else drawMenuScene(now, tintHex, pulse);
+    };
+    if (app().settings.menuBlur) gfx::drawBlurred(scene);  // Options: Menu background blur
+    else scene();
 }
 
 }  // namespace gh

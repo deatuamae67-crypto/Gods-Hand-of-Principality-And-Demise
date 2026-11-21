@@ -15,6 +15,7 @@
 #include "audio.hpp"
 #include "common.hpp"
 #include "gfx.hpp"
+#include "json.hpp"
 #include "psych.hpp"
 #include "scene.hpp"
 
@@ -237,6 +238,28 @@ int PsychUi::load(const std::string& folder, std::string& report, const std::vec
                 letters_.push_back({a.name, fr});
             }
             letterKnown_.fill(false);  // the cached letters pointed into the old list
+            normalKnown_.fill(false);
+            letterAnim_.fill(std::string());
+            offBold_.fill(Vector2{0, 0});
+            offNormal_.fill(Vector2{0, 0});
+            std::string js;
+            json::Document doc;
+            if (scene::readFile(abc.substr(0, abc.size() - 4) + ".json", js) && doc.parse(js))
+                if (const json::Value* chars = doc.get(doc.root(), "characters"); chars && chars->type == json::Type::Object)
+                    for (size_t i = 0; i < doc.size(*chars); ++i) {
+                        const std::string_view key = doc.keyAt(*chars, i);
+                        if (key.size() != 1 || (unsigned char)key[0] >= 128) continue;
+                        const unsigned char c = (unsigned char)key[0];
+                        const json::Value& v = doc.valAt(*chars, i);
+                        letterAnim_[c] = std::string(doc.strOr(doc.get(v, "animation"), ""));
+                        auto pair = [&](const char* name, Vector2& out) {
+                            const json::Value* a = doc.get(v, name);
+                            if (a && a->type == json::Type::Array && doc.size(*a) >= 2)
+                                out = {float(json::Document::num(&doc.at(*a, 0), 0)), float(json::Document::num(&doc.at(*a, 1), 0))};
+                        };
+                        pair("bold", offBold_[c]);
+                        pair("normal", offNormal_[c]);
+                    }
             if (alphabet_.id) ++found;
         }
     }
@@ -640,32 +663,55 @@ float PsychUi::lineHeight(float size) const { return size * fontScale_; }
 // Alphabet's bold letters: "A bold0000" in the original game, "a bold
 // instance 10000" in Psych 0.7 and later; symbols go by the character itself
 // ("& bold") or by name ("question bold", "question mark bold"...).
-const PsychUi::Frame* PsychUi::letter(char c) const {
+const PsychUi::Frame* PsychUi::letter(char c, bool bold) const {
     const unsigned char u = (unsigned char)c;
-    if (u >= letterOf_.size()) return findLetter(c);
-    if (!letterKnown_[u]) {
-        letterOf_[u] = findLetter(c);
-        letterKnown_[u] = true;
+    if (u >= letterOf_.size()) return findLetter(c, bold);
+    auto& of = bold ? letterOf_ : normalOf_;
+    auto& known = bold ? letterKnown_ : normalKnown_;
+    if (!known[u]) {
+        of[u] = findLetter(c, bold);
+        known[u] = true;
     }
-    return letterOf_[u];
+    return of[u];
 }
 
-const PsychUi::Frame* PsychUi::findLetter(char c) const {
+// Plain letters: "a lowercase" and "A uppercase" (Psych 0.7 on; the original
+// game: "A capital"), digits and symbols "<c> normal".
+const PsychUi::Frame* PsychUi::findLetter(char c, bool bold) const {
     std::vector<std::string> wants;
-    if (std::isalpha((unsigned char)c)) {
-        wants = {std::string(1, char(std::toupper((unsigned char)c))) + " bold",
-                 std::string(1, char(std::tolower((unsigned char)c))) + " bold"};
+    if ((unsigned char)c < 128 && !letterAnim_[(unsigned char)c].empty())
+        wants.push_back(letterAnim_[(unsigned char)c] + (bold ? " bold" : " normal"));
+    if (!bold) {
+        if (std::isalpha((unsigned char)c)) {
+            const char lo = char(std::tolower((unsigned char)c)), up = char(std::toupper((unsigned char)c));
+            if (c == up) wants.insert(wants.end(), {std::string(1, up) + " uppercase", std::string(1, up) + " capital", std::string(1, lo) + " uppercase"});
+            else wants.insert(wants.end(), {std::string(1, lo) + " lowercase", std::string(1, up) + " lowercase"});
+        } else {
+            wants.push_back(std::string(1, c) + " normal");
+        }
+    } else if (std::isalpha((unsigned char)c)) {
+        wants.insert(wants.end(), {std::string(1, char(std::toupper((unsigned char)c))) + " bold",
+                                   std::string(1, char(std::tolower((unsigned char)c))) + " bold"});
     } else if (std::isdigit((unsigned char)c)) {
-        wants = {std::string(1, c) + " bold"};
+        wants.push_back(std::string(1, c) + " bold");
     } else {
         static const std::pair<char, std::vector<const char*>> names[] = {
             {'?', {"question", "question mark"}}, {'!', {"exclamation", "exclamation point"}}, {'.', {"period"}},
             {',', {"comma"}}, {'\'', {"apostrophe"}}, {'"', {"quote"}}, {'-', {"dash"}}, {'&', {"amp"}},
             {'(', {"start parentheses"}}, {')', {"end parentheses"}}, {'/', {"forward slash"}}};
-        wants = {std::string(1, c) + " bold"};
+        wants.push_back(std::string(1, c) + " bold");
         for (const auto& [ch, list] : names)
             if (ch == c)
                 for (const char* n : list) wants.push_back(std::string(n) + " bold");
+    }
+    if (!bold && !std::isalpha((unsigned char)c)) {
+        static const std::pair<char, std::vector<const char*>> names[] = {
+            {'?', {"question", "question mark"}}, {'!', {"exclamation", "exclamation point"}}, {'.', {"period"}},
+            {',', {"comma"}}, {'\'', {"apostrophe"}}, {'"', {"quote"}}, {'-', {"dash"}}, {'&', {"amp"}},
+            {'(', {"start parentheses"}}, {')', {"end parentheses"}}, {'/', {"forward slash"}}};
+        for (const auto& [ch, list] : names)
+            if (ch == c)
+                for (const char* n : list) wants.push_back(std::string(n) + " normal");
     }
     for (const std::string& want : wants)
         for (const auto& [name, fr] : letters_) {
@@ -678,17 +724,37 @@ const PsychUi::Frame* PsychUi::findLetter(char c) const {
 }
 
 float PsychUi::alphabet(const std::string& s, float x, float y, float height, float alpha) const {
+    return drawLetters(s, x, y, height, alpha, true, true);
+}
+
+float PsychUi::alphabetNormal(const std::string& s, float x, float y, float height, float alpha) const {
+    return drawLetters(s, x, y, height, alpha, false, true);
+}
+
+float PsychUi::alphabetWidth(const std::string& s, float height, bool bold) const {
+    return drawLetters(s, 0, 0, height, 1, bold, false);
+}
+
+float PsychUi::drawLetters(const std::string& s, float x, float y, float height, float alpha, bool bold, bool draw) const {
     if (!active_ || !alphabet_.id) return -1;
-    const Frame* ref = letter('A');
+    const Frame* ref = letter('A', bold);
+    if (!ref) ref = letter('A', true);
     const float scale = height / std::max(1.0f, ref ? ref->fh : 70.0f);
     float pen = x;
     for (char c : s) {
         if (c == ' ') { pen += 40.0f * scale; continue; }
-        const Frame* f = letter(c);
+        const Frame* f = letter(c, bold);
+        if (!f && !bold) f = letter(c, true);  // a copy without plain letters
         if (!f) { pen += 40.0f * scale; continue; }
-        // Letters sit on a shared baseline: the bottom of their untrimmed box.
+        if (!draw) {
+            pen += f->fw * scale;
+            continue;
+        }
+        // Letters sit on a shared baseline: the bottom of their untrimmed box,
+        // moved by the character's offset (alphabet.json), as Flixel does.
+        const Vector2 off = (unsigned char)c < 128 ? (bold ? offBold_[(unsigned char)c] : offNormal_[(unsigned char)c]) : Vector2{0, 0};
         const float w = f->rotated ? f->src.height : f->src.width, h = f->rotated ? f->src.width : f->src.height;
-        const float dx = pen - f->fx * scale, dy = y + (height - f->fh * scale) - f->fy * scale;
+        const float dx = pen - f->fx * scale - off.x * scale, dy = y + (height - f->fh * scale) - f->fy * scale - off.y * scale;
         if (f->rotated)
             DrawTexturePro(alphabet_, f->src, {dx + w * scale * 0.5f, dy + h * scale * 0.5f, f->src.width * scale, f->src.height * scale},
                            {f->src.width * scale * 0.5f, f->src.height * scale * 0.5f}, -90.0f, gfx::fade(WHITE, alpha));

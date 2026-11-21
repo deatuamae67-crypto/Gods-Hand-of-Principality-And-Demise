@@ -97,7 +97,14 @@ public:
     // `height` is a capital letter's height. Width of the drawn text, or -1
     // without the alphabet.
     float alphabet(const std::string& s, float x, float y, float height, float alpha) const;
+    // The same with the plain (not bold) letters, as Psych's option names.
+    float alphabetNormal(const std::string& s, float x, float y, float height, float alpha) const;
+    // How wide alphabet() / alphabetNormal() draw s (-1 without the alphabet).
+    float alphabetWidth(const std::string& s, float height, bool bold = true) const;
     bool hasAlphabet() const { return alphabet_.id != 0; }
+    // The engine copy's folders the interface was read from (with the song's
+    // own mod first while a song plays): the menus read their pictures there too.
+    const std::vector<std::string>& roots() const { return roots_; }
     const Font* font() const { return font_.texture.id ? &font_ : nullptr; }
     const std::string& menuMusic() const { return menuMusic_; }
     // The pause menu's song: 0 none, 1 breakfast, 2 tea-time (the other one
@@ -139,12 +146,17 @@ private:
     float fontScale_ = 1.0f, fontAscent_ = 1.0f;
     Texture2D alphabet_{};
     std::vector<std::pair<std::string, Frame>> letters_;  // alphabet frames ("A bold0000"...)
-    const Frame* letter(char c) const;
-    const Frame* findLetter(char c) const;
+    const Frame* letter(char c, bool bold = true) const;
+    const Frame* findLetter(char c, bool bold) const;
+    float drawLetters(const std::string& s, float x, float y, float height, float alpha, bool bold, bool draw) const;
     // letter() for each character, found once: the pause menu draws its
     // letters every frame, and the atlas holds hundreds of frames.
-    mutable std::array<const Frame*, 128> letterOf_{};
-    mutable std::array<bool, 128> letterKnown_{};
+    mutable std::array<const Frame*, 128> letterOf_{}, normalOf_{};
+    mutable std::array<bool, 128> letterKnown_{}, normalKnown_{};
+    // Psych 1.0's alphabet.json: each character's animation name and its
+    // offsets (the apostrophe sits high, the dash in the middle...).
+    std::array<std::string, 128> letterAnim_{};
+    std::array<Vector2, 128> offBold_{}, offNormal_{};
     std::vector<std::pair<int, std::string>> sounds_;  // Sfx id -> file
     std::string menuMusic_, pauseMusic_, teaTime_;
 };

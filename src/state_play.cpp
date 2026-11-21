@@ -4,6 +4,7 @@
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
 #include "state_play.hpp"
+#include "psych_menus.hpp"
 #include "psych_ui.hpp"
 
 #include <algorithm>
@@ -1922,7 +1923,9 @@ void PlayState::drawUnderNotes() {
 }
 
 void PlayState::drawPause() {
-    if (psychUi().active() && psychUi().font()) {
+    // Psych's pause menu whenever its look is on (issue #36: never this one
+    // instead): with the copy's letters and font, or the game's in their place.
+    if (pm::on() || (psychUi().active() && psychUi().font())) {
         drawPsychPause();
         return;
     }
@@ -1942,7 +1945,6 @@ void PlayState::drawPause() {
 // in a slanted list that glides to the selection.
 void PlayState::drawPsychPause() {
     App& a = app();
-    const PsychUi& ui = psychUi();
     const float t = float(a.now - pausedAt_);
     auto quartInOut = [](float x) { return x <= 0.5f ? 8.0f * x * x * x * x : 1.0f - 8.0f * std::pow(1.0f - x, 4.0f); };
     DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(BLACK, 0.6f * quartInOut(saturate(t / 0.4f))));
@@ -1954,17 +1956,17 @@ void PlayState::drawPsychPause() {
     const std::string info[3] = {songNameShown_.empty() ? chart_.title : songNameShown_, diff, "Blueballed: " + std::to_string(a.blueballed)};
     for (int i = 0; i < 3; ++i) {
         const float k = quartInOut(saturate((t - 0.3f - 0.2f * float(i)) / 0.4f));
-        ui.text(info[i], gfx::W - 20, 15.0f + 32.0f * float(i) + 5.0f * k, 32, fade(WHITE, k), 1, 0);
+        pm::vcr(info[i], gfx::W - 20, 15.0f + 32.0f * float(i) + 5.0f * k, 32, fade(WHITE, k), 1, 0);
     }
-    if (cfg_.practice) ui.text("PRACTICE MODE", gfx::W - 20, 15.0f + 101.0f, 32, WHITE, 1, 0);
-    if (cfg_.botplay) ui.text("BOTPLAY", gfx::W - 20, 15.0f + (cfg_.practice ? 133.0f : 101.0f), 32, WHITE, 1, 0);
+    if (cfg_.practice) pm::vcr("PRACTICE MODE", gfx::W - 20, 15.0f + 101.0f, 32, WHITE, 1, 0);
+    if (cfg_.botplay) pm::vcr("BOTPLAY", gfx::W - 20, 15.0f + (cfg_.practice ? 133.0f : 101.0f), 32, WHITE, 1, 0);
     static const char* items[kPauseItems] = {"Resume", "Restart Song", "Options", "Exit to menu"};
     for (int i = 0; i < kPauseItems; ++i) {
         const float target = float(i) - pauseScroll_;
         const float x = 90 + target * 20, y = 320 + target * 156;
         if (y < -100 || y > gfx::H + 40) continue;
         const float al = i == pauseSel_ ? 1.0f : 0.6f;
-        if (ui.alphabet(items[i], x, y, 70, al) < 0) ui.text(items[i], x, y, 64, fade(WHITE, al), -1, 2.0f);
+        pm::bold(items[i], x, y, 70, al);
     }
 }
 

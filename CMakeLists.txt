@@ -276,6 +276,7 @@ if(GH_BUILD_GAME)
     src/stage.cpp
     src/states_menu.cpp
     src/song_icons.cpp
+    src/psych_menus.cpp
     src/states_options.cpp
     src/state_play.cpp
     src/play_psych.cpp

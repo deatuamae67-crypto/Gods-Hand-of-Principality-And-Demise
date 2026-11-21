@@ -11,6 +11,7 @@
 #include "gfx.hpp"
 #include "note_raster.hpp"
 #include "platform.hpp"
+#include "psych_menus.hpp"
 #include "psych_ui.hpp"
 #include "raylib.h"
 #include "synth.hpp"
@@ -41,6 +42,9 @@ struct Row {
 };
 // The row Options was on, to come back to it from a screen it opened.
 std::string gLastOptionsRow;
+// A screen opened from Options (note skins, key bindings...): back in
+// Options, Psych's look opens that row's category again.
+bool gOptionsSubScreen = false;
 
 // The words of s on as many lines as it takes to stay within `width`.
 std::vector<std::string> wrapWidth(FontId f, const std::string& s, float size, float width) {
@@ -142,6 +146,8 @@ public:
              nullptr, 0, 0, 0, &s.noteCounter, {0, 1, 2}, {"Off", "Your side", "Both sides"}},
             {Row::Bool, "Psych Engine interface", "Psych's notes, ratings, health and time bars, fonts, pause menu and sounds, from your own copy.",
              &s.psychUi},
+            {Row::Bool, "  Psych menus", "With the Psych Engine interface: the title, main menu, Freeplay, Story Mode, Options and "
+             "Credits laid out as Psych's too, with your copy's pictures (drawn by the game where it has none).", &s.psychMenus},
             {Row::Bool, "Hit popups", "Rating pictures and combo numbers that pop up on each hit.", &s.hitPopups},
             {Row::Choice, "Time bar", "The bar at the top of the screen, as in Psych.", nullptr, nullptr, 0, 0, 0, &s.timeBar,
              {0, 1, 2, 3}, {"Time left", "Time elapsed", "Song name", "Off"}},
@@ -245,6 +251,16 @@ public:
         for (int i = 0; i < int(rows_.size()); ++i)
             if (rows_[size_t(i)].kind != Row::Header && rows_[size_t(i)].label == gLastOptionsRow) sel_ = i;
         anim_ = float(sel_);
+        // Psych's look: the categories first, or the one a sub-screen came from.
+        cat_ = -1;
+        catSel_ = 0;
+        const std::vector<int> h = headers();
+        for (int k = 0; k < int(h.size()); ++k)
+            if (h[size_t(k)] < sel_) catSel_ = k;
+        if (gOptionsSubScreen && !h.empty()) cat_ = h[size_t(catSel_)];
+        gOptionsSubScreen = false;
+        rowAnim_ = float(sel_);
+        changedAt_.assign(rows_.size(), -10.0);
     }
 
     void update(double dt) override {
@@ -280,8 +296,30 @@ public:
             }
             return;
         }
-        if (in.up()) move(-1);
-        if (in.down()) move(1);
+        if (pm::on()) {
+            rowAnim_ = approach(rowAnim_, float(sel_), 9.6f, float(dt));  // Psych's Alphabet glide
+            catAnim_ = approach(catAnim_, float(catSel_), 9.6f, float(dt));
+            if (cat_ < 0) {  // Psych's OptionsState: the list of categories
+                const std::vector<int> h = headers();
+                const int n = int(h.size());
+                if (in.up()) { catSel_ = (catSel_ + n - 1) % n; sfxPlay(Sfx::Scroll); }
+                if (in.down()) { catSel_ = (catSel_ + 1) % n; sfxPlay(Sfx::Scroll); }
+                if (in.accept() && n > 0) {
+                    cat_ = h[size_t(catSel_)];
+                    sel_ = cat_ + 1;
+                    rowAnim_ = float(sel_);
+                    gLastOptionsRow = rows_[size_t(sel_)].label;
+                    sfxPlay(Sfx::Scroll);
+                }
+                if (in.back() && !in.pressed(KEY_BACKSPACE)) leave();
+                return;
+            }
+            if (in.up()) moveInCategory(-1);
+            if (in.down()) moveInCategory(1);
+        } else {
+            if (in.up()) move(-1);
+            if (in.down()) move(1);
+        }
         const int dir = in.left() ? -1 : (in.right() ? 1 : 0);
         const bool shift = in.isDown(KEY_LEFT_SHIFT) || in.isDown(KEY_RIGHT_SHIFT);
         bool changed = false;
@@ -294,6 +332,7 @@ public:
                     if (r.b == &a.settings.antialiasing) psychUi().setSmooth(a.settings.antialiasing);  // the loaded pictures too
                     if (r.label == "Psych Engine interface") a.applyPsychUi();  // the best copy found among the mods
                     changed = true;
+                    changedAt_[size_t(sel_)] = a.now;  // Psych's checkbox animates
                 }
                 break;
             case Row::Number:
@@ -314,7 +353,11 @@ public:
                 }
                 break;
             case Row::Action:
-                if (in.accept()) { sfxPlay(Sfx::Confirm); r.action(); }
+                if (in.accept()) {
+                    sfxPlay(Sfx::Confirm);
+                    gOptionsSubScreen = true;
+                    r.action();
+                }
                 break;
             case Row::Key:
                 if (dir) { slot_ = 1 - slot_; sfxPlay(Sfx::Scroll); }
@@ -329,19 +372,33 @@ public:
             a.saveSettings();
         }
         if (in.back() && !in.pressed(KEY_BACKSPACE)) {
-            a.saveSettings();
-            sfxPlay(Sfx::Cancel);
-            if (a.optionsReturn) {  // opened from a song's pause menu: back to that song
-                const PlayRequest req = *a.optionsReturn;
-                a.optionsReturn.reset();
-                a.change(makePlay(req));
-            } else {
-                a.change(makeMainMenu());
+            if (pm::on() && cat_ >= 0) {  // Psych: back to the categories
+                a.saveSettings();
+                sfxPlay(Sfx::Cancel);
+                cat_ = -1;
+                return;
             }
+            leave();
+        }
+    }
+    void leave() {
+        App& a = app();
+        a.saveSettings();
+        sfxPlay(Sfx::Cancel);
+        if (a.optionsReturn) {  // opened from a song's pause menu: back to that song
+            const PlayRequest req = *a.optionsReturn;
+            a.optionsReturn.reset();
+            a.change(makePlay(req));
+        } else {
+            a.change(makeMainMenu());
         }
     }
 
     void draw() override {
+        if (pm::on()) {
+            drawPsych();
+            return;
+        }
         App& a = app();
         gfx::beginCanvas();
         drawMenuBackground(a.now, 0x5C9CFF, menuPulse());
@@ -400,6 +457,133 @@ public:
     }
 
 private:
+    std::vector<int> headers() const {
+        std::vector<int> h;
+        for (int i = 0; i < int(rows_.size()); ++i)
+            if (rows_[size_t(i)].kind == Row::Header) h.push_back(i);
+        return h;
+    }
+    // A category's name as Psych's menu has it.
+    static std::string catName(const std::string& header) {
+        if (header.rfind("CONTROLS", 0) == 0) return "Controls";
+        if (header == "INTERFACE") return "Visuals and UI";
+        if (header == "RENDER MODE VIDEOS") return "Render Mode";
+        std::string s = header;
+        for (size_t i = 1; i < s.size(); ++i) s[i] = char(std::tolower((unsigned char)s[i]));
+        return s;
+    }
+    int categoryEnd(int header) const {
+        int e = header + 1;
+        while (e < int(rows_.size()) && rows_[size_t(e)].kind != Row::Header) ++e;
+        return e;
+    }
+    void moveInCategory(int d) {
+        const int first = cat_ + 1, end = categoryEnd(cat_), n = end - first;
+        if (n <= 0) return;
+        sel_ = first + ((sel_ - first + d) % n + n) % n;
+        gLastOptionsRow = rows_[size_t(sel_)].label;
+        sfxPlay(Sfx::Scroll);
+    }
+    std::string valueText(const Row& r) const {
+        const App& a = app();
+        switch (r.kind) {
+            case Row::Number: return r.fmt(*r.f);
+            case Row::Choice:
+                if (!r.names.empty()) {
+                    for (size_t k = 0; k < r.choices.size() && k < r.names.size(); ++k)
+                        if (r.choices[k] == *r.i) return r.names[k];
+                    return "";
+                }
+                return *r.i == 0 ? std::string("Unlimited") : std::string(TextFormat("%d FPS", *r.i));
+            case Row::Action: return r.value ? r.value() : std::string();
+            case Row::Key: {
+                std::string k0 = keyName(a.settings.keys4[r.lane][0]), k1 = keyName(a.settings.keys4[r.lane][1]);
+                if (waiting_ && rows_[size_t(sel_)].lane == r.lane && &rows_[size_t(sel_)] == &r) (slot_ ? k1 : k0) = "...";
+                return k0 + " / " + k1;
+            }
+            default: return "";
+        }
+    }
+    // Psych's OptionsState (the categories: bold letters, centred, 92 pixels
+    // apart, between > and <) and BaseOptionsMenu (the options in the plain
+    // letters, a checkbox before the switches, the value after the others, and
+    // the description in a dark box at the bottom), over menuDesat in pink.
+    void drawPsych() {
+        App& a = app();
+        gfx::beginCanvas();
+        const auto bg = [&] { pm::background(pm::kDesat, Color{0xEA, 0x71, 0xFD, 255}); };
+        if (a.settings.menuBlur) gfx::drawBlurred(bg);
+        else bg();
+        const std::vector<int> h = headers();
+        if (cat_ < 0) {
+            const int n = int(h.size());
+            for (int i = 0; i < n; ++i) {
+                const std::string name = catName(rows_[size_t(h[size_t(i)])].label);
+                const float w = pm::boldWidth(name, 68), x = (gfx::W - w) * 0.5f;
+                const float y = (gfx::H - 68) * 0.5f + 92.0f * (float(i) - float(n) / 2.0f) + 45.0f;
+                pm::bold(name, x, y, 68);
+                if (i == catSel_) {
+                    pm::bold(">", x - 63, y, 68);
+                    pm::bold("<", x + w + 15, y, 68);
+                }
+            }
+            gfx::endCanvas();
+            return;
+        }
+        pm::bold(catName(rows_[size_t(cat_)].label), 75, 45, 68 * 0.6f, 0.4f);
+        const int first = cat_ + 1, end = categoryEnd(cat_);
+        for (int i = first; i < end; ++i) {
+            const Row& r = rows_[size_t(i)];
+            const float target = float(i) - rowAnim_;
+            const bool isBool = r.kind == Row::Bool;
+            const float x = (isBool ? 220.0f : 140.0f) + 20.0f * target, y = 260.0f + 156.0f * target;
+            if (y < -160 || y > gfx::H + 40) continue;
+            const float alpha = i == sel_ ? 1.0f : 0.6f;
+            std::string label = r.label;
+            while (!label.empty() && label.front() == ' ') label.erase(label.begin());
+            const float w = pm::plain(label, x, y, 60, alpha);
+            if (isBool) {
+                const bool v = r.label == "Fullscreen" ? a.settings.fullscreen : *r.b;
+                pm::checkbox({x - 130, y + 30}, v, a.now - changedAt_[size_t(i)], alpha);
+            } else {
+                const std::string v = valueText(r);
+                if (!v.empty()) pm::plain(v, x + w + 60, y, 60, alpha);
+            }
+        }
+        // The description, centred, in a dark box 270 pixels under the middle.
+        const std::string& help = rows_[size_t(sel_)].help;
+        if (!help.empty()) {
+            std::vector<std::string> lines;
+            std::string cur;
+            size_t p = 0;
+            while (p < help.size()) {
+                size_t q = help.find(' ', p);
+                if (q == std::string::npos) q = help.size();
+                const std::string word = help.substr(p, q - p);
+                const std::string tryLine = cur.empty() ? word : cur + " " + word;
+                if (!cur.empty() && pm::vcrWidth(tryLine, 32) > 1180) {
+                    lines.push_back(cur);
+                    cur = word;
+                } else {
+                    cur = tryLine;
+                }
+                p = q + 1;
+            }
+            if (!cur.empty()) lines.push_back(cur);
+            const float lh = 32 * 1.15f, th = lh * float(lines.size());
+            float tw = 0;
+            for (const std::string& l : lines) tw = std::max(tw, pm::vcrWidth(l, 32));
+            const float ty = (gfx::H - th) * 0.5f + 270.0f;
+            DrawRectangleRec({(gfx::W - tw) * 0.5f - 10, ty - 10, tw + 20, th + 25}, fade(BLACK, 0.6f));
+            for (size_t k = 0; k < lines.size(); ++k) pm::vcr(lines[k], gfx::W * 0.5f, ty + lh * float(k), 32, WHITE, 0, 2.4f);
+        }
+        gfx::endCanvas();
+    }
+
+    int cat_ = -1, catSel_ = 0;  // Psych's look: the category open (its header row), or -1
+    float catAnim_ = 0, rowAnim_ = 0;
+    std::vector<double> changedAt_;  // when each switch was last flipped (its checkbox animates)
+
     void chooseFolder() {
         App& a = app();
         if (platform::kAndroid) {
