@@ -176,6 +176,7 @@ Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirr
             }
             p.chart.title = e.title;
             p.chart.difficulty = diff;
+            p.chart.autoCharted = true;  // the shame watermark (issue #36)
         }
     } else {
         size_t idx = 0;

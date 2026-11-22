@@ -173,7 +173,8 @@ bool chartContent(const fs::path& f) {
 // A count chart's name: God's Hand's .ghn, R-Slice's .raid, the iutk
 // engine's .bin (FNC1) - each read for what it holds.
 bool countChartName(const std::string& lowerName) {
-    return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, ".raid") || endsWithI(lowerName, ".bin");
+    return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, kAutoChartExt) || endsWithI(lowerName, ".raid") ||
+           endsWithI(lowerName, ".bin");
 }
 
 // A chart: Psych JSON, a binary .ghc (which may be the only one there: a

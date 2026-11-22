@@ -729,7 +729,8 @@ std::string metaOf(const Chart& c) {
         const psych::ChartEvent& e = c.events[i];
         j += std::string(i ? "," : "") + "[" + num(e.timeMs) + "," + esc(e.name) + "," + esc(e.v1) + "," + esc(e.v2) + "]";
     }
-    j += "],\"playerNotes\":\"" + c.playerNotes.str() + "\",\"opponentNotes\":\"" + c.opponentNotes.str() + "\",\"rawNotes\":\"" +
+    j += std::string("],\"autochart\":") + (c.autoCharted ? "true" : "false");
+    j += ",\"playerNotes\":\"" + c.playerNotes.str() + "\",\"opponentNotes\":\"" + c.opponentNotes.str() + "\",\"rawNotes\":\"" +
          (c.rawNoteCount.isZero() ? (c.playerNotes + c.opponentNotes).str() : c.rawNoteCount.str()) + "\"}";
     return j;
 }
@@ -916,6 +917,7 @@ bool loadGhn(const std::string& path, Chart& out, std::string& err) {
     const json::Value& r = d.root();
     out = Chart();
     metaChart(d, r, out);
+    out.autoCharted = std::memcmp(h, "GHAC", 4) == 0 || json::Document::boolean(d.get(r, "autochart"), false);
     if (const json::Value* sk = d.get(r, "sideKeys"); sk && d.size(*sk) == 2)
         for (int s = 0; s < 2; ++s) out.sideKeys[s] = std::clamp(int(json::Document::num(&d.at(*sk, size_t(s)), 0)), 0, kMaxKeys);
     if (const json::Value* ev = d.get(r, "events"))
@@ -1126,7 +1128,7 @@ bool writeGhn(const std::string& path, const Chart& chart, std::string& err, Ghn
     std::string metaStored = deflateOf(meta, 9);
     const bool metaPacked = !metaStored.empty() && metaStored.size() < meta.size();
     if (!metaPacked) metaStored = meta;
-    std::string head = "GHN1";
+    std::string head = chart.autoCharted ? "GHAC" : "GHN1";
     put32(head, 1);
     put32(head, 0);
     put32(head, uint32_t(outs.size()));
@@ -1187,8 +1189,17 @@ CountChartKind countChartKind(const std::string& path) {
     std::fclose(f);
     if (n == 5 && std::memcmp(m, "FNC1", 4) == 0 && m[4] >= 2 && m[4] <= 4) return CountChartKind::Fnc1;
     if (n >= 4 && std::memcmp(m, "RAID", 4) == 0) return CountChartKind::Raid;
-    if (n >= 4 && std::memcmp(m, "GHN1", 4) == 0) return CountChartKind::Ghn;
+    if (n >= 4 && (std::memcmp(m, "GHN1", 4) == 0 || std::memcmp(m, "GHAC", 4) == 0)) return CountChartKind::Ghn;
     return CountChartKind::None;
+}
+
+bool isAutoChartFile(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    unsigned char m[4] = {};
+    const bool ok = std::fread(m, 1, 4, f) == 4 && std::memcmp(m, "GHAC", 4) == 0;
+    std::fclose(f);
+    return ok;
 }
 
 bool loadCountChart(const std::string& path, Chart& out, std::string& err) {
@@ -1201,6 +1212,10 @@ bool loadCountChart(const std::string& path, Chart& out, std::string& err) {
 }
 
 bool writeFnc1(const std::string& path, const Chart& chart, std::string& err) {
+    if (chart.autoCharted) {
+        err = "an AutoChart chart plays only in God's Hand: it stays .ghac";
+        return false;
+    }
     // Cells by time, then lane (as the converter sorts them).
     struct Cell {
         int32_t time;
@@ -1247,6 +1262,10 @@ int convertChartFile(const std::string& in, const std::string& out) {
     const auto t0 = std::chrono::steady_clock::now();
     auto seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
     std::string err;
+    if (isAutoChartFile(in) && !endsWithI(out, kAutoChartExt)) {
+        std::fprintf(stderr, "%s: an AutoChart chart plays only in God's Hand; it can only be saved as .ghac\n", in.c_str());
+        return 1;
+    }
     if (endsWithI(out, kBinaryChartExt)) {
         ConvertStats st;
         if (!convertChartToBinary(in, out, err, &st)) {
@@ -1262,7 +1281,11 @@ int convertChartFile(const std::string& in, const std::string& out) {
         std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
         return 1;
     }
-    if (endsWithI(out, kCountChartExt)) {
+    if (c.autoCharted && !endsWithI(out, kAutoChartExt)) {
+        std::fprintf(stderr, "%s: an AutoChart chart plays only in God's Hand; it can only be saved as .ghac\n", in.c_str());
+        return 1;
+    }
+    if (endsWithI(out, kCountChartExt) || endsWithI(out, kAutoChartExt)) {
         GhnStats st;
         if (!writeGhn(out, c, err, &st)) {
             std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());

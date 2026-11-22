@@ -32,13 +32,35 @@ struct FlpPattern {
     std::vector<FlpNote> notes;
 };
 
+// A channel of the rack: its number and the name FL Studio shows.
+struct FlpChannel {
+    int index = 0;
+    std::string name;
+};
+
+// A pattern placed in the song (the first arrangement's playlist): from
+// `position` (ticks), `length` ticks of the pattern from its tick `start`.
+struct FlpClip {
+    uint32_t position = 0, length = 0;
+    int pattern = 0;
+    double start = 0;
+    int track = 0;
+};
+
 struct FlpProject {
     int ppqn = 96;          // ticks per beat
     double bpm = 0;         // 0: not in the file (.fsc scores)
     std::string title;
     int chartChannel = 0;   // the FPC channel (SNIFF's choice), else the first
     std::vector<FlpPattern> patterns;
+    std::vector<FlpChannel> channels;  // the rack, in order
+    std::vector<FlpClip> playlist;     // empty: the project has no arrangement
 };
+
+// Every note of a channel as the song plays it, times in ticks from the
+// song's start: the playlist's clips in place, or - with no playlist - the
+// patterns' own notes. channel -1: every channel's.
+std::vector<FlpNote> flpSongNotes(const FlpProject& p, int channel);
 
 bool readFlp(std::string_view bytes, FlpProject& out, std::string& err);
 bool readFlpFile(const std::string& path, FlpProject& out, std::string& err);

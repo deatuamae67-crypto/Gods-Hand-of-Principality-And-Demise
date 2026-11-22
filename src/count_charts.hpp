@@ -56,8 +56,14 @@ namespace gh {
 // What kind of count chart the file is, from its first bytes (none: 0).
 enum class CountChartKind { None = 0, Fnc1, Raid, Ghn };
 constexpr const char* kCountChartExt = ".ghn";
+// AutoChart's charts (issue #36): a .ghn marked as made by AutoChart, with
+// its own magic ("GHAC"), so nothing but God's Hand reads it - and God's
+// Hand plays it with the shame watermark and never converts it to another
+// engine's format.
+constexpr const char* kAutoChartExt = ".ghac";
 CountChartKind countChartKind(const std::string& path);
 inline bool isCountChart(const std::string& path) { return countChartKind(path) != CountChartKind::None; }
+bool isAutoChartFile(const std::string& path);  // "GHAC": made by AutoChart
 
 // Reads one into `out` (finalized). False with `err` set when the file is
 // not one, is cut short or does not add up (counts, checksums).
@@ -67,7 +73,8 @@ bool loadCountChart(const std::string& path, Chart& out, std::string& err);
 // handing a chart to iutk. Lanes past 4 a side and lengths are not kept.
 bool writeFnc1(const std::string& path, const Chart& chart, std::string& err);
 
-// A chart as .ghn. What the writer did, for the converter's report.
+// A chart as .ghn (as .ghac, "GHAC", when chart.autoCharted). What the
+// writer did, for the converter's report.
 struct GhnStats {
     uint64_t notes = 0;        // notes of the chart (cells)
     uint32_t blocks = 0, repeats = 0;  // notes blocks; repeat entries

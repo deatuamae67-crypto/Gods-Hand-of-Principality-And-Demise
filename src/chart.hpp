@@ -72,6 +72,9 @@ struct Chart {
     int sideKeys[2] = {0, 0};
     int keysOf(int side) const { return sideKeys[side & 1] ? sideKeys[side & 1] : keys; }
     double speed = 2.0;        // FNF scroll speed (pixels/ms = 0.45 * speed)
+    // Made by AutoChart (issue #36): played with the shame watermark, and
+    // saved only as .ghac, which no other engine reads.
+    bool autoCharted = false;
     std::vector<Note> notes;   // sorted by time
     std::vector<TempoPoint> tempo;
     std::vector<FocusPoint> focus;

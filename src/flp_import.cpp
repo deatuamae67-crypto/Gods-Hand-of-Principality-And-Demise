@@ -50,6 +50,11 @@ enum : uint8_t {
     kTitle = 0xC2,
     kPlugName = 0xC9,
     kNoteData = 0xE0,
+    kChanNameOld = 0xC0,  // a channel's name (old versions)
+    kSampleFile = 0xC4,   // a sampler channel's file
+    kChanName = 0xCB,     // a channel's (or plugin's) name, as the user set it
+    kPlaylist = 0xE9,     // the arrangement: an array of clips
+    kMixerParams = 0xE1,  // the mixer: no more channels after it
 };
 
 constexpr size_t kNoteSize = 24;
@@ -72,7 +77,18 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
     i += 8;
     int prevId = -1;
     uint32_t prevValue = 0, lastChannel = 0;
-    bool fpcFound = false;
+    bool fpcFound = false, inMixer = false, havePlaylist = false;
+    // A channel's name: the one the user gave it, else its plugin's, else its sample's.
+    std::vector<int> nameRank;
+    auto nameChannel = [&](const std::string& name, int rank) {
+        if (inMixer || name.empty() || out.channels.empty()) return;
+        FlpChannel& ch = out.channels.back();
+        int& r = nameRank.back();
+        if (rank > r) {
+            ch.name = name;
+            r = rank;
+        }
+    };
     auto pattern = [&](int number) -> FlpPattern& {
         for (FlpPattern& p : out.patterns)
             if (p.number == number) return p;
@@ -110,16 +126,63 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
             i += len;
         }
         switch (id) {
-            case kGenChannel: lastChannel = value; break;
+            case kGenChannel:
+                lastChannel = value;
+                if (!inMixer) {
+                    out.channels.push_back(FlpChannel{int(value), {}});
+                    nameRank.push_back(0);
+                }
+                break;
+            case kMixerParams: inMixer = true; break;
+            case kChanNameOld: nameChannel(flString(data, len), 3); break;
+            case kChanName: nameChannel(flString(data, len), 3); break;
+            case kSampleFile: {
+                std::string f = flString(data, len);
+                const size_t slash = f.find_last_of("/\\");
+                if (slash != std::string::npos) f = f.substr(slash + 1);
+                nameChannel(f, 1);
+                break;
+            }
+            case kPlaylist:
+                if (!havePlaylist && data) {
+                    havePlaylist = true;
+                    // Clips of 32 bytes (60 from FL Studio 21), each with 20480
+                    // in its bytes 4-5: the size whose clips all have it.
+                    for (size_t size : {size_t(60), size_t(32)}) {
+                        if (len == 0 || len % size) continue;
+                        bool all = true;
+                        for (size_t k = 0; k + size <= len && all; k += size) all = rd16(data + k + 4) == 20480;
+                        if (!all) continue;
+                        for (size_t k = 0; k + size <= len; k += size) {
+                            const unsigned char* r = data + k;
+                            const uint16_t item = rd16(r + 6);
+                            if (item <= 20480) continue;  // an audio clip, not a pattern
+                            FlpClip c;
+                            c.position = rd32(r);
+                            c.pattern = int(item - 20480);
+                            c.length = rd32(r + 8);
+                            c.track = 499 - int(rd16(r + 12));
+                            float st = 0;
+                            std::memcpy(&st, r + 24, 4);
+                            c.start = std::isfinite(st) && st > 0 ? double(st) : 0.0;
+                            out.playlist.push_back(c);
+                        }
+                        break;
+                    }
+                }
+                break;
             case kTempo: out.bpm = value / 1000.0; break;
             case kOldTempo: if (out.bpm <= 0) out.bpm = value; break;
             case kTitle: out.title = flString(data, len); break;
-            case kPlugName:
-                if (!fpcFound && flString(data, len) == "FPC") {
+            case kPlugName: {
+                const std::string plug = flString(data, len);
+                if (!fpcFound && !inMixer && plug == "FPC") {
                     out.chartChannel = int(lastChannel);
                     fpcFound = true;
                 }
+                nameChannel(plug, 2);
                 break;
+            }
             case kPatName:
                 if (prevId == kPatStart) pattern(int(prevValue)).name = flString(data, len);
                 break;
@@ -145,6 +208,35 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
     }
     std::sort(out.patterns.begin(), out.patterns.end(), [](const FlpPattern& a, const FlpPattern& c) { return a.number < c.number; });
     return true;
+}
+
+std::vector<FlpNote> flpSongNotes(const FlpProject& p, int channel) {
+    std::vector<FlpNote> out;
+    auto patternOf = [&](int number) -> const FlpPattern* {
+        for (const FlpPattern& q : p.patterns)
+            if (q.number == number) return &q;
+        return nullptr;
+    };
+    if (p.playlist.empty()) {
+        for (const FlpPattern& q : p.patterns)
+            for (const FlpNote& n : q.notes)
+                if (channel < 0 || n.channel == channel) out.push_back(n);
+    } else {
+        for (const FlpClip& c : p.playlist) {
+            const FlpPattern* q = patternOf(c.pattern);
+            if (!q) continue;
+            const double from = c.start, to = c.start + double(c.length);
+            for (const FlpNote& n : q->notes) {
+                if (channel >= 0 && n.channel != channel) continue;
+                if (double(n.time) < from || double(n.time) >= to) continue;
+                FlpNote m = n;
+                m.time = uint32_t(double(c.position) + double(n.time) - from);
+                out.push_back(m);
+            }
+        }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const FlpNote& a, const FlpNote& b) { return a.time < b.time; });
+    return out;
 }
 
 bool readFlpFile(const std::string& path, FlpProject& out, std::string& err) {

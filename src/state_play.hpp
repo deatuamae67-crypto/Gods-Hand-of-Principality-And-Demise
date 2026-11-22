@@ -141,6 +141,7 @@ private:
     void drawLoading();
     void drawDebugLog();
     void drawWatermark();
+    void drawShameWatermark();  // AutoChart charts: "AUTOCHARTED", mid-screen
     void syncScriptBpm();
     void updateVisualizer(double dt);
     void drawVisualizer() const;

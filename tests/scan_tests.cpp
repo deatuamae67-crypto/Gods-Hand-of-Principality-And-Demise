@@ -428,6 +428,98 @@ std::string makeFlp() {
     return f + ev;
 }
 
+// A song arranged in FL Studio: a sampler channel (its file names it), a
+// synth the user renamed, and pattern 1 placed twice on the playlist - the
+// second clip cut to its ticks 96 to 288.
+std::string makeFlpSong(size_t clipSize) {
+    std::string ev;
+    auto word = [&](uint8_t id, uint16_t v) { ev += char(id); ev += char(v & 255); ev += char(v >> 8); };
+    auto dword = [&](uint8_t id, uint32_t v) {
+        ev += char(id);
+        for (int i = 0; i < 4; ++i) ev += char((v >> (8 * i)) & 255);
+    };
+    auto array = [&](uint8_t id, const std::string& data) {
+        ev += char(id);
+        size_t n = data.size();
+        do {
+            uint8_t c = uint8_t(n & 0x7F);
+            n >>= 7;
+            if (n) c |= 0x80;
+            ev += char(c);
+        } while (n);
+        ev += data;
+    };
+    auto utf16 = [](const std::string& a) {
+        std::string w;
+        for (char c : a) { w += c; w += char(0); }
+        return w + std::string(2, '\0');
+    };
+    auto le = [](uint32_t v, int n) {
+        std::string r;
+        for (int i = 0; i < n; ++i) r += char((v >> (8 * i)) & 255);
+        return r;
+    };
+    array(0xC7, clipSize == 60 ? "21.2.3.4004" : "20.8.4.2576");
+    dword(0x9C, 120000);
+    word(0x40, 0);
+    array(0xC4, utf16("C:\\Samples\\Kick 01.wav"));
+    word(0x40, 1);
+    array(0xC9, utf16("3x Osc"));
+    array(0xCB, utf16("Lead"));
+    word(0x41, 1);
+    std::string notes;
+    auto note = [&](uint32_t t, uint16_t ch, uint32_t pitch) {
+        std::string r(24, '\0');
+        r.replace(0, 4, le(t, 4));
+        r.replace(6, 2, le(ch, 2));
+        r.replace(8, 4, le(24, 4));
+        r.replace(12, 4, le(pitch, 4));
+        r[21] = char(100);
+        notes += r;
+    };
+    note(0, 0, 60);
+    note(96, 1, 72);
+    note(192, 0, 60);
+    note(288, 1, 74);
+    array(0xE0, notes);
+    std::string clips;
+    auto clip = [&](uint32_t pos, uint32_t len, float start) {
+        std::string c(clipSize, '\0');
+        c.replace(0, 4, le(pos, 4));
+        c.replace(4, 2, le(20480, 2));
+        c.replace(6, 2, le(20480 + 1, 2));
+        c.replace(8, 4, le(len, 4));
+        c.replace(12, 2, le(499, 2));
+        uint32_t bits;
+        std::memcpy(&bits, &start, 4);
+        c.replace(24, 4, le(bits, 4));
+        clips += c;
+    };
+    clip(0, 384, 0);
+    clip(768, 192, 96);
+    array(0xE9, clips);
+    word(0x40, 2);  // after the mixer: not a channel
+    std::string f = "FLhd";
+    f += le(6, 4) + std::string("\0\0\x02\0", 4) + char(96) + char(0) + "FLdt" + le(uint32_t(ev.size()), 4);
+    return f + ev;
+}
+
+void testFlpSong() {
+    for (size_t size : {size_t(32), size_t(60)}) {
+        FlpProject p;
+        std::string err;
+        SCHECK(readFlp(makeFlpSong(size), p, err));
+        SCHECK(p.channels.size() >= 2 && p.channels[0].name == "Kick 01.wav" && p.channels[1].name == "Lead");
+        SCHECK(p.playlist.size() == 2 && p.playlist[1].position == 768 && p.playlist[1].start == 96 && p.playlist[1].pattern == 1);
+        const std::vector<FlpNote> kick = flpSongNotes(p, 0), lead = flpSongNotes(p, 1);
+        // Kick: 0 and 192 (first clip), 192 -> 768 + 96 (second clip, from tick 96).
+        SCHECK(kick.size() == 3 && kick[0].time == 0 && kick[1].time == 192 && kick[2].time == 864);
+        // Lead: 96 and 288 (first clip), 96 -> 768 (second); 288 is past the second clip.
+        SCHECK(lead.size() == 3 && lead[0].time == 96 && lead[1].time == 288 && lead[2].time == 768 && lead[2].pitch == 72);
+        SCHECK(flpSongNotes(p, -1).size() == 6);
+    }
+}
+
 void testFlStudio() {
     FlpProject p;
     std::string err;
@@ -1112,6 +1204,7 @@ void testJsonMerge() {
 void runScanTests() {
     testBinaryChartsInMods();
     testFlStudio();
+    testFlpSong();
     testPulseForgeCharts();
     testSongIcons();
     testIutkCharts();

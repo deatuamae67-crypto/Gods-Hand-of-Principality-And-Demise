@@ -826,6 +826,159 @@ void testAutoChart() {
     PCHECK(!autoChart(silence.data(), silence.size(), 1, rate, 1, c));
 }
 
+// Clicks at 128 BPM from 0.37 s: thumps (90 Hz) on beats, ticks (3200 Hz) on
+// off-beats; `which` 1: only the thumps, 2: only the ticks, 3: both.
+std::vector<int16_t> clicks(int which, double seconds = 40) {
+    const int rate = 44100;
+    const double beat = 60.0 / 128, first = 0.37;
+    std::vector<int16_t> pcm(size_t(rate * seconds), 0);
+    for (double t = first; t < seconds - 0.5; t += beat / 2) {
+        const bool onBeat = std::fmod((t - first) / beat + 1e-6, 1.0) < 0.25;
+        if (!(which & (onBeat ? 1 : 2))) continue;
+        const double f = onBeat ? 90 : 3200;
+        for (int i = 0; i < rate / 12; ++i) {
+            const size_t k = size_t(t * rate) + size_t(i);
+            if (k >= pcm.size()) break;
+            const double env = std::exp(-double(i) / (rate * 0.02));
+            pcm[k] = int16_t(std::clamp(pcm[k] + 14000.0 * env * std::sin(2 * kPi * f * i / rate), -32767.0, 32767.0));
+        }
+    }
+    return pcm;
+}
+
+// Where notes fall: the share of a side's notes on beats (0) or off-beats (0.5).
+double shareAt(const Chart& c, int side, double frac) {
+    const double beatMs = 60000.0 / 128, first = 370;
+    int on = 0, all = 0;
+    for (const Note& n : c.notes) {
+        if (n.side != side) continue;
+        ++all;
+        const double b = (n.time - first) / beatMs - frac;
+        if (std::fabs(b - std::round(b)) < 0.1) ++on;
+    }
+    return all ? double(on) / all : 0.0;
+}
+
+void testAutoChartTracks() {
+    const std::vector<int16_t> kick = clicks(1), hat = clicks(2), both = clicks(3);
+    auto track = [](const std::vector<int16_t>& pcm, AutoRole role, AutoLanes lanes) {
+        AutoTrack t;
+        t.samples = pcm.data();
+        t.frames = pcm.size();
+        t.channels = 1;
+        t.sampleRate = 44100;
+        t.role = role;
+        t.lanes = lanes;
+        return t;
+    };
+    // The thumps are the player's, the ticks the opponent's, lanes by drum.
+    AutoChartSpec spec;
+    spec.tracks = {track(kick, AutoRole::Player, AutoLanes::Drums), track(hat, AutoRole::Opponent, AutoLanes::Drums)};
+    spec.tempo = {{370, 128, 0}};
+    spec.difficulty = 1;
+    Chart c;
+    AutoChartInfo info;
+    std::string err;
+    PCHECK(autoChartSpec(spec, c, &info, &err) && c.autoCharted && !info.trained);
+    PCHECK(c.playerNotes > 40 && c.opponentNotes > 40);
+    PCHECK(shareAt(c, 1, 0.0) > 0.9 && shareAt(c, 0, 0.5) > 0.9);
+    int lane0 = 0, lane3 = 0;
+    for (const Note& n : c.notes) (n.side == 1 ? lane0 : lane3) += (n.side == 1 ? n.lane == 0 : n.lane == 3) ? 1 : 0;
+    PCHECK(lane0 > int(c.playerNotes.satLL() * 9 / 10) && lane3 > int(c.opponentNotes.satLL() * 9 / 10));
+    // Hard: chords and a finer grid, the player's notes still on the thumps.
+    spec.difficulty = 2;
+    Chart hard;
+    PCHECK(autoChartSpec(spec, hard, nullptr, &err) && hard.notes.size() >= c.notes.size() && shareAt(hard, 1, 0.0) > 0.9);
+    spec.difficulty = 1;
+    // An ignored track gives nothing; Easy keeps fewer.
+    spec.tracks[1].role = AutoRole::Ignore;
+    Chart one;
+    PCHECK(autoChartSpec(spec, one, nullptr, &err) && one.opponentNotes.isZero() && one.playerNotes > 30);
+    spec.tracks[1].role = AutoRole::Opponent;
+    spec.difficulty = 0;
+    Chart easy;
+    PCHECK(autoChartSpec(spec, easy, nullptr, &err) && easy.notes.size() < c.notes.size());
+    // An FL Studio channel read with SNIFF's keys: exact.
+    AutoChartSpec fl;
+    AutoTrack ch;
+    ch.flpNotes = {{0, 24, 48, 0, 100, 0}, {96, 24, 61, 0, 100, 0}, {192, 192, 51, 0, 100, 0}, {288, 24, 70, 0, 100, 0}};
+    ch.lanes = AutoLanes::Keys;
+    fl.tracks = {ch};
+    fl.tempo = {{0, 150, 0}};
+    fl.difficulty = 3;
+    Chart flc;
+    PCHECK(autoChartSpec(fl, flc, nullptr, &err) && flc.notes.size() == 3);
+    if (flc.notes.size() == 3) {
+        PCHECK(flc.notes[0].side == 1 && flc.notes[0].lane == 0 && std::fabs(flc.notes[0].time) < 1e-6);
+        PCHECK(flc.notes[1].side == 0 && flc.notes[1].lane == 1 && std::fabs(flc.notes[1].time - 400) < 1e-6);
+        PCHECK(flc.notes[2].side == 1 && flc.notes[2].lane == 3 && std::fabs(flc.notes[2].length - 700) < 1e-3);  // 2 beats - 1/4
+    }
+    // Nothing to chart: an error, not a chart.
+    AutoChartSpec none;
+    Chart nc;
+    PCHECK(!autoChartSpec(none, nc, nullptr, &err) && !err.empty());
+}
+
+// The model learns from charted songs: here, songs whose player sings the
+// thumps on the beats and the opponent the ticks off them.
+void testAutoChartTraining() {
+    const std::vector<int16_t> kick = clicks(1, 30), hat = clicks(2, 30), both = clicks(3, 30);
+    Chart truth;
+    truth.keys = 4;
+    truth.tempo = {{0, 128, 0}};
+    for (double t = 370; t < 29500; t += 60000.0 / 128 / 2) {
+        const bool onBeat = std::fmod((t - 370) / (60000.0 / 128) + 1e-6, 1.0) < 0.25;
+        Note n;
+        n.time = t;
+        n.side = onBeat ? 1 : 0;
+        n.lane = onBeat ? 0 : 3;
+        truth.notes.push_back(n);
+    }
+    truth.finalize(128);
+    AutoModel m;
+    const AutoSound inst{both.data(), both.size(), 1, 44100}, vp{kick.data(), kick.size(), 1, 44100}, vo{hat.data(), hat.size(), 1, 44100};
+    size_t learned = 0;
+    for (uint64_t seed = 1; seed <= 4; ++seed) learned += autoLearnSong(m, truth, inst, vp, vo, seed);
+    m.songs.push_back("test:clicks");
+    PCHECK(learned > 200 && m.trained() && m.knows("test:clicks") && m.nps(1.0) > 1.0);
+    // Generating with it: the roles say which sound is whose voice.
+    AutoChartSpec spec;
+    auto track = [](const std::vector<int16_t>& pcm, AutoRole role) {
+        AutoTrack t;
+        t.samples = pcm.data();
+        t.frames = pcm.size();
+        t.channels = 1;
+        t.sampleRate = 44100;
+        t.role = role;
+        return t;
+    };
+    spec.tracks = {track(both, AutoRole::Turns), track(kick, AutoRole::Player), track(hat, AutoRole::Opponent)};
+    spec.tempo = {{370, 128, 0}};
+    spec.difficulty = 2;
+    spec.model = &m;
+    Chart c;
+    AutoChartInfo info;
+    std::string err;
+    PCHECK(autoChartSpec(spec, c, &info, &err) && info.trained && c.autoCharted);
+    PCHECK(c.playerNotes > 20 && c.opponentNotes > 20);
+    PCHECK(shareAt(c, 1, 0.0) > 0.8 && shareAt(c, 0, 0.5) > 0.8);
+    // Saved and read back, it charts the same.
+    const std::string path = (std::filesystem::temp_directory_path() / "gh_autochart_model.txt").string();
+    PCHECK(m.save(path));
+    AutoModel back;
+    PCHECK(back.load(path) && back.notes == m.notes && back.knows("test:clicks"));
+    spec.model = &back;
+    Chart c2;
+    PCHECK(autoChartSpec(spec, c2, nullptr, &err) && c2.notes.size() == c.notes.size());
+    std::filesystem::remove(path);
+    AutoModel bad;
+    {
+        std::ofstream(path) << "something else";
+    }
+    PCHECK(!bad.load(path) && !bad.trained());
+    std::filesystem::remove(path);
+}
+
 void testReplayDeterminism() {
     Chart c;
     c.keys = 4;
@@ -1630,6 +1783,8 @@ void testBuiltinScripts() {
 void runExtraTests(bool audio) {
     testBuiltinScripts();
     testAutoChart();
+    testAutoChartTracks();
+    testAutoChartTraining();
     testReplayDeterminism();
     testZipInstall();
     testChartStreaming();

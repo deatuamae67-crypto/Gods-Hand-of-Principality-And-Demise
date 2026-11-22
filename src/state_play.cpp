@@ -372,6 +372,7 @@ void PlayState::draw() {
     gfx::beginCanvas();
     drawVisualizer();
     drawWatermark();
+    drawShameWatermark();
     if (phase_ == Phase::Paused) drawPause();
     if (phase_ == Phase::Dead) drawDead();
     drawDebugLog();
@@ -2076,6 +2077,20 @@ void PlayState::drawWatermark() {
     const PsychUi& ui = psychUi();
     if (psych_ && ui.active() && ui.font()) ui.text(text, 2, gfx::H - 22, 16, fade(WHITE, 0.85f), -1, 1.0f);
     else gfx::text(FontId::Ui, text, 8, gfx::H - 26, 18, fade(kIvory, 0.75f), Align::Left, 1.2f);
+}
+
+// Issue #36: an AutoChart chart says so in the middle of the screen, the
+// whole song, whatever the options: nobody charted it, and the people who
+// chart songs by hand get no credit from it.
+void PlayState::drawShameWatermark() {
+    if (!chart_.autoCharted) return;
+    const float cx = gfx::W * 0.5f, cy = gfx::H * 0.5f;
+    const Color red{255, 70, 70, 255};
+    gfx::text(FontId::Title, "AUTOCHARTED", cx, cy - 58, 84, fade(red, 0.34f), Align::Center, 3.0f);
+    gfx::text(FontId::Ui, "Nobody charted this song: a machine guessed it from the audio.", cx, cy + 34, 26, fade(WHITE, 0.4f),
+              Align::Center, 1.5f);
+    gfx::text(FontId::Ui, "Charters spend hours on every note. Play their charts.", cx, cy + 66, 22, fade(WHITE, 0.34f), Align::Center,
+              1.5f);
 }
 
 void PlayState::drawDead() {
