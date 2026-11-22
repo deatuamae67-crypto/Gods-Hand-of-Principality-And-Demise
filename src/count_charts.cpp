@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "chart_binary.hpp"
+#include "thr_chart.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "json.hpp"
@@ -1182,6 +1183,7 @@ namespace {
 }  // namespace
 
 CountChartKind countChartKind(const std::string& path) {
+    if (isThrChart(path)) return CountChartKind::Thr;
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return CountChartKind::None;
     unsigned char m[5] = {};
@@ -1207,6 +1209,7 @@ bool loadCountChart(const std::string& path, Chart& out, std::string& err) {
         case CountChartKind::Fnc1: return loadFnc1(path, out, err);
         case CountChartKind::Raid: return loadRaid(path, out, err);
         case CountChartKind::Ghn: return loadGhn(path, out, err);
+        case CountChartKind::Thr: return loadThrChart(path, out, err);
         default: err = path + " is not a chart this game counts"; return false;
     }
 }
@@ -1401,6 +1404,15 @@ int convertChartFile(const std::string& in, const std::string& out) {
                     seconds());
         return 0;
     }
+    if (endsWithI(out, kThrExt)) {
+        if (!writeThrChart(out, c, err)) {
+            std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
+            return 1;
+        }
+        std::printf("%s -> %s (threadripper .thr): %s notes, %s bytes, %.2f s\n", in.c_str(), out.c_str(),
+                    (c.playerNotes + c.opponentNotes).grouped().c_str(), Count(fileSize(out)).grouped().c_str(), seconds());
+        return 0;
+    }
     if (endsWithI(out, ".bin")) {
         if (!writeFnc1(out, c, err)) {
             std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
@@ -1410,7 +1422,7 @@ int convertChartFile(const std::string& in, const std::string& out) {
                     seconds());
         return 0;
     }
-    std::fprintf(stderr, "%s: write .ghn, .ghc or .bin\n", out.c_str());
+    std::fprintf(stderr, "%s: write .ghn, .ghc, .bin or .thr\n", out.c_str());
     return 1;
 }
 

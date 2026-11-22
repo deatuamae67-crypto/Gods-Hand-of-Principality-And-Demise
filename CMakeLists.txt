@@ -29,7 +29,7 @@ include(FetchContent)
 
 # The complete source package ships every library in third_party/: use those
 # copies instead of downloading (the game then builds without internet).
-foreach(dep IN ITEMS lua miniz pl_mpeg raylib)
+foreach(dep IN ITEMS lua miniz pl_mpeg raylib zstd)
   string(TOUPPER ${dep} dep_upper)
   if(NOT FETCHCONTENT_SOURCE_DIR_${dep_upper} AND IS_DIRECTORY ${CMAKE_SOURCE_DIR}/third_party/${dep})
     set(FETCHCONTENT_SOURCE_DIR_${dep_upper} ${CMAKE_SOURCE_DIR}/third_party/${dep})
@@ -80,6 +80,29 @@ else()
   target_compile_options(gh_miniz PRIVATE -w)
 endif()
 
+# ---- zstd (reading .thr charts packed with Zstandard) ------------------------------
+# Only its decompressor, in portable C. Set FETCHCONTENT_SOURCE_DIR_ZSTD to use a
+# local checkout.
+FetchContent_Declare(zstd
+  GIT_REPOSITORY https://github.com/facebook/zstd.git
+  GIT_TAG v1.5.6
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR do-not-add)  # we compile the decompressor's sources ourselves
+FetchContent_MakeAvailable(zstd)
+add_library(gh_zstd STATIC
+  ${zstd_SOURCE_DIR}/lib/common/debug.c ${zstd_SOURCE_DIR}/lib/common/entropy_common.c
+  ${zstd_SOURCE_DIR}/lib/common/error_private.c ${zstd_SOURCE_DIR}/lib/common/fse_decompress.c
+  ${zstd_SOURCE_DIR}/lib/common/xxhash.c ${zstd_SOURCE_DIR}/lib/common/zstd_common.c
+  ${zstd_SOURCE_DIR}/lib/decompress/huf_decompress.c ${zstd_SOURCE_DIR}/lib/decompress/zstd_ddict.c
+  ${zstd_SOURCE_DIR}/lib/decompress/zstd_decompress.c ${zstd_SOURCE_DIR}/lib/decompress/zstd_decompress_block.c)
+target_include_directories(gh_zstd PUBLIC ${zstd_SOURCE_DIR}/lib)
+target_compile_definitions(gh_zstd PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0 ZSTD_MULTITHREAD=0)
+if(MSVC)
+  target_compile_options(gh_zstd PRIVATE /W0)
+else()
+  target_compile_options(gh_zstd PRIVATE -w)
+endif()
+
 # ---- pl_mpeg (MPEG-1 video for cutscenes) -----------------------------------------
 # Set FETCHCONTENT_SOURCE_DIR_PL_MPEG to use a local checkout.
 FetchContent_Declare(pl_mpeg
@@ -104,6 +127,7 @@ add_library(gh_core STATIC
   src/count.cpp
   src/count_charts.cpp
   src/json_merge.cpp
+  src/thr_chart.cpp
   src/synth.cpp
   src/composer.cpp
   src/psych.cpp
@@ -139,7 +163,7 @@ elseif(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCH
   target_compile_definitions(gh_core PRIVATE GH_ARM_ASM=1)
   message(STATUS "Note renderer: ARM64 assembly")
 endif()
-target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz)
+target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz gh_zstd)
 if(MSVC)
   target_compile_options(gh_core PRIVATE /W3 /utf-8)
 else()

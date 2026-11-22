@@ -17,6 +17,8 @@
 //
 //   God's Hand's own .ghn ("GHN1", below): any number of notes.
 //
+//   The threadripper engine's .thr (thr_chart.hpp), as strand reads it.
+//
 // They play as the game's own charts: each cell is one note that counts as
 // all of its notes (Chart::countOf), so a chart of trillions of notes is a
 // chart of as many notes as it has cells.
@@ -54,7 +56,7 @@
 namespace gh {
 
 // What kind of count chart the file is, from its first bytes (none: 0).
-enum class CountChartKind { None = 0, Fnc1, Raid, Ghn };
+enum class CountChartKind { None = 0, Fnc1, Raid, Ghn, Thr };
 constexpr const char* kCountChartExt = ".ghn";
 // AutoChart's charts (issue #36): a .ghn marked as made by AutoChart, with
 // its own magic ("GHAC"), so nothing but God's Hand reads it - and God's
@@ -87,9 +89,9 @@ bool writeGhn(const std::string& path, const Chart& chart, std::string& err, Ghn
 // up to 2^31 notes (more: keep it .ghn). notes: how many were listed.
 bool writeChartAsGhc(const std::string& path, const Chart& chart, std::string& err, uint64_t* notes = nullptr);
 
-// godshand --convert <chart> <out>: any chart the game reads to .ghn, .ghc
-// or the iutk engine's .bin, by the output's extension. Prints what it did;
-// 0 when it worked.
+// godshand --convert <chart> <out>: any chart the game reads to .ghn, .ghc,
+// the iutk engine's .bin or the threadripper engine's .thr, by the output's
+// extension. Prints what it did; 0 when it worked.
 int convertChartFile(const std::string& in, const std::string& out);
 
 }  // namespace gh

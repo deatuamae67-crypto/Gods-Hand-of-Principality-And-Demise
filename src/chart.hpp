@@ -113,6 +113,10 @@ bool parseChart(std::string_view json, const std::string& difficulty, Chart& out
 
 bool readTextFile(const std::string& path, std::string& out);
 
+// A note's type by name, as charts give it: its index in the chart's types,
+// and what it does (mines for "Hurt Note" and the like, alt, GF, Hey!...).
+void applyNoteType(std::string_view type, Note& n, Chart& c);
+
 struct StreamedNotes;
 bool parseChartStreamed(std::string_view skeleton, const StreamedNotes& notes, const std::string& difficulty, Chart& out,
                         std::string& err, bool extraKeys = true);

@@ -174,7 +174,7 @@ bool chartContent(const fs::path& f) {
 // engine's .bin (FNC1) - each read for what it holds.
 bool countChartName(const std::string& lowerName) {
     return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, kAutoChartExt) || endsWithI(lowerName, ".raid") ||
-           endsWithI(lowerName, ".bin");
+           endsWithI(lowerName, ".bin") || endsWithI(lowerName, ".thr");
 }
 
 // A chart: Psych JSON, a binary .ghc (which may be the only one there: a

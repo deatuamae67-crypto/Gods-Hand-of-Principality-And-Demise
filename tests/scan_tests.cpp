@@ -26,6 +26,7 @@
 #include "json_merge.hpp"
 #include "scene.hpp"
 #include "song_scan.hpp"
+#include "thr_chart.hpp"
 
 using namespace gh;
 namespace fs = std::filesystem;
@@ -1207,6 +1208,134 @@ void testAutoChartFiles() {
     fs::remove_all(base);
 }
 
+// The threadripper engine's .thr, as strand reads it.
+namespace thrw {
+std::string le(uint64_t v, int n) {
+    std::string r;
+    for (int i = 0; i < n; ++i) r += char((v >> (8 * i)) & 255);
+    return r;
+}
+std::string f64(double d) {
+    uint64_t v;
+    std::memcpy(&v, &d, 8);
+    return le(v, 8);
+}
+std::string f32(float f) {
+    uint32_t v;
+    std::memcpy(&v, &f, 4);
+    return le(v, 4);
+}
+// A Zstandard frame holding `data` as it is (one raw block).
+std::string zstdRaw(const std::string& data) {
+    std::string z = le(0xFD2FB528u, 4);
+    z += char(0xA0);  // single segment, 4-byte content size
+    z += le(data.size(), 4);
+    z += le(1u | uint32_t(data.size()) << 3, 3);  // the last block, raw
+    return z + data;
+}
+// A zip of the given entries, each stored with its method's bytes as given.
+struct Entry {
+    std::string name, data;
+    uint16_t method;
+    size_t size;  // uncompressed
+    uint32_t crc;
+};
+std::string zip(const std::vector<Entry>& es) {
+    std::string out, cd;
+    for (const Entry& e : es) {
+        const size_t at = out.size();
+        out += le(0x04034b50u, 4) + le(20, 2) + le(0, 2) + le(e.method, 2) + le(0, 4) + le(e.crc, 4) + le(e.data.size(), 4) +
+               le(e.size, 4) + le(e.name.size(), 2) + le(0, 2) + e.name + e.data;
+        cd += le(0x02014b50u, 4) + le(20, 2) + le(20, 2) + le(0, 2) + le(e.method, 2) + le(0, 4) + le(e.crc, 4) + le(e.data.size(), 4) +
+              le(e.size, 4) + le(e.name.size(), 2) + le(0, 2) + le(0, 2) + le(0, 2) + le(0, 2) + le(0, 4) + le(at, 4) + e.name;
+    }
+    const size_t cdAt = out.size();
+    out += cd + le(0x06054b50u, 4) + le(0, 2) + le(0, 2) + le(es.size(), 2) + le(es.size(), 2) + le(cd.size(), 4) + le(cdAt, 4) + le(0, 2);
+    return out;
+}
+Entry entry(const std::string& name, const std::string& data, uint16_t method) {
+    const uint32_t crc = uint32_t(mz_crc32(MZ_CRC32_INIT, reinterpret_cast<const unsigned char*>(data.data()), data.size()));
+    return {name, method == 93 ? zstdRaw(data) : data, method, data.size(), crc};
+}
+}  // namespace thrw
+
+void testThrCharts() {
+    using namespace thrw;
+    const fs::path base = fs::temp_directory_path() / "gh_thr";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Written and read back: sides, lanes, holds, types (a Hurt Note is a mine), stacks listed.
+    Chart c;
+    c.title = "Thr Song";
+    c.keys = 4;
+    c.speed = 2.7;
+    c.events = {{250, "Hey!", "BF", "0.6"}};
+    auto add = [&](double t, int lane, int side, float len, const std::string& type, uint32_t count) {
+        Note n;
+        n.time = t;
+        n.lane = uint16_t(lane);
+        n.side = uint8_t(side);
+        n.length = len;
+        if (!type.empty()) applyNoteType(type, n, c);
+        c.notes.push_back(n);
+        c.setCount(c.notes.back(), Count(count));
+    };
+    add(0, 0, 1, 0, "", 1);
+    add(500, 3, 0, 750, "", 1);
+    add(1000, 2, 1, 0, "Hurt Note", 1);
+    add(1500, 1, 1, 0, "", 70000);  // past one filter block of 65,536
+    c.finalize(150);
+    SCHECK(writeThrChart(str(base / "a.thr"), c, err) && isThrChart(str(base / "a.thr")) && countChartKind(str(base / "a.thr")) == CountChartKind::Thr);
+    Chart r;
+    SCHECK(loadChartFile(str(base / "a.thr"), "Normal", r, err) && r.title == "Thr Song" && r.keys == 4 && std::fabs(r.speed - 2.7) < 1e-9);
+    SCHECK(r.notes.size() == 4 && r.playerNotes == Count(70002) && r.opponentNotes == Count(1) && r.events.size() == 1 &&
+           std::fabs(r.bpmAt(0) - 150) < 1e-9);
+    if (r.notes.size() == 4) {
+        SCHECK(r.notes[1].side == 0 && r.notes[1].lane == 3 && std::fabs(r.notes[1].length - 750) < 1e-3);
+        SCHECK(r.notes[2].kind == kMine && r.noteTypes[r.notes[2].type] == "Hurt Note");
+        SCHECK(r.notes[3].lane == 1 && r.countOf(r.notes[3]) == Count(70000));
+    }
+    // strand's own layout, packed with Zstandard: noteData under keyCount on
+    // the side of the section's mustHit (not psych_v1).
+    auto sectionRec = [](uint64_t notes, bool must) {
+        std::string p(40, '\0');
+        p.replace(8, 4, le(notes & 0xFFFFFFFFu, 4));
+        p.replace(12, 4, le(must ? 1 : 0, 4));
+        p.replace(32, 4, le(notes >> 32, 4));
+        return p;
+    };
+    std::string sections = le(0x534C4254u, 4) + std::string(4, '\0') + f64(2) + std::string(16, '\0');
+    sections += sectionRec(2, true) + sectionRec(2, false);
+    auto noteRec = [](double t, int data) { return f64(t) + f32(0) + le(uint32_t(data), 2) + le(0, 2); };
+    std::string notes = le(0x4E4C4254u, 4) + std::string(4, '\0') + f64(4) + std::string(16, '\0');
+    notes += noteRec(0, 0) + noteRec(100, 5) + noteRec(2000, 2) + noteRec(2100, 7);
+    const std::string meta = R"({"song":{"song":"Strand","bpm":120,"speed":1.5},"tbl":{"parts":[{"prefix":"","keyCount":4,"types":[null],"notesPerFile":4194304,"noteFiles":1,"noteCount":4}]}})";
+    put(base / "b.thr", zip({entry("strand-metadata.json", meta, 93), entry("notes/sections.bin", sections, 93),
+                             entry("notes/notes-00000.bin", notes, 0)}));
+    Chart b;
+    SCHECK(loadChartFile(str(base / "b.thr"), "Normal", b, err) && b.notes.size() == 4 && b.title == "Strand");
+    if (b.notes.size() == 4) {
+        SCHECK(b.notes[0].side == 1 && b.notes[0].lane == 0 && b.notes[1].side == 0 && b.notes[1].lane == 1);  // mustHit: 0-3 the player's
+        SCHECK(b.notes[2].side == 0 && b.notes[2].lane == 2 && b.notes[3].side == 1 && b.notes[3].lane == 3);  // not: the opponent's
+    }
+    // LZMA (method 14) is named in the error.
+    put(base / "c.thr", zip({entry("x-metadata.json", meta, 0), entry("notes/sections.bin", sections, 14), entry("notes/notes-00000.bin", notes, 0)}));
+    Chart lz;
+    SCHECK(!loadChartFile(str(base / "c.thr"), "Normal", lz, err) && err.find("LZMA") != std::string::npos);
+    // In a song's folder, and through the converter.
+    put(base / "songs" / "Thr Song" / "Inst.ogg", "x");
+    fs::copy_file(base / "a.thr", base / "songs" / "Thr Song" / "thr song.thr");
+    SongScan sc;
+    scanSongsDir(str(base / "songs"), sc);
+    const SongEntry* e = byTitle(sc, "Thr Song");
+    SCHECK(e && !e->autoChart && e->chartPaths.size() == 1 && endsWith(e->chartPaths[0], ".thr"));
+    SCHECK(convertChartFile(str(base / "a.thr"), str(base / "a.ghn")) == 0 && convertChartFile(str(base / "a.ghn"), str(base / "back.thr")) == 0);
+    Chart back;
+    SCHECK(loadChartFile(str(base / "back.thr"), "Normal", back, err) && back.playerNotes == r.playerNotes && back.notes.size() == r.notes.size());
+    fs::remove_all(base);
+}
+
 void testJsonMerge() {
     using namespace mergetest;
     const fs::path base = fs::temp_directory_path() / "gh_merge";
@@ -1292,6 +1421,7 @@ void runScanTests() {
     testRaidCharts();
     testGhnCharts();
     testJsonMerge();
+    testThrCharts();
     testAutoChartFiles();
     testAudioSeconds();
     testModLayouts();

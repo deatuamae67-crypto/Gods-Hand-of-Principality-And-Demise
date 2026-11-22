@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds the complete source package: the game's own code plus the exact
 # sources of every library it uses (raylib 5.5, Lua 5.4.7, miniz 3.0.2,
-# pl_mpeg), in third_party/, so it builds anywhere without internet.
+# pl_mpeg, zstd 1.5.6), in third_party/, so it builds anywhere without internet.
 #
 #   tools/make_source_package.sh [out.zip]
 #
 # The libraries are cloned from GitHub, or copied from local checkouts given in
-# GH_RAYLIB_DIR, GH_LUA_DIR, GH_MINIZ_DIR and GH_PL_MPEG_DIR.
+# GH_RAYLIB_DIR, GH_LUA_DIR, GH_MINIZ_DIR, GH_PL_MPEG_DIR and GH_ZSTD_DIR.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,6 +36,9 @@ get raylib "${GH_RAYLIB_DIR:-}" https://github.com/raysan5/raylib.git 5.5
 get lua "${GH_LUA_DIR:-}" https://github.com/lua/lua.git v5.4.7
 get miniz "${GH_MINIZ_DIR:-}" https://github.com/richgel999/miniz.git 3.0.2
 get pl_mpeg "${GH_PL_MPEG_DIR:-}" https://github.com/phoboslab/pl_mpeg.git c871f2be022ece7ef4f64230b4fb8e1fb9eb6023
+get zstd "${GH_ZSTD_DIR:-}" https://github.com/facebook/zstd.git v1.5.6
+# zstd: only lib/ is built (its decompressor); its tests, programs and docs stay out.
+rm -rf "$stage/third_party/zstd/"{tests,programs,contrib,doc,examples,zlibWrapper,build,.github}
 # raylib's examples and IDE projects are not needed to build the game.
 rm -rf "$stage/third_party/raylib/"{examples,projects,logo,parser}
 
@@ -47,8 +50,10 @@ CMakeLists.txt uses these folders automatically, so nothing is downloaded.
   lua      5.4.7      mod scripts                        MIT license    https://www.lua.org
   miniz    3.0.2      installing mods from .zip          MIT license    https://github.com/richgel999/miniz
   pl_mpeg  c871f2b    cutscene videos (MPEG-1)           MIT license    https://github.com/phoboslab/pl_mpeg
+  zstd     1.5.6      reading .thr charts (Zstandard)    BSD license    https://github.com/facebook/zstd
 
-raylib's examples/, projects/, logo/ and parser/ folders were left out.
+raylib's examples/, projects/, logo/ and parser/ folders, and zstd's tests/,
+programs/, contrib/, doc/, examples/, zlibWrapper/ and build/ were left out.
 EOF
 
 cat > "$stage/BUILDING.txt" <<'EOF'
