@@ -44,6 +44,7 @@ import java.util.Set;
 public class GameActivity extends NativeActivity {
     private static final int PICK_ZIPS = 4201;
     private static final int PICK_FOLDER = 4202;
+    private static final int PICK_CHARTS = 4203;
 
     /** Files the Psych Engine interface uses (lower case), wherever they are in the folder. */
     private static final Set<String> PSYCH_FILES = new HashSet<>(Arrays.asList(
@@ -62,6 +63,8 @@ public class GameActivity extends NativeActivity {
     public static volatile int importState = 0;
     /** Zips copied into mods/ by the last import. */
     public static volatile int importCount = 0;
+    /** The files the last pickChartFiles copied into merge/, one a line. */
+    public static volatile String pickedFiles = "";
     /**
      * Command-line options for the game, from the intent that started it
      * (am start ... --es args "--autoplay builtin:x --render"): the emulator test.
@@ -190,6 +193,69 @@ public class GameActivity extends NativeActivity {
         importState = 1;
         importCount = 0;
         runOnUiThread(new Picker(this));
+    }
+
+    /** Called from the game thread: JSON merging, the parts of a chart. */
+    public void pickChartFiles() {
+        importState = 1;
+        importCount = 0;
+        pickedFiles = "";
+        runOnUiThread(new ChartPicker(this));
+    }
+
+    private static final class ChartPicker implements Runnable {
+        private final GameActivity activity;
+
+        ChartPicker(GameActivity activity) {
+            this.activity = activity;
+        }
+
+        @Override
+        public void run() {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            try {
+                activity.startActivityForResult(i, PICK_CHARTS);
+            } catch (Exception e) {
+                importState = 4;
+            }
+        }
+    }
+
+    /** Copies the chosen chart parts into merge/, keeping their names. */
+    private static final class ChartCopier extends Thread {
+        private final GameActivity activity;
+        private final List<Uri> uris;
+
+        ChartCopier(GameActivity activity, List<Uri> uris) {
+            this.activity = activity;
+            this.uris = uris;
+        }
+
+        @Override
+        public void run() {
+            File base = activity.getExternalFilesDir(null);
+            if (base == null) base = activity.getFilesDir();
+            File dir = new File(base, "merge");
+            dir.mkdirs();
+            StringBuilder names = new StringBuilder();
+            int n = 0;
+            for (Uri u : uris) {
+                String name = activity.displayName(u);
+                if (name == null || name.isEmpty()) continue;
+                File out = new File(dir, name.replaceAll("[\\\\/:*?\"<>|]", "_"));
+                if (activity.copyTo(u, out)) {
+                    if (names.length() > 0) names.append('\n');
+                    names.append(out.getAbsolutePath());
+                    ++n;
+                }
+            }
+            pickedFiles = names.toString();
+            importCount = n;
+            importState = n > 0 ? 3 : 4;
+        }
     }
 
     /** Called from the game thread: Options, Psych Engine folder. */
@@ -333,7 +399,7 @@ public class GameActivity extends NativeActivity {
             }
             return;
         }
-        if (requestCode != PICK_ZIPS) return;
+        if (requestCode != PICK_ZIPS && requestCode != PICK_CHARTS) return;
         List<Uri> uris = new ArrayList<>();
         if (resultCode == RESULT_OK && data != null) {
             ClipData clip = data.getClipData();
@@ -348,7 +414,8 @@ public class GameActivity extends NativeActivity {
             return;
         }
         importState = 2;
-        new Copier(this, uris).start();
+        if (requestCode == PICK_CHARTS) new ChartCopier(this, uris).start();
+        else new Copier(this, uris).start();
     }
 
     private boolean copyTo(Uri uri, File out) {

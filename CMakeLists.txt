@@ -103,6 +103,7 @@ add_library(gh_core STATIC
   src/session.cpp
   src/count.cpp
   src/count_charts.cpp
+  src/json_merge.cpp
   src/synth.cpp
   src/composer.cpp
   src/psych.cpp
@@ -294,6 +295,7 @@ if(GH_BUILD_GAME)
     src/state_editor.cpp
     src/state_editors.cpp
     src/state_modpacks.cpp
+    src/state_json_merge.cpp
     src/process.cpp
     src/render_mode.cpp
     src/platform.cpp
@@ -367,7 +369,7 @@ if(GH_BUILD_GAME)
     target_link_libraries(godshand PRIVATE ${CMAKE_DL_LIBS})  # the FPS counter asks NVIDIA's library, when there is one
   endif()
   if(WIN32)
-    target_link_libraries(godshand PRIVATE shell32 ole32 opengl32 advapi32)  # the folder dialog; the processor's name (psapi and pdh are looked up)
+    target_link_libraries(godshand PRIVATE shell32 ole32 comdlg32 opengl32 advapi32)  # the folder and file dialogs; the processor's name (psapi and pdh are looked up)
   endif()
 
   # Runtime layout next to the executable: assets/, songs/, mods/
@@ -390,7 +392,7 @@ if(GH_BUILD_TESTS AND TARGET raylib)
                  src/render_mode.cpp src/process.cpp src/sysinfo.cpp src/settings.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   if(WIN32)
-    target_link_libraries(gh_tests PRIVATE shell32 ole32 advapi32)  # platform.cpp's folder dialog; sysinfo.cpp's registry reads
+    target_link_libraries(gh_tests PRIVATE shell32 ole32 comdlg32 advapi32)  # platform.cpp's folder and file dialogs; sysinfo.cpp's registry reads
   endif()
   if(APPLE)
     target_link_libraries(gh_tests PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreFoundation")  # sysinfo.cpp

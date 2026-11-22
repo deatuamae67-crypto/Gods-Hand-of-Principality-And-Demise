@@ -298,16 +298,33 @@ private:
 // -------------------------------------------------------------- Main menu --
 
 // RENDER MODE and AUTOCHART open the song list for recording a video or
-// for playing a chart made from the song's audio.
-constexpr const char* kMainItems[] = {"STORY MODE", "FREEPLAY", "RENDER MODE", "AUTOCHART", "OPTIONS", "CREDITS", "QUIT"};
-// Psych's pictures for them (mainmenu/menu_<name>); the others are lettered.
-constexpr const char* kMainPsych[] = {"story_mode", "freeplay", "", "", "options", "credits", ""};
-constexpr int kMainCount = int(sizeof(kMainItems) / sizeof(kMainItems[0]));
+// for playing a chart made from the song's audio. AUTOCHART and JSON MERGING
+// are there only when they are turned on in Options.
+enum class MainItem { Story, Freeplay, Render, AutoChart, JsonMerge, Options, Credits, Quit };
+struct MainEntry {
+    MainItem id;
+    const char* label;
+    const char* psych;  // Psych's picture for it (mainmenu/menu_<name>); the others are lettered
+};
+std::vector<MainEntry> mainItems() {
+    const Settings& s = app().settings;
+    std::vector<MainEntry> v = {{MainItem::Story, "STORY MODE", "story_mode"},
+                                {MainItem::Freeplay, "FREEPLAY", "freeplay"},
+                                {MainItem::Render, "RENDER MODE", ""}};
+    if (s.autoChart) v.push_back({MainItem::AutoChart, "AUTOCHART", ""});
+    if (s.jsonMerging) v.push_back({MainItem::JsonMerge, "JSON MERGING", ""});
+    v.push_back({MainItem::Options, "OPTIONS", "options"});
+    v.push_back({MainItem::Credits, "CREDITS", "credits"});
+    v.push_back({MainItem::Quit, "QUIT", ""});
+    return v;
+}
 
 class MainMenuState : public State {
 public:
     void enter() override {
-        app().mainSel = clampv(app().mainSel, 0, kMainCount - 1);
+        items_ = mainItems();
+        n_ = int(items_.size());
+        app().mainSel = clampv(app().mainSel, 0, n_ - 1);
         anim_ = float(app().mainSel);
     }
     void update(double dt) override {
@@ -318,30 +335,32 @@ public:
         camY_ = camY_ < -1e8f ? psychCamTarget(sel) : approach(camY_, psychCamTarget(sel), 7.5f, float(dt));
         if (chosen_ >= 0) {
             // Psych: the chosen item flickers for a second before its menu opens.
-            if (a.now - chosenAt_ > (pm::on() && chosen_ != kMainCount - 1 ? 1.0 : 0.55)) {
-                switch (chosen_) {
-                    case 0: a.change(makeStory()); break;
-                    case 1:
-                    case 2:
-                    case 3:
-                        a.songListMode = chosen_ == 2   ? App::SongListMode::Render
-                                         : chosen_ == 3 ? App::SongListMode::AutoChart
-                                                        : App::SongListMode::Play;
+            const MainItem id = items_[size_t(chosen_)].id;
+            if (a.now - chosenAt_ > (pm::on() && id != MainItem::Quit ? 1.0 : 0.55)) {
+                switch (id) {
+                    case MainItem::Story: a.change(makeStory()); break;
+                    case MainItem::Freeplay:
+                    case MainItem::Render:
+                    case MainItem::AutoChart:
+                        a.songListMode = id == MainItem::Render      ? App::SongListMode::Render
+                                         : id == MainItem::AutoChart ? App::SongListMode::AutoChart
+                                                                     : App::SongListMode::Play;
                         a.change(makeFreeplay());
                         break;
-                    case 4: a.change(makeOptions()); break;
-                    case 5: a.change(makeCredits()); break;
+                    case MainItem::JsonMerge: a.change(makeJsonMerge()); break;
+                    case MainItem::Options: a.change(makeOptions()); break;
+                    case MainItem::Credits: a.change(makeCredits()); break;
                     default: a.quit = true; break;
                 }
             }
             return;
         }
-        if (a.input.up()) { sel = (sel + kMainCount - 1) % kMainCount; sfxPlay(Sfx::Scroll); }
-        if (a.input.down()) { sel = (sel + 1) % kMainCount; sfxPlay(Sfx::Scroll); }
+        if (a.input.up()) { sel = (sel + n_ - 1) % n_; sfxPlay(Sfx::Scroll); }
+        if (a.input.down()) { sel = (sel + 1) % n_; sfxPlay(Sfx::Scroll); }
         if (a.input.accept()) {
             chosen_ = sel;
             chosenAt_ = a.now;
-            sfxPlay(sel == kMainCount - 1 ? Sfx::Cancel : Sfx::Confirm);
+            sfxPlay(items_[size_t(sel)].id == MainItem::Quit ? Sfx::Cancel : Sfx::Confirm);
         }
         if (a.input.back()) { sfxPlay(Sfx::Cancel); a.change(makeTitle()); }
         // 7: the editors (chart, character, stage, events), as Psych's Master Editor Menu.
@@ -358,7 +377,6 @@ public:
         App& a = app();
         const double now = a.now;
         const float pulse = menuPulse();
-        const char* const* items = kMainItems;
         gfx::beginCanvas();
         drawMenuBackground(now, 0x8C6CFF, pulse);
         CharacterState h;
@@ -367,17 +385,20 @@ public:
         gfx::glow({1080, 500}, 230 + 20 * pulse, fade(kGold, 0.3f));
         drawCharacter(h, {1080, 640}, 0.85f, now, true);
         gfx::text(FontId::Title, "GOD'S HAND", 60, 40, 44, kGold, Align::Left, 2.0f);
-        for (int i = 0; i < kMainCount; ++i) {
+        // 70 pixels apart, closer when there are more items than fit.
+        const float gap = std::min(70.0f, 460.0f / float(std::max(1, n_ - 1)));
+        for (int i = 0; i < n_; ++i) {
+            const char* label = items_[size_t(i)].label;
             const bool on = i == a.mainSel;
-            const float y = 128.0f + i * 70.0f - (on ? 6.0f : 0.0f);
+            const float y = 128.0f + i * gap - (on ? 6.0f : 0.0f);
             float size = on ? 56.0f + 4.0f * pulse : 42.0f;
             Color c = on ? kGold : fade(kIvory, 0.55f);
             if (chosen_ >= 0 && on && std::fmod(float(now - chosenAt_) * 10.0f, 2.0f) < 1.0f) c = WHITE;
             if (chosen_ >= 0 && !on) c = fade(c, std::max(0.0f, 1.0f - float(now - chosenAt_) * 3.0f));
-            if (on) gfx::glowText(FontId::Title, items[i], gfx::W / 2, y, size, c, Color{255, 180, 80, 255});
-            else gfx::text(FontId::Title, items[i], gfx::W / 2, y + 6, size, c, Align::Center, 2.0f);
+            if (on) gfx::glowText(FontId::Title, label, gfx::W / 2, y, size, c, Color{255, 180, 80, 255});
+            else gfx::text(FontId::Title, label, gfx::W / 2, y + 6, size, c, Align::Center, 2.0f);
             if (on) {
-                const float w = gfx::measure(FontId::Title, items[i], size).x * 0.5f + 40 + 6 * pulse;
+                const float w = gfx::measure(FontId::Title, label, size).x * 0.5f + 40 + 6 * pulse;
                 gfx::drawNote(gfx::kRight, {gfx::W / 2 - w, y + size * 0.55f}, 44);
                 gfx::drawNote(gfx::kLeft, {gfx::W / 2 + w, y + size * 0.55f}, 44);
             }
@@ -392,10 +413,10 @@ private:
     // list): items 140 pixels apart from 108 - (n - 4) x 80, centred, and a
     // camera that follows the chosen one, the picture behind at a tenth of its
     // speed (scroll factor 0.25 - 0.05 x (n - 4)), the items at 0.135 x (n - 4).
-    static float psychItemY(int i) { return float(i) * 140.0f + 108.0f - float(std::max(kMainCount, 4) - 4) * 80.0f; }
-    static float psychCamTarget(int sel) {
-        const Vector2 sz = pm::menuItemSize(kMainPsych[sel], kMainItems[sel]);
-        return psychItemY(sel) + sz.y * 0.5f - (kMainCount > 4 ? float(kMainCount) * 8.0f : 0.0f);
+    float psychItemY(int i) const { return float(i) * 140.0f + 108.0f - float(std::max(n_, 4) - 4) * 80.0f; }
+    float psychCamTarget(int sel) const {
+        const Vector2 sz = pm::menuItemSize(items_[size_t(sel)].psych, items_[size_t(sel)].label);
+        return psychItemY(sel) + sz.y * 0.5f - (n_ > 4 ? float(n_) * 8.0f : 0.0f);
     }
     void drawPsych() {
         App& a = app();
@@ -403,8 +424,8 @@ private:
         gfx::beginCanvas();
         DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
         const float scroll = camY_ - gfx::H * 0.5f;  // the camera's scroll
-        const float bgFactor = std::max(0.25f - 0.05f * float(kMainCount - 4), 0.1f);
-        const float itemFactor = kMainCount >= 6 ? float(kMainCount - 4) * 0.135f : 0.0f;
+        const float bgFactor = std::max(0.25f - 0.05f * float(n_ - 4), 0.1f);
+        const float itemFactor = n_ >= 6 ? float(n_ - 4) * 0.135f : 0.0f;
         const auto bg = [&] { pm::background(pm::kMenuBG, WHITE, scroll * bgFactor, 1.175f); };
         if (a.settings.menuBlur) gfx::drawBlurred(bg);
         else bg();
@@ -413,21 +434,24 @@ private:
         // chosen item too, faster, and the others fade away.
         if (chosen_ >= 0 && a.settings.flashing && since < 1.1 && std::fmod(since, 0.30) < 0.15)
             pm::background(pm::kDesat, Color{0xFD, 0x71, 0x9B, 255}, scroll * bgFactor, 1.175f);
-        for (int i = 0; i < kMainCount; ++i) {
+        for (int i = 0; i < n_; ++i) {
+            const MainEntry& e = items_[size_t(i)];
             const bool on = i == a.mainSel;
             float alpha = 1.0f;
             if (chosen_ >= 0 && !on) alpha = std::max(0.0f, 1.0f - float(since) / 0.4f);
             if (chosen_ >= 0 && on && since < 1.0 && std::fmod(since, 0.12) >= 0.06) alpha = 0.0f;
             if (alpha <= 0) continue;
-            const Vector2 sz = pm::menuItemSize(kMainPsych[i], kMainItems[i]);
+            const Vector2 sz = pm::menuItemSize(e.psych, e.label);
             const float y = psychItemY(i) - scroll * itemFactor;
-            pm::menuItem(kMainPsych[i], kMainItems[i], {gfx::W * 0.5f, y + sz.y * 0.5f}, on, alpha, now);
+            pm::menuItem(e.psych, e.label, {gfx::W * 0.5f, y + sz.y * 0.5f}, on, alpha, now);
         }
         pm::vcr("God's Hand Engine v" GH_VERSION, 12, gfx::H - 44, 16);
         pm::vcr("Friday Night Funkin' v0.2.8", 12, gfx::H - 24, 16);
         gfx::endCanvas();
     }
 
+    std::vector<MainEntry> items_ = mainItems();
+    int n_ = int(items_.size());
     float anim_ = 0;
     float camY_ = -1e9f;
     int chosen_ = -1;

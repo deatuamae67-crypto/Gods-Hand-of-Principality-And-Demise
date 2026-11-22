@@ -88,6 +88,8 @@ bool Settings::load(const std::string& path) {
         else if (k == "watermark") watermark = b;
         else if (k == "introVideo") introVideo = b;
         else if (k == "menuBlur") menuBlur = b;
+        else if (k == "autoChart") autoChart = b;
+        else if (k == "jsonMerging") jsonMerging = b;
         else if (k == "visualizer") visualizer = b;
         else if (k == "scoreZoom") scoreZoom = b;
         else if (k == "botplayText") botplayText = b;
@@ -176,7 +178,7 @@ bool Settings::save(const std::string& path) const {
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
-      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nintroVideo=" << introVideo << "\nmenuBlur=" << menuBlur << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
+      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nintroVideo=" << introVideo << "\nmenuBlur=" << menuBlur << "\nautoChart=" << autoChart << "\njsonMerging=" << jsonMerging << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
       << "\nbotplayText=" << botplayText << "\ncomboStacking=" << comboStacking << "\nopponentNotes=" << opponentNotes
       << "\npauseMusic=" << pauseMusic << "\nsickWindow=" << sickWindow << "\ngoodWindow=" << goodWindow << "\nbadWindow=" << badWindow
       << "\nsafeFrames=" << safeFrames << "\nratingOffset=" << ratingOffset << "\nautoPause=" << autoPause << "\nnoReset=" << noReset

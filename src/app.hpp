@@ -99,6 +99,10 @@ public:
     bool checkCharts = false;  // --check-charts with --list-songs
     std::string checkScriptsDir;  // --check-scripts <folder>
     std::string convertIn, convertOut;  // --convert <chart> <out.ghn|.ghc|.bin>
+    // --merge <out.json> <part> <part> ... [--merge-mode auto|overlay|append]:
+    // JSON merging without the window.
+    std::string mergeOut, mergeMode = "auto";
+    std::vector<std::string> mergeParts;
     std::string makeIconDir;      // --make-icon <folder>: the icon's pictures (tools/make_icons.py)
     bool autoChartCli = false;    // --autochart: the --autoplay song played with an AutoChart
     double frameBudget() const;   // seconds a frame may take (frame limit or the screen's refresh)
@@ -130,6 +134,7 @@ public:
         double quitAfter = -1;
         bool botplay = true;
         std::string editorSong, editorExport;  // --editor <song> [diff], --editor-export <file>
+        bool mergeGo = false;  // --state json-merge --merge-go: merges the parts in merge/ once they are read
     } autoRun;
 
     // Runs the game with a fresh App (Android can call main() again in the
@@ -242,6 +247,7 @@ std::unique_ptr<State> makePlay(const PlayRequest& req);
 std::unique_ptr<State> makeResults(const ResultData& r);
 std::unique_ptr<State> makeChartEditor(const std::string& songId, const std::string& diff);
 std::unique_ptr<State> makeModPacks();
+std::unique_ptr<State> makeJsonMerge();  // Main menu: JSON MERGING (Options turns it on)
 // Main menu: 7. The editors (state_editors.cpp), as Psych's Master Editor Menu.
 std::unique_ptr<State> makeEditorMenu();
 std::unique_ptr<State> makeCharacterEditor();

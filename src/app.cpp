@@ -5,6 +5,7 @@
 #include "app_icon.hpp"
 #include "check_scripts.hpp"
 #include "count_charts.hpp"
+#include "json_merge.hpp"
 #include "performance.hpp"
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
@@ -251,6 +252,11 @@ int App::run(int argc, char** argv) {
             convertIn = next();
             convertOut = next();
         }
+        else if (!std::strcmp(a, "--merge")) {
+            mergeOut = next();
+            while (i + 1 < argc && argv[i + 1][0] != '-') mergeParts.push_back(argv[++i]);
+        } else if (!std::strcmp(a, "--merge-mode")) mergeMode = next();
+        else if (!std::strcmp(a, "--merge-go")) autoRun.mergeGo = true;
         else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
@@ -260,6 +266,7 @@ int App::run(int argc, char** argv) {
     }
     if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
     if (!convertIn.empty()) return convertChartFile(convertIn, convertOut);  // --convert <chart> <out>
+    if (!mergeOut.empty()) return mergeChartFiles(mergeOut, mergeParts, mergeMode);  // --merge <out> <parts...>
     if (listSongs) {
         // Prints what the song library finds (no window): --list-songs [--base dir]
         // [--check-charts: load every chart and print its keys and notes, or why it fails]
@@ -411,6 +418,7 @@ int App::run(int argc, char** argv) {
     else if (autoRun.state == "scripts") state_ = makeScriptEditor();
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
     else if (autoRun.state == "converter") state_ = makeChartConverter();
+    else if (autoRun.state == "json-merge") state_ = makeJsonMerge();
     else if (autoRun.state == "note-colors") state_ = makeNoteColors();
     else if (autoRun.state == "note-skins") state_ = makeNoteSkins();
     else if (autoRun.state == "key-bindings") state_ = makeKeyBindings();

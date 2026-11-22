@@ -3,13 +3,17 @@
 
 // Finding songs in every mod layout (song_scan.cpp), PulseForge charts, audio
 // lengths and assets shared between mods.
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "chart.hpp"
@@ -19,6 +23,7 @@
 #include "miniz.h"
 #include "common.hpp"
 #include "flp_import.hpp"
+#include "json_merge.hpp"
 #include "scene.hpp"
 #include "song_scan.hpp"
 
@@ -1002,6 +1007,108 @@ void testSongIcons() {
     fs::remove_all(base);
 }
 
+// JSON merging (issue #36): split charts back into one.
+namespace mergetest {
+// A legacy Psych chart: `secs` sections of 4 beats at 120 BPM (2 s each),
+// mustHitSection alternating from true; notes as [time, data, length].
+std::string chart(const std::string& song, int secs, const std::vector<std::vector<std::string>>& notesBySection,
+                  const std::string& events = "[]") {
+    std::string o = "{\"song\":{\"song\":\"" + song + "\",\"bpm\":120,\"speed\":2.5,\"player1\":\"bf\",\"player2\":\"dad\",\"notes\":[";
+    for (int i = 0; i < secs; ++i) {
+        o += std::string(i ? "," : "") + "{\"sectionNotes\":[";
+        if (size_t(i) < notesBySection.size())
+            for (size_t k = 0; k < notesBySection[size_t(i)].size(); ++k) o += std::string(k ? "," : "") + notesBySection[size_t(i)][k];
+        o += "],\"mustHitSection\":" + std::string(i % 2 == 0 ? "true" : "false") + ",\"sectionBeats\":4}";
+    }
+    return o + "],\"events\":" + events + "}}";
+}
+// What a chart plays: every note as (time, side, lane, count).
+std::vector<std::tuple<double, int, int, uint64_t>> plays(const std::string& path) {
+    Chart c;
+    std::string err;
+    std::vector<std::tuple<double, int, int, uint64_t>> v;
+    if (!loadChartFile(path, "Normal", c, err)) return v;
+    for (const Note& n : c.notes) v.emplace_back(n.time, n.side, n.lane, c.countOf(n).sat64());
+    std::sort(v.begin(), v.end());
+    return v;
+}
+}  // namespace mergetest
+
+void testJsonMerge() {
+    using namespace mergetest;
+    const fs::path base = fs::temp_directory_path() / "gh_merge";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Overlay: the same 4 sections in both parts, the first part's notes in
+    // sections 0-1, the second's in 2-3 (one stacked three times).
+    put(base / "song-2.json", chart("song", 4, {{}, {}, {"[4000,0,0]", "[4500,5,0]"}, {"[6000,1,0]", "[6000,1,0]", "[6000,1,0]"}},
+                                    "[[100,[[\"Hey!\",\"BF\",\"0.6\"]]]]"));
+    put(base / "song-1.json", chart("song", 4, {{"[0,0,0]", "[500,4,250]"}, {"[2000,2,0]"}}, "[[100,[[\"Hey!\",\"BF\",\"0.6\"]]]]"));
+    put(base / "song-10.json", chart("song", 4, {}));
+    std::vector<MergePart> parts = {inspectPart(str(base / "song-10.json")), inspectPart(str(base / "song-2.json")),
+                                    inspectPart(str(base / "song-1.json"))};
+    orderParts(parts);
+    SCHECK(parts[0].name == "song-1.json" && parts[1].name == "song-2.json" && parts[2].name == "song-10.json");
+    SCHECK(parts[0].ok && parts[0].sections == 4 && parts[0].notes == 3 && parts[1].notes == 5 && parts[0].spanMs == 8000);
+    SCHECK(detectMergeMode(parts) == MergeMode::Overlay);
+    MergeResult res;
+    SCHECK(mergeChartParts({str(base / "song-1.json"), str(base / "song-2.json")}, str(base / "merged.json"), MergeMode::Auto, res, err));
+    SCHECK(res.mode == MergeMode::Overlay && res.notes == 8 && res.sections == 4 && res.events == 1);
+    auto both = plays(str(base / "song-1.json"));
+    for (const auto& n : plays(str(base / "song-2.json"))) both.push_back(n);
+    std::sort(both.begin(), both.end());
+    SCHECK(plays(str(base / "merged.json")) == both);  // every note where and whose it was
+    Chart m;
+    SCHECK(loadChartFile(str(base / "merged.json"), "Normal", m, err) && m.events.size() == 1 && m.playerNotes + m.opponentNotes == Count(8));
+    // Append, the second part's notes from 0 again: they go after the first part.
+    put(base / "a-1.json", chart("a", 2, {{"[0,0,0]"}, {"[2500,1,0]"}}));
+    put(base / "a-2.json", chart("a", 3, {{"[0,2,0]"}, {}, {"[4100,3,0]"}}, "[[50,[[\"Hey!\",\"GF\",\"\"]]]]"));
+    std::vector<MergePart> ap = {inspectPart(str(base / "a-1.json")), inspectPart(str(base / "a-2.json"))};
+    SCHECK(detectMergeMode(ap) == MergeMode::Append);
+    SCHECK(mergeChartParts({str(base / "a-1.json"), str(base / "a-2.json")}, str(base / "a.json"), MergeMode::Auto, res, err));
+    SCHECK(res.mode == MergeMode::Append && res.sections == 5 && res.notes == 4);
+    auto ap2 = plays(str(base / "a.json"));
+    SCHECK(ap2.size() == 4 && std::get<0>(ap2[2]) == 4000 && std::get<0>(ap2[3]) == 8100);  // moved by 4 s (2 sections)
+    Chart a;
+    SCHECK(loadChartFile(str(base / "a.json"), "Normal", a, err) && a.events.size() == 1 && a.events[0].timeMs == 4050);
+    // Append, slices of a song that kept their times: nothing moves.
+    put(base / "b-1.json", chart("b", 2, {{"[0,0,0]"}, {"[2500,1,0]"}}));
+    put(base / "b-2.json", chart("b", 2, {{"[4000,2,0]"}, {"[6100,3,0]"}}));
+    std::vector<MergePart> bp = {inspectPart(str(base / "b-1.json")), inspectPart(str(base / "b-2.json"))};
+    SCHECK(detectMergeMode(bp) == MergeMode::Append);
+    SCHECK(mergeChartParts({str(base / "b-1.json"), str(base / "b-2.json")}, str(base / "b.json"), MergeMode::Auto, res, err));
+    auto bp2 = plays(str(base / "b.json"));
+    SCHECK(bp2.size() == 4 && std::get<0>(bp2[2]) == 4000 && std::get<0>(bp2[3]) == 6100 && std::get<1>(bp2[3]) == 0);
+    // Psych 1.0 charts keep their shape.
+    put(base / "v1-1.json", "{\"song\":\"v\",\"format\":\"psych_v1\",\"bpm\":100,\"notes\":[{\"sectionNotes\":[[0,0,0]],\"mustHitSection\":true,\"sectionBeats\":4}],\"events\":[]}");
+    put(base / "v1-2.json", "{\"song\":\"v\",\"format\":\"psych_v1\",\"bpm\":100,\"notes\":[{\"sectionNotes\":[[1200,5,0]],\"mustHitSection\":true,\"sectionBeats\":4}],\"events\":[]}");
+    SCHECK(mergeChartParts({str(base / "v1-1.json"), str(base / "v1-2.json")}, str(base / "v1.json"), MergeMode::Overlay, res, err));
+    {
+        std::ifstream in(base / "v1.json");
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        SCHECK(text.rfind("{\"song\":\"v\",\"format\":\"psych_v1\"", 0) == 0 && res.notes == 2);
+    }
+    // Parts whose notes wait on disk merge the same.
+    g_mergeSpillAbove = 1;
+    SCHECK(mergeChartParts({str(base / "song-1.json"), str(base / "song-2.json")}, str(base / "spilled.json"), MergeMode::Auto, res, err));
+    SCHECK(res.notes == 8 && plays(str(base / "spilled.json")) == both);
+    SCHECK(mergeChartParts({str(base / "a-1.json"), str(base / "a-2.json")}, str(base / "spilled.json"), MergeMode::Auto, res, err));
+    SCHECK(res.notes == 4 && plays(str(base / "spilled.json")) == ap2);
+    g_mergeSpillAbove = size_t(1) << 20;
+    SCHECK(!fs::exists(base / "spilled.json.notes0.tmp") && !fs::exists(base / "spilled.json.part"));
+    // Cancelled: no file is left.
+    std::atomic<bool> stop{true};
+    SCHECK(!mergeChartParts({str(base / "song-1.json"), str(base / "song-2.json")}, str(base / "c.json"), MergeMode::Auto, res, err,
+                            nullptr, &stop) &&
+           !fs::exists(base / "c.json") && !fs::exists(base / "c.json.part"));
+    // A part that is not a chart is named in the error.
+    put(base / "bad-3.json", "{\"song\":{\"song\":\"x\"}}");
+    SCHECK(!mergeChartParts({str(base / "song-1.json"), str(base / "bad-3.json")}, str(base / "x.json"), MergeMode::Auto, res, err) &&
+           err.find("bad-3") != std::string::npos);
+    fs::remove_all(base);
+}
+
 void runScanTests() {
     testBinaryChartsInMods();
     testFlStudio();
@@ -1010,6 +1117,7 @@ void runScanTests() {
     testIutkCharts();
     testRaidCharts();
     testGhnCharts();
+    testJsonMerge();
     testAudioSeconds();
     testModLayouts();
 }

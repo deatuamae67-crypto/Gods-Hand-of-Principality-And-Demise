@@ -78,6 +78,14 @@ std::string publishVideo(const std::string& path, const std::string& name);
 // <data folder>/psych-ui/ in the background (follow importStatus); "" comes back.
 std::string pickFolder(const std::string& title);
 std::string pickFolderNative(const std::string& title);  // folder_picker.cpp
+// The player picks files, several at once ("*.json"). Desktop: the system's
+// dialog (blocking); their paths come back (none if cancelled or there is no
+// dialog). Android: the system picker opens and the chosen files are copied
+// into <data folder>/merge/ in the background (follow importStatus, then
+// pickedFiles); none come back.
+std::vector<std::string> pickFiles(const std::string& title, const std::string& pattern);
+std::vector<std::string> pickFilesNative(const std::string& title, const std::string& pattern);  // folder_picker.cpp
+std::vector<std::string> pickedFiles();  // Android: what the last pickFiles copied
 bool inBackground();
 bool takeResumed();             // true once after the app comes back
 void rememberVolume(float v);   // master volume to restore after the background
