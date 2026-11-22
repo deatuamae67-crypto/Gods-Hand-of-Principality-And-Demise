@@ -25,6 +25,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -121,5 +122,11 @@ struct AutoSound {
 // missing) and its chart. Returns the frames with notes it learned from.
 size_t autoLearnSong(AutoModel& m, const Chart& chart, const AutoSound& inst, const AutoSound& voiceP, const AutoSound& voiceO,
                      uint64_t seed = 1);
+
+// The model the game charts with: the one saved at `path`, when `wanted`
+// (Options: AutoChart training). autoChartModel() reads it again when the
+// file changes; null without one.
+void useAutoChartModel(const std::string& path, bool wanted);
+std::shared_ptr<const AutoModel> autoChartModel();
 
 }  // namespace gh

@@ -160,6 +160,9 @@ public:
             {Row::Bool, "Menu background blur", "Blurs the background of the main menu, Freeplay and the other menus.", &s.menuBlur},
             {Row::Bool, "AutoChart", "AUTOCHART on the main menu: songs played with a chart the game makes from their audio. "
              "Its charts carry a shame watermark and play only in God's Hand. OFF: it is not on the menu.", &s.autoChart},
+            {Row::Bool, "  AutoChart training", "AutoChart places notes where the charts of your mods put them for sounds like "
+             "those (train it on the AUTOCHART screen: TRAIN). OFF, or before it is trained: it follows the beat and the "
+             "loudest sounds.", &s.autoChartTrained},
             {Row::Bool, "JSON merging", "JSON MERGING on the main menu: a chart split into parts (as players do to get past JS "
              "Engine's 16-million-note limit) merged back into one, with no limit on its notes. OFF: it is not on the menu.",
              &s.jsonMerging},

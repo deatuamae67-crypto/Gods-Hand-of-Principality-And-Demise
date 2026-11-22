@@ -734,6 +734,12 @@ public:
                 return;
             }
         }
+        if (in.accept() && n > 0 && autoMode()) {  // AUTOCHART: its screen, for this song
+            remember();
+            sfxPlay(Sfx::Confirm);
+            a.change(makeAutoChartStudio(list_[size_t(sel)]->id, diffIndex()));
+            return;
+        }
         if (in.accept() && n > 0) {
             const SongEntry* e = list_[size_t(sel)];
             if (!diffsOf(e).empty()) {

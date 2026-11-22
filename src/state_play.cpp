@@ -4,6 +4,8 @@
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
 #include "state_play.hpp"
+
+#include "autochart.hpp"
 #include "psych_menus.hpp"
 #include "psych_ui.hpp"
 
@@ -113,6 +115,7 @@ void PlayState::enter() {
     const std::string diff = req_.diff, chartFile = req_.chartFile;
     const bool extraKeys = app().settings.extraKeys;
     const bool autoChart = req_.autoChart;
+    useAutoChartModel(a.userDir + "autochart-model.txt", a.settings.autoChartTrained);
     if (req_.preview) mirror = false;
     job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart, chartFile] {
         return app().library.prepare(copy, diff, mirror, extraKeys, autoChart, chartFile);

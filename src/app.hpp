@@ -103,6 +103,7 @@ public:
     // JSON merging without the window.
     std::string mergeOut, mergeMode = "auto";
     std::vector<std::string> mergeParts;
+    bool trainCli = false;  // --train-autochart: AutoChart learns from every charted song (no window)
     std::string makeIconDir;      // --make-icon <folder>: the icon's pictures (tools/make_icons.py)
     bool autoChartCli = false;    // --autochart: the --autoplay song played with an AutoChart
     double frameBudget() const;   // seconds a frame may take (frame limit or the screen's refresh)
@@ -135,6 +136,8 @@ public:
         bool botplay = true;
         std::string editorSong, editorExport;  // --editor <song> [diff], --editor-export <file>
         bool mergeGo = false;  // --state json-merge --merge-go: merges the parts in merge/ once they are read
+        std::string studioSong;  // --autochart-studio <song id>: the AutoChart screen for it
+        bool studioSave = false;  // --studio-save: it saves the first chart it makes
     } autoRun;
 
     // Runs the game with a fresh App (Android can call main() again in the
@@ -248,6 +251,8 @@ std::unique_ptr<State> makeResults(const ResultData& r);
 std::unique_ptr<State> makeChartEditor(const std::string& songId, const std::string& diff);
 std::unique_ptr<State> makeModPacks();
 std::unique_ptr<State> makeJsonMerge();  // Main menu: JSON MERGING (Options turns it on)
+// AUTOCHART: the song list, then this screen for the song picked (issue #36).
+std::unique_ptr<State> makeAutoChartStudio(const std::string& songId, int difficulty);
 // Main menu: 7. The editors (state_editors.cpp), as Psych's Master Editor Menu.
 std::unique_ptr<State> makeEditorMenu();
 std::unique_ptr<State> makeCharacterEditor();

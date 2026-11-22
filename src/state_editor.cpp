@@ -298,8 +298,8 @@ public:
             double nb = section(sectionAt(cur_)).bpm + (in.pressed(KEY_RIGHT_BRACKET) ? 1 : -1) * (shift ? 0.1 : 1.0);
             setSectionBpm(sectionAt(cur_), nb);
         }
-        if (in.pressed(KEY_MINUS)) { speed_ = std::max(0.1, std::round((speed_ - 0.1) * 10) / 10); dirty_ = statsDirty_ = true; }
-        if (in.pressed(KEY_EQUAL)) { speed_ = std::min(10.0, std::round((speed_ + 0.1) * 10) / 10); dirty_ = statsDirty_ = true; }
+        if (in.pressed(KEY_MINUS)) { speed_ = std::max(0.1, std::round((speed_ - 0.1) * 10) / 10); dirty_ = statsDirty_ = true; edited(); }
+        if (in.pressed(KEY_EQUAL)) { speed_ = std::min(10.0, std::round((speed_ + 0.1) * 10) / 10); dirty_ = statsDirty_ = true; edited(); }
         if (ctrl && in.pressed(KEY_C)) copySelectionOrSection();
         if (ctrl && in.pressed(KEY_X)) cutSelectionOrSection();
         if (ctrl && in.pressed(KEY_V)) paste();
@@ -456,6 +456,9 @@ private:
                 saveFormat_ = fs::exists(toPath(g.substr(0, g.size() - std::strlen(kBinaryChartExt)) + ".json"), ec) ? kSaveBoth
                                                                                                                        : kSaveGhc;
             }
+        // AutoChart's charts stay AutoChart's: saved as .ghac only (issue #36).
+        autoCharted_ = c.autoCharted;
+        if (autoCharted_) saveFormat_ = kSaveGhn;
         loaded_ = true;
         App& a = app();
         a.mixer.setTracks(inst_, voiceP_, voiceO_);
@@ -463,7 +466,7 @@ private:
         if (entry_->builtin) flash("Built-in song: saving makes an editable copy in songs/");
         if (countsCut_)
             flash(fmtThousands((long long)countsCut_) + " notes count past 4,294,967,295 notes: the editor keeps that many (play the file for all)");
-        else if (entry_->autoChart) flash("AutoChart draft: save to keep it as a real chart");
+        else if (autoCharted_) flash("Made by AutoChart: it saves as .ghac only, which no other engine reads");
     }
 
     // Note types and events offered in the lists: the built-in ones, the
@@ -1371,7 +1374,10 @@ private:
         std::string ghnPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kCountChartExt;
         for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
             if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kCountChartExt)) ghnPath = entry_->chartPaths[i];
+        if (autoCharted_ && !endsWithI(ghnPath, kAutoChartExt))
+            ghnPath = ghnPath.substr(0, ghnPath.size() - std::strlen(kCountChartExt)) + kAutoChartExt;
         const fs::path np = toPath(ghnPath);
+        if (autoCharted_) saveFormat_ = kSaveGhn;
         const bool wantGhn = saveFormat_ == kSaveGhn;
         const bool wantJson = !wantGhn && saveFormat_ != kSaveGhc, wantGhc = !wantGhn && saveFormat_ != kSaveJson;
         const bool hadJson = fs::exists(p, ec), hadGhc = fs::exists(gp, ec), hadGhn = fs::exists(np, ec);
@@ -1416,7 +1422,9 @@ private:
             backUp(np, backedUpGhn_);
             Chart c;
             std::string err;
-            wroteGhn = chartForCount(c, err, eventsInChart()) && writeGhn(ghnPath, c, err, &ghn);
+            wroteGhn = chartForCount(c, err, eventsInChart());
+            c.autoCharted = autoCharted_;
+            wroteGhn = wroteGhn && writeGhn(ghnPath, c, err, &ghn);
             if (!wroteGhn) {
                 flash("Could not save the .ghn: " + err);
                 return false;
@@ -1482,6 +1490,12 @@ private:
                 return !cp.empty() &&
                        (fs::equivalent(toPath(cp), p, ec) || fs::equivalent(toPath(cp), gp, ec) || fs::equivalent(toPath(cp), np, ec));
             };
+            // The full preview's play screen points into the song list the scan
+            // replaces: it goes first, and is made again for the song as it is now.
+            if (full_) {
+                full_.reset();
+                reloadFull_ = true;
+            }
             a.library.scan(a.base);
             for (const SongEntry& s : a.library.songs())
                 for (const std::string& cp : s.chartPaths)
@@ -1897,7 +1911,7 @@ private:
         // Stacked notes (a count chart's, of any size) go to the preview as
         // a .ghn - each stack one note counting for all of them, as the game
         // plays it - never written out one by one.
-        bool counted = false;
+        bool counted = autoCharted_;  // an AutoChart chart keeps its mark (the shame watermark) in the preview
         for (const EdNote& n : notes_)
             if (n.stack > 1) {
                 counted = true;
@@ -1908,7 +1922,9 @@ private:
         if (counted) {
             Chart c;
             std::string err;
-            if (!chartForCount(c, err, true) || !writeGhn(path, c, err)) {
+            const bool built = chartForCount(c, err, true);
+            c.autoCharted = autoCharted_;
+            if (!built || !writeGhn(path, c, err)) {
                 fullError_ = err.empty() ? "cannot write " + path : err;
                 return;
             }
@@ -2024,12 +2040,20 @@ private:
                 if (ui_.text("stage", row(), "Stage", stage_)) dirty_ = statsDirty_ = true;
                 double bpm = sections_.empty() ? 120 : sections_[0].bpm;
                 if (ui_.stepper(row(), "BPM", bpm, 1, 10, 2000, "%.2f")) setSectionBpm(0, bpm);
-                if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) dirty_ = statsDirty_ = true;
+                if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) {
+                    dirty_ = statsDirty_ = true;
+                    edited();  // the full preview scrolls at the speed that will be saved
+                }
                 double k = keys_;
                 if (ui_.stepper(row(), "Keys", k, 1, 1, kMaxKeys, "%.0f")) setKeys(int(k));  // 1 to 1024 a side
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
-                ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both", "Count .ghn"}, saveFormat_);
+                if (autoCharted_) {
+                    const Rectangle r = row();
+                    gfx::text(FontId::Ui, "Save as: AutoChart .ghac (only)", r.x, r.y + 4, 17, kAccent);
+                } else {
+                    ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both", "Count .ghn"}, saveFormat_);
+                }
                 y += 6;
                 if (ui_.button(half(0), "Save (F2)")) save(false);
                 if (ui_.button(half(1), "Save and play")) {
@@ -2460,6 +2484,7 @@ private:
     int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, both (as the chart was found), or a count .ghn
     bool backedUpGhc_ = false, backedUpGhn_ = false;
     bool onceStacks_ = false;  // buildJson writes each stack's note once (for a count chart)
+    bool autoCharted_ = false;  // made by AutoChart: saved as .ghac only
     size_t countsCut_ = 0;     // notes read counting past 4,294,967,295, kept as that many
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)

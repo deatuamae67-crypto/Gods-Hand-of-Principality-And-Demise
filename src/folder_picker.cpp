@@ -10,6 +10,9 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX  // std::max, not windows.h's max macro (MSVC)
+#endif
 #include <windows.h>
 #include <commdlg.h>
 #include <shlobj.h>

@@ -70,6 +70,7 @@ struct Settings {
     bool introVideo = true;     // the engine's intro (assets/videos/intro.mpg) before the title ("Play intro at start")
     bool menuBlur = false;      // the menus' background blurred
     bool autoChart = false;     // AUTOCHART on the main menu (issue #36: shown only when turned on)
+    bool autoChartTrained = true;  // AutoChart charts with what it learned from the mods' charts (when it was trained)
     bool jsonMerging = false;   // JSON MERGING on the main menu (the same)
     bool visualizer = true;     // the audio visualizer in the top-right corner of songs
     bool scoreZoom = true;      // the score line grows a little on each note you hit

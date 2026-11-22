@@ -1046,6 +1046,37 @@ void testGhnCharts() {
         // Saved again over itself (Windows does not rename over a file).
         SCHECK(writeGhn(str(base / "ab.ghn"), ab, err) && !fs::exists(base / "ab.ghn.part"));
     }
+    // A count chart to .ghc: each counted note listed, the same chart played.
+    {
+        Chart small;
+        small.keys = 4;
+        small.title = "Small";
+        small.events = {{100, "Hey!", "BF", "0.6"}};
+        auto addS = [&](double t, int lane, int side, const Count& k) {
+            Note n;
+            n.time = t;
+            n.lane = uint16_t(lane);
+            n.side = uint8_t(side);
+            small.notes.push_back(n);
+            small.setCount(small.notes.back(), k);
+        };
+        addS(0, 0, 1, Count(3));
+        addS(500, 2, 0, Count(1));
+        addS(2500, 3, 1, Count(600));  // more than one .ghc stack (255)
+        small.finalize(120);
+        SCHECK(writeGhn(str(base / "small.ghn"), small, err));
+        SCHECK(convertChartFile(str(base / "small.ghn"), str(base / "small.ghc")) == 0);
+        Chart g;
+        SCHECK(loadChartFile(str(base / "small.ghc"), "Normal", g, err) && g.playerNotes == Count(603) && g.opponentNotes == Count(1) &&
+               g.events.size() == 1);
+        bool sameNotes = g.notes.size() == small.notes.size();
+        for (size_t i = 0; sameNotes && i < g.notes.size(); ++i)
+            sameNotes = std::fabs(g.notes[i].time - small.notes[i].time) < 1e-6 && g.notes[i].lane == small.notes[i].lane &&
+                        g.notes[i].side == small.notes[i].side && g.countOf(g.notes[i]) == small.countOf(small.notes[i]);
+        SCHECK(sameNotes);
+        // Counts no .ghc can list: refused, nothing written.
+        SCHECK(convertChartFile(str(base / "song.ghn"), str(base / "huge.ghc")) != 0 && !fs::exists(base / "huge.ghc"));
+    }
     // Extra keys off: a 7-key count chart plays with 4 keys, as its JSON would.
     {
         Chart k7;
@@ -1125,6 +1156,56 @@ std::vector<std::tuple<double, int, int, uint64_t>> plays(const std::string& pat
     return v;
 }
 }  // namespace mergetest
+
+// AutoChart's charts (.ghac): marked, read back marked, never written in
+// another engine's format, and listed as their song's difficulties.
+void testAutoChartFiles() {
+    const fs::path base = fs::temp_directory_path() / "gh_ghac";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    Chart c;
+    c.autoCharted = true;
+    c.title = "Loose";
+    for (int i = 0; i < 16; ++i) {
+        Note n;
+        n.time = 500.0 + i * 250.0;
+        n.lane = uint16_t(i % 4);
+        n.side = uint8_t(i % 2);
+        c.notes.push_back(n);
+    }
+    c.finalize(120);
+    // A song of loose audio in songs/, with an AutoChart saved beside it.
+    putWav(base / "songs" / "Loose.wav", 6);
+    SCHECK(writeGhn(str(base / "songs" / "Loose-autochart-hard.ghac"), c, err));
+    SCHECK(isAutoChartFile(str(base / "songs" / "Loose-autochart-hard.ghac")) && isCountChart(str(base / "songs" / "Loose-autochart-hard.ghac")));
+    Chart back;
+    SCHECK(loadChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), "Hard", back, err) && back.autoCharted && back.notes.size() == 16);
+    // Never another engine's format.
+    SCHECK(!writeFnc1(str(base / "x.bin"), back, err) && !fs::exists(base / "x.bin"));
+    SCHECK(convertChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), str(base / "x.ghc")) != 0 && !fs::exists(base / "x.ghc"));
+    SCHECK(convertChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), str(base / "x.ghn")) != 0 && !fs::exists(base / "x.ghn"));
+    SCHECK(convertChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), str(base / "y.ghac")) == 0 && isAutoChartFile(str(base / "y.ghac")));
+    // A real chart is not saved as .ghac, and a .ghn is not marked.
+    Chart real = back;
+    real.autoCharted = false;
+    SCHECK(writeGhn(str(base / "real.ghn"), real, err) && !isAutoChartFile(str(base / "real.ghn")));
+    SCHECK(convertChartFile(str(base / "real.ghn"), str(base / "real.ghac")) != 0 && !fs::exists(base / "real.ghac"));
+    // The scan: the loose song keeps its AutoChart difficulties and gains the saved one.
+    SongScan sc;
+    scanSongsDir(str(base / "songs"), sc);
+    const SongEntry* e = byTitle(sc, "Loose");
+    SCHECK(e && e->autoChart && e->diffs.size() == 4 && e->diffs.back() == "AutoChart Hard" && endsWith(e->chartPaths.back(), ".ghac"));
+    // In a song's folder, a saved AutoChart is one of its charts.
+    put(base / "songs" / "Folder" / "folder.json", R"({"song":{"song":"Folder","bpm":120,"notes":[{"sectionNotes":[[0,0,0]],"mustHitSection":true}]}})");
+    putWav(base / "songs" / "Folder" / "Inst.wav", 4);
+    SCHECK(writeGhn(str(base / "songs" / "Folder" / "folder-autochart-easy.ghac"), c, err));
+    SongScan sc2;
+    scanSongsDir(str(base / "songs"), sc2);
+    const SongEntry* f = byTitle(sc2, "Folder");
+    SCHECK(f && std::find(f->diffs.begin(), f->diffs.end(), "AutoChart Easy") != f->diffs.end());
+    fs::remove_all(base);
+}
 
 void testJsonMerge() {
     using namespace mergetest;
@@ -1211,6 +1292,7 @@ void runScanTests() {
     testRaidCharts();
     testGhnCharts();
     testJsonMerge();
+    testAutoChartFiles();
     testAudioSeconds();
     testModLayouts();
 }

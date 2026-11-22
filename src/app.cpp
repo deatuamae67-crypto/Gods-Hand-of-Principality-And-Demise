@@ -4,6 +4,7 @@
 #include "app.hpp"
 #include "app_icon.hpp"
 #include "check_scripts.hpp"
+#include "autochart_train.hpp"
 #include "count_charts.hpp"
 #include "json_merge.hpp"
 #include "performance.hpp"
@@ -257,6 +258,11 @@ int App::run(int argc, char** argv) {
             while (i + 1 < argc && argv[i + 1][0] != '-') mergeParts.push_back(argv[++i]);
         } else if (!std::strcmp(a, "--merge-mode")) mergeMode = next();
         else if (!std::strcmp(a, "--merge-go")) autoRun.mergeGo = true;
+        else if (!std::strcmp(a, "--autochart-studio")) {
+            autoRun.enabled = true;
+            autoRun.studioSong = next();
+        } else if (!std::strcmp(a, "--train-autochart")) trainCli = true;
+        else if (!std::strcmp(a, "--studio-save")) autoRun.studioSave = true;
         else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
@@ -337,6 +343,29 @@ int App::run(int argc, char** argv) {
     }
     // Big charts read once load from here afterwards (chart_stream.hpp).
     setChartCacheDir(userDir + "cache/charts/");
+    if (trainCli) {
+        // godshand --train-autochart [--base dir]: AutoChart learns from every
+        // charted song of the mods, without the window; the game uses the
+        // model it saves (Options: AutoChart training).
+        SetTraceLogLevel(LOG_WARNING);
+        library.scan(base);
+        TrainProgress prog;
+        std::thread t([&] { trainAutoChart(library.songs(), userDir + "autochart-model.txt", prog); });
+        int shown = -1;
+        while (prog.running.load() || shown < 0) {
+            if (prog.done.load() != shown) {
+                shown = prog.done.load();
+                std::lock_guard<std::mutex> lk(prog.mtx);
+                std::printf("%d/%d songs, %d learned, %d skipped %s\n", shown, prog.total.load(), prog.learned.load(), prog.skipped.load(),
+                            prog.current.c_str());
+                std::fflush(stdout);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        t.join();
+        std::printf("%s (%s)\n", prog.message.c_str(), (userDir + "autochart-model.txt").c_str());
+        return 0;
+    }
 
     unsigned flags = platform::kAndroid ? 0u : (FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     if (settings.vsync) flags |= FLAG_VSYNC_HINT;
@@ -402,6 +431,7 @@ int App::run(int argc, char** argv) {
         mods.botplay = autoRun.botplay;
         state_ = makePlay(r);
     } else if (!autoRun.editorSong.empty()) state_ = makeChartEditor(autoRun.editorSong, autoRun.diff);
+    else if (!autoRun.studioSong.empty()) state_ = makeAutoChartStudio(autoRun.studioSong, 2);  // --autochart-studio <song>
     else if (autoRun.state == "menu") state_ = makeMainMenu();
     else if (autoRun.state == "intro") state_ = makeIntro();  // the engine's intro, then the title
     else if (autoRun.state == "freeplay") state_ = makeFreeplay();

@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <vector>
 
@@ -593,6 +594,39 @@ size_t autoLearnSong(AutoModel& m, const Chart& chart, const AutoSound& inst, co
     m.frames += nf;
     m.notes += pos;
     return learned;
+}
+
+namespace {
+std::mutex gModelMtx;
+std::string gModelPath;
+bool gModelWanted = false;
+std::shared_ptr<const AutoModel> gModel;
+std::filesystem::file_time_type gModelTime{};
+}  // namespace
+
+void useAutoChartModel(const std::string& path, bool wanted) {
+    std::lock_guard<std::mutex> lk(gModelMtx);
+    if (path != gModelPath) gModel.reset();
+    gModelPath = path;
+    gModelWanted = wanted;
+}
+
+std::shared_ptr<const AutoModel> autoChartModel() {
+    std::lock_guard<std::mutex> lk(gModelMtx);
+    if (!gModelWanted || gModelPath.empty()) return nullptr;
+    std::error_code ec;
+    const auto p8 = std::filesystem::path(std::u8string(gModelPath.begin(), gModelPath.end()));
+    const auto t = std::filesystem::last_write_time(p8, ec);
+    if (ec) {
+        gModel.reset();
+        return nullptr;
+    }
+    if (!gModel || t != gModelTime) {
+        auto m = std::make_shared<AutoModel>();
+        gModel = m->load(gModelPath) && m->trained() ? std::shared_ptr<const AutoModel>(m) : nullptr;
+        gModelTime = t;
+    }
+    return gModel;
 }
 
 // ----------------------------------------------------------- generation --
