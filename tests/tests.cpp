@@ -193,7 +193,7 @@ static void testPsychV1AndExtraKeys() {
     bn.time = 500;
     bn.lane = 0;
     bn.side = 1;
-    bn.stack = kMaxStack;
+    bn.stack = 65535;
     big.notes.push_back(bn);
     bn.side = 0;
     big.notes.push_back(bn);
@@ -204,7 +204,7 @@ static void testPsychV1AndExtraKeys() {
     s.update(600);
     const long long expect = 65535LL * 100000LL;
     CHECK(s.judged() == expect && s.combo == expect && s.maxCombo == expect);
-    CHECK(s.score == expect * ratingInfo(kDivine).score);
+    CHECK(s.score.satLL() == expect * ratingInfo(kDivine).score && !s.score.negative());
     CHECK(s.opponentHits == expect);
     CHECK(s.totalPlayerNotes == 65535 && s.totalOpponentNotes == 65535);
     CHECK(fmtThousands(expect) == "6,553,500,000");
@@ -368,7 +368,7 @@ static void testExtraKeys18() {
     s.init(c, bot);
     CHECK(s.keys() == 18);
     s.update(3000);
-    CHECK(s.misses == 0 && s.judged() == (long long)s.totalPlayerNotes && s.accuracy() > 0.999);
+    CHECK(s.misses == 0 && s.judged() == s.totalPlayerNotes && s.accuracy() > 0.999);
     // By hand: lane 17 is the eighteenth key.
     s.init(c, SessionConfig{});
     s.press(17, 1500);
@@ -589,6 +589,80 @@ static Chart simpleChart() {
     return c;
 }
 
+// Note counts of any size (issue #36): 256-bit, exact, never wrapping around.
+static void testCounts() {
+    Count a(UINT64_MAX);
+    a += Count(1);
+    CHECK(!a.fits64() && a.w[1] == 1 && a.w[0] == 0);
+    CHECK(a.str() == "18446744073709551616" && a.grouped() == "18,446,744,073,709,551,616");
+    Count top;
+    const char* kTop = "115792089237316195423570985008687907853269984665640564039457584007913129639935";  // 2^256 - 1
+    CHECK(Count::parse(kTop, top) && top.isMax() && top.str() == kTop);
+    CHECK(!Count::parse("115792089237316195423570985008687907853269984665640564039457584007913129639936", top));  // 2^256
+    CHECK(!Count::parse("12a", top) && !Count::parse("", top));
+    CHECK(Count::max() + Count(1) == Count::max() && Count::max().times(2) == Count::max());  // saturates
+    CHECK((Count(5) - Count(7)).isZero() && Count(7) - Count(5) == Count(2));
+    CHECK(Count(3560023825730ull).times(350).str() == "1246008339005500");
+    Count p128;
+    p128.w[2] = 1;  // 2^128
+    CHECK(p128.str() == "340282366920938463463374607431768211456");
+    CHECK((p128 - Count(1)).str() == "340282366920938463463374607431768211455");
+    CHECK(Count(10) < p128 && p128 > Count(UINT64_MAX) && Count(4) <= Count(4));
+    CHECK(near(Count(1000).toDouble(), 1000.0) && near(p128.toDouble() / 3.4028236692093846e38, 1.0));
+    CHECK(Count::fromDouble(1e30).str().size() == 31 && Count::fromDouble(-5).isZero());
+    // Variable-length numbers of any size: 2^256 - 1 takes 37 bytes; 2^256 is refused, not cut.
+    std::string v;
+    Count::max().appendVarint(v);
+    CHECK(v.size() == 37);
+    const unsigned char* q = reinterpret_cast<const unsigned char*>(v.data());
+    Count back;
+    CHECK(Count::readVarint(q, q + v.size(), back) == Count::Read::Ok && back.isMax() && q == reinterpret_cast<const unsigned char*>(v.data()) + v.size());
+    std::string over(36, char(0x80));
+    over += char(0x10);  // bit 256
+    q = reinterpret_cast<const unsigned char*>(over.data());
+    CHECK(Count::readVarint(q, q + over.size(), back) == Count::Read::TooLarge);
+    std::string cut = v.substr(0, 10);
+    q = reinterpret_cast<const unsigned char*>(cut.data());
+    CHECK(Count::readVarint(q, q + cut.size(), back) == Count::Read::Truncated);
+    std::string small;
+    Count(300).appendVarint(small);
+    CHECK(small == std::string("\xAC\x02", 2));  // LEB128, as iutk and protobuf write it
+    // A score below zero.
+    ScoreCount sc;
+    sc.add(5);
+    sc.sub(15);
+    CHECK(sc.negative() && sc.str() == "-10" && sc.satLL() == -10);
+    sc.set(1234.0);
+    CHECK(!sc.negative() && sc.grouped() == "1,234");
+
+    // A note that counts for more notes than fit in it, and stacks adding up past 32 bits.
+    Chart c;
+    c.keys = 4;
+    Note n;
+    n.time = 100;
+    n.side = 1;
+    c.notes.push_back(n);
+    c.setCount(c.notes.back(), Count(5000000000ull));
+    c.notes.push_back(n);  // stacked on it: one more
+    n.time = 400;
+    c.notes.push_back(n);
+    c.setCount(c.notes.back(), p128);
+    c.finalize(120);
+    CHECK(c.notes.size() == 2 && (c.notes[0].flags & kFlagBigCount) && c.countOf(c.notes[0]) == Count(5000000001ull));
+    CHECK(c.countOf(c.notes[1]) == p128 && c.playerNotes == p128 + Count(5000000001ull));
+    Session s;
+    SessionConfig bot;
+    bot.botplay = true;
+    s.init(c, bot);
+    for (double t = 0; t <= 1000; t += 16) s.update(t);
+    CHECK(s.totalPlayerNotes == c.playerNotes && s.judged() == c.playerNotes && s.counts[kDivine] == c.playerNotes);
+    CHECK(s.score.gained == c.playerNotes.times(350) && s.combo == c.playerNotes && s.misses.isZero());
+    // Missed, they count as misses in full.
+    s.init(c, SessionConfig{});
+    s.update(2000);
+    CHECK(s.misses == c.playerNotes && s.score.negative() && s.score.magnitude() == c.playerNotes.times(10));
+}
+
 static void testSession() {
     Chart c = simpleChart();
     Session s;
@@ -700,8 +774,8 @@ static void testComposer(bool audio, const char* wavDir) {
             s.init(c, bot);
             for (double t = -1000; t <= c.lengthMs + 1000; t += 8.0) s.update(t);
             CHECK(s.misses == 0 && s.allResolved());
-            std::printf("  %-13s %-9s notes P%5zu O%5zu  len %.1fs\n", def.title.c_str(), d.c_str(), c.playerNotes,
-                        c.opponentNotes, c.lengthMs / 1000.0);
+            std::printf("  %-13s %-9s notes P%5s O%5s  len %.1fs\n", def.title.c_str(), d.c_str(), c.playerNotes.str().c_str(),
+                        c.opponentNotes.str().c_str(), c.lengthMs / 1000.0);
         }
         if (audio) {
             const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -752,8 +826,7 @@ static int printKeys(int argc, char** argv, int first) {
             std::printf("FAILED  %s: %s\n", argv[i], err.c_str());
             continue;
         }
-        std::printf("%dK  P%llu O%llu  %s\n", c.keys, (unsigned long long)c.playerNotes, (unsigned long long)c.opponentNotes,
-                    argv[i]);
+        std::printf("%dK  P%s O%s  %s\n", c.keys, c.playerNotes.str().c_str(), c.opponentNotes.str().c_str(), argv[i]);
     }
     return 0;
 }
@@ -776,8 +849,9 @@ static int benchCharts(int argc, char** argv, int first) {
         auto t2 = std::chrono::steady_clock::now();
         const double pm = std::chrono::duration<double, std::milli>(t1 - t0).count();
         const double sm = std::chrono::duration<double, std::milli>(t2 - t1).count();
-        std::printf("%-48s %7.1f MB  %dK  raw %10llu  notes P%8zu O%8zu  bpm %.0f  len %6.1fs  parse %6.0f ms  sim %6.0f ms  %s\n",
-                    argv[i], sizeMb, c.keys, (unsigned long long)c.rawNoteCount, c.playerNotes, c.opponentNotes, c.bpmAt(0), c.lengthMs / 1000.0, pm, sm,
+        std::printf("%-48s %7.1f MB  %dK  raw %10s  notes P%8s O%8s  bpm %.0f  len %6.1fs  parse %6.0f ms  sim %6.0f ms  %s\n",
+                    argv[i], sizeMb, c.keys, c.rawNoteCount.str().c_str(), c.playerNotes.str().c_str(), c.opponentNotes.str().c_str(),
+                    c.bpmAt(0), c.lengthMs / 1000.0, pm, sm,
                     (s.misses == 0 && s.allResolved()) ? "ok" : "BOT MISSED");
         if (s.misses != 0) ++bad;
     }
@@ -834,6 +908,7 @@ int main(int argc, char** argv) {
     testExtraKeys18();
     testSpectrum();
     testVSlice();
+    testCounts();
     testSession();
     runPsychTests();
     runScanTests();

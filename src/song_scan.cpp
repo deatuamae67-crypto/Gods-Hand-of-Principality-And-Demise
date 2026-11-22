@@ -14,6 +14,7 @@
 #include "basegame.hpp"
 #include "chart.hpp"
 #include "chart_binary.hpp"
+#include "count_charts.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
@@ -169,11 +170,18 @@ bool chartContent(const fs::path& f) {
     return found;
 }
 
-// A chart: Psych JSON, or a binary .ghc (which may be the only one there:
-// a chart of a billion notes kept without its JSON).
+// A count chart's name: the iutk engine's .bin (FNC1) - read for what it holds.
+bool countChartName(const std::string& lowerName) { return endsWithI(lowerName, ".bin"); }
+
+// A chart: Psych JSON, a binary .ghc (which may be the only one there: a
+// chart of a billion notes kept without its JSON) or a count chart.
 bool hasChartFile(const fs::path& dir) {
     for (const fs::path& f : listDir(dir, false)) {
         const std::string n = toLower(pathStr(f.filename()));
+        if (countChartName(n)) {
+            if (isCountChart(pathStr(f))) return true;
+            continue;
+        }
         if (endsWithI(n, kBinaryChartExt) ? isBinaryChart(pathStr(f)) : chartName(n) && chartContent(f)) return true;
     }
     return false;
@@ -462,6 +470,10 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             if (isBinaryChart(pathStr(f))) charts.push_back(f);
             continue;
         }
+        if (countChartName(n)) {  // the iutk engine's Chart.bin and other count charts
+            if (isCountChart(pathStr(f))) charts.push_back(f);
+            continue;
+        }
         if (!endsWithI(n, ".json")) continue;
         if (n.find("-metadata") != std::string::npos) { meta = f; continue; }
         if (!chartName(n) || !chartContent(f)) continue;  // dialogue.json and the like
@@ -518,7 +530,7 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             std::string stem = pathStr(c.stem());
             const std::string ls = toLower(stem);
             std::string diff;
-            if (ls == key || songPathName(stem) == key) diff = "Normal";
+            if (ls == key || songPathName(stem) == key || ls == "chart") diff = "Normal";  // "chart": iutk's Chart.bin
             else if (ls.rfind(key + "-", 0) == 0) diff = prettyName(stem.substr(key.size() + 1));
             else diff = prettyName(stem);
             for (auto& f : found)

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <string>
 #include <thread>
 
 #if defined(_WIN32)
@@ -18,11 +19,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#ifndef PSAPI_VERSION
-#define PSAPI_VERSION 2  // GetProcessMemoryInfo from kernel32 (Windows 7 and later)
-#endif
 #include <windows.h>
-#include <psapi.h>
+#include <psapi.h>  // the types only: psapi and pdh are looked up when needed (winProc)
 #include <pdh.h>
 #include <pdhmsg.h>
 #include <GL/gl.h>
@@ -245,10 +243,44 @@ const Hardware& hardware() {
     return h;
 }
 
+#if defined(_WIN32)
+namespace {
+// A function of a Windows DLL, looked up instead of linked so that the game
+// starts on every Windows from Vista on: Vista has no K32GetProcessMemoryInfo,
+// and a missing function in the import table would stop the game before it
+// runs. DLLs not loaded yet come from the system folder, never another.
+template <typename Fn>
+Fn winProc(const wchar_t* dll, const char* name) {
+    HMODULE m = GetModuleHandleW(dll);
+    if (!m) {
+        std::wstring path(MAX_PATH, L'\0');
+        const UINT n = GetSystemDirectoryW(path.data(), MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) return nullptr;
+        path.resize(n);
+        path += L'\\';
+        path += dll;
+        m = LoadLibraryW(path.c_str());
+    }
+    return m ? reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(m, name))) : nullptr;
+}
+
+bool processCounters(PROCESS_MEMORY_COUNTERS& pmc) {
+    using Fn = BOOL(WINAPI*)(HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
+    static const Fn fn = [] {
+        const Fn k32 = winProc<Fn>(L"kernel32.dll", "K32GetProcessMemoryInfo");  // Windows 7 on
+        return k32 ? k32 : winProc<Fn>(L"psapi.dll", "GetProcessMemoryInfo");  // Vista
+    }();
+    pmc = PROCESS_MEMORY_COUNTERS{};
+    pmc.cb = sizeof pmc;
+    return fn && fn(GetCurrentProcess(), &pmc, sizeof pmc);
+}
+}  // namespace
+#endif
+
 uint64_t processMemory() {
 #if defined(_WIN32)
     PROCESS_MEMORY_COUNTERS pmc{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) return uint64_t(pmc.WorkingSetSize);
+    if (processCounters(pmc)) return uint64_t(pmc.WorkingSetSize);
     return 0;
 #elif defined(__APPLE__)
     mach_task_basic_info info{};
@@ -268,7 +300,7 @@ uint64_t processMemory() {
 uint64_t peakProcessMemory() {
 #if defined(_WIN32)
     PROCESS_MEMORY_COUNTERS pmc{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) return uint64_t(pmc.PeakWorkingSetSize);
+    if (processCounters(pmc)) return uint64_t(pmc.PeakWorkingSetSize);
     return 0;
 #elif defined(__APPLE__)
     mach_task_basic_info info{};
@@ -360,22 +392,26 @@ void glVideoMemory(GpuUse& g) {
 #if defined(_WIN32)
 // Windows' own GPU counters, as Task Manager reads them: each 3D engine's use
 // added up over the processes (instances are "pid_<n>_luid_<card>_phys_<n>_eng_<n>_engtype_3D"),
-// the busiest engine's; and the dedicated video memory in use.
+// the busiest engine's; and the dedicated video memory in use. Windows 10
+// 1709 and later have these counters; pdh.dll is looked up, not linked.
 struct PdhGpu {
+    PDH_STATUS(WINAPI* openQuery)(LPCWSTR, DWORD_PTR, PDH_HQUERY*) = nullptr;
+    PDH_STATUS(WINAPI* addCounter)(PDH_HQUERY, LPCWSTR, DWORD_PTR, PDH_HCOUNTER*) = nullptr;
+    PDH_STATUS(WINAPI* collect)(PDH_HQUERY) = nullptr;
+    PDH_STATUS(WINAPI* values)(PDH_HCOUNTER, DWORD, LPDWORD, LPDWORD, PPDH_FMT_COUNTERVALUE_ITEM_W) = nullptr;
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER busy = nullptr, mem = nullptr;
     bool tried = false, ok = false;
 };
 
 // The counter's values by instance (false when there are none yet).
-bool counterValues(PDH_HCOUNTER c, std::vector<std::pair<std::wstring, double>>& out) {
+bool counterValues(const PdhGpu& p, PDH_HCOUNTER c, std::vector<std::pair<std::wstring, double>>& out) {
     out.clear();
     DWORD size = 0, count = 0;
-    if (PdhGetFormattedCounterArrayW(c, PDH_FMT_DOUBLE, &size, &count, nullptr) != static_cast<PDH_STATUS>(PDH_MORE_DATA) || size == 0)
-        return false;
+    if (p.values(c, PDH_FMT_DOUBLE, &size, &count, nullptr) != static_cast<PDH_STATUS>(PDH_MORE_DATA) || size == 0) return false;
     std::vector<unsigned char> buf(size);
     auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buf.data());
-    if (PdhGetFormattedCounterArrayW(c, PDH_FMT_DOUBLE, &size, &count, items) != ERROR_SUCCESS) return false;
+    if (p.values(c, PDH_FMT_DOUBLE, &size, &count, items) != ERROR_SUCCESS) return false;
     for (DWORD i = 0; i < count; ++i)
         if (items[i].FmtValue.CStatus == PDH_CSTATUS_VALID_DATA || items[i].FmtValue.CStatus == PDH_CSTATUS_NEW_DATA)
             out.push_back({items[i].szName ? items[i].szName : L"", items[i].FmtValue.doubleValue});
@@ -386,16 +422,20 @@ bool windowsGpu(GpuUse& g) {
     static PdhGpu p;
     if (!p.tried) {
         p.tried = true;
-        if (PdhOpenQueryW(nullptr, 0, &p.query) == ERROR_SUCCESS &&
-            PdhAddEnglishCounterW(p.query, L"\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &p.busy) == ERROR_SUCCESS) {
-            if (PdhAddEnglishCounterW(p.query, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0, &p.mem) != ERROR_SUCCESS) p.mem = nullptr;
-            p.ok = PdhCollectQueryData(p.query) == ERROR_SUCCESS;
+        p.openQuery = winProc<decltype(p.openQuery)>(L"pdh.dll", "PdhOpenQueryW");
+        p.addCounter = winProc<decltype(p.addCounter)>(L"pdh.dll", "PdhAddEnglishCounterW");
+        p.collect = winProc<decltype(p.collect)>(L"pdh.dll", "PdhCollectQueryData");
+        p.values = winProc<decltype(p.values)>(L"pdh.dll", "PdhGetFormattedCounterArrayW");
+        if (p.openQuery && p.addCounter && p.collect && p.values && p.openQuery(nullptr, 0, &p.query) == ERROR_SUCCESS &&
+            p.addCounter(p.query, L"\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &p.busy) == ERROR_SUCCESS) {
+            if (p.addCounter(p.query, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0, &p.mem) != ERROR_SUCCESS) p.mem = nullptr;
+            p.ok = p.collect(p.query) == ERROR_SUCCESS;
         }
         return !p.ok;  // a use needs two readings
     }
-    if (!p.ok || PdhCollectQueryData(p.query) != ERROR_SUCCESS) return true;
+    if (!p.ok || p.collect(p.query) != ERROR_SUCCESS) return true;
     std::vector<std::pair<std::wstring, double>> v;
-    if (counterValues(p.busy, v)) {
+    if (counterValues(p, p.busy, v)) {
         std::vector<std::pair<std::wstring, double>> engines;
         for (const auto& [name, use] : v) {
             const size_t at = name.find(L"luid_");
@@ -408,7 +448,7 @@ bool windowsGpu(GpuUse& g) {
         for (const auto& e : engines) busiest = std::max(busiest, e.second);
         g.busy = std::clamp(busiest, 0.0, 100.0);
     }
-    if (p.mem && counterValues(p.mem, v)) {
+    if (p.mem && counterValues(p, p.mem, v)) {
         double used = 0;
         for (const auto& x : v) used += x.second;
         if (used > 0) g.memUsed = uint64_t(used);

@@ -582,7 +582,7 @@ void PlayState::restart() {
     camZoom_ = hudZoom_ = 1.0f;
     zoomingOn_ = false;
     npsWindow_.clear();
-    nps_ = maxNps_ = npsOpp_ = maxNpsOpp_ = 0;
+    nps_ = maxNps_ = npsOpp_ = maxNpsOpp_ = Count();
     speedMult_ = 1.0;
     speedTweenDur_ = 0;
     left_.singUntil = right_.singUntil = -10;
@@ -794,7 +794,7 @@ void PlayState::popup(const std::string& text, Color c, const std::string& timin
     // Combo stacking off (Psych's option): the new one replaces the others.
     if (!a.settings.comboStacking) popups_.clear();
     if (popups_.size() >= 16) popups_.erase(popups_.begin());
-    Popup p{text, timing, c, now, session_.combo};
+    Popup p{text, timing, c, now, session_.combo};  // the combo as it is, any size
     p.rating = rating;
     p.seed = uint32_t(GetRandomValue(1, 0x7FFFFFFF));
     const double bpm = chart_.bpmAt(std::max(0.0, songMs_));
@@ -1138,14 +1138,14 @@ void PlayState::finish() {
     r.req = req_;
     r.title = chart_.title.empty() ? entry_->title : chart_.title;
     r.diff = req_.diff;
-    r.score = session_.score;
+    r.score = session_.score;  // exact; what is saved (scores, replays) is 64-bit
     r.acc = session_.accuracy();
     r.misses = session_.misses;
     r.maxCombo = session_.maxCombo;
     r.counts = session_.counts;
-    r.totalNotes = (long long)session_.totalPlayerNotes;
+    r.totalNotes = session_.totalPlayerNotes;
     r.opponentHits = session_.opponentHits;
-    r.opponentNotes = (long long)session_.totalOpponentNotes;
+    r.opponentNotes = session_.totalOpponentNotes;
     r.rank = session_.rank();
     r.clear = session_.clearLabel();
     r.errors = session_.hitErrors;
@@ -1157,7 +1157,7 @@ void PlayState::finish() {
     r.color = entry_->color;
     const bool saveable = !cfg_.botplay && !cfg_.practice && !replaying_ && rate_ >= 1.0;
     if (saveable) {
-        ScoreEntry e{r.score, r.acc, r.misses, r.rank, r.clear};
+        ScoreEntry e{r.score.satLL(), r.acc, r.misses.satLL(), r.rank, r.clear};
         r.newBest = a.scores.submit(Scores::key(entry_->id + (playerLeft_ ? "#opponent" : "") + (req_.autoChart ? "#autochart" : ""),
                                                 req_.diff), e);
     }
@@ -1171,9 +1171,9 @@ void PlayState::finish() {
         record_.keys = chart_.keys;
         for (int k = 0; k < kRatingCount; ++k) record_.windows[k] = cfg_.windows[k];
         record_.ratingOffset = cfg_.ratingOffset;
-        record_.score = r.score;
+        record_.score = r.score.satLL();
         record_.acc = r.acc;
-        record_.misses = r.misses;
+        record_.misses = r.misses.satLL();
         const std::string dir = a.userDir + "replays/";
         const std::string last = dir + replayFileName(entry_->id, req_.diff, "last");
         if (record_.save(last)) r.replayPath = last;
@@ -1182,8 +1182,8 @@ void PlayState::finish() {
         r.replayPath = req_.replayPath;
     }
     if (req_.story) {
-        r.req.storyScore += r.score;
-        r.req.storyMisses += r.misses;
+        r.req.storyScore += r.score.satLL();
+        r.req.storyMisses += r.misses.satLL();
         r.req.storyAccSum += r.acc;
         r.req.storySongs += 1;
         if (r.req.storyQueue.empty()) {
@@ -1192,9 +1192,9 @@ void PlayState::finish() {
         }
     }
     if (a.autoRun.enabled)
-        std::printf("[auto] %s (%s): score %lld, accuracy %.2f%%, misses %lld, max combo %lld, notes %llu%s\n", r.title.c_str(),
-                    r.diff.c_str(), r.score, r.acc * 100.0, r.misses, r.maxCombo, (unsigned long long)session_.totalPlayerNotes,
-                    psych_ ? " [psych scene]" : "");
+        std::printf("[auto] %s (%s): score %s, accuracy %.2f%%, misses %s, max combo %s, notes %s%s\n", r.title.c_str(),
+                    r.diff.c_str(), r.score.str().c_str(), r.acc * 100.0, r.misses.str().c_str(), r.maxCombo.str().c_str(),
+                    session_.totalPlayerNotes.str().c_str(), psych_ ? " [psych scene]" : "");
     a.change(makeResults(r));
 }
 
@@ -1542,10 +1542,10 @@ void PlayState::updateHudObjects(double dt) {
 
 std::string PlayState::psychScoreLine() const {
     // Psych 0.7.3's updateScore: "Score: 1200 | Misses: 0 | Rating: Sick! (98.5%) - SFC".
-    const long long judged = session_.judged() + session_.misses;
-    std::string line = "Score: " + std::to_string(session_.score) + " | Misses: " + std::to_string(session_.misses) + " | Rating: " +
-                       (ratingNameOverride_.empty() ? psychRatingName(session_.accuracy(), judged) : ratingNameOverride_);
-    if (judged > 0) {
+    const Count judged = session_.judged() + session_.misses;
+    std::string line = "Score: " + session_.score.str() + " | Misses: " + session_.misses.str() + " | Rating: " +
+                       (ratingNameOverride_.empty() ? psychRatingName(session_.accuracy(), judged.isZero() ? 0 : 1) : ratingNameOverride_);
+    if (!judged.isZero()) {
         // CoolUtil.floorDecimal(percent, 2), written as Haxe writes a Float.
         std::string pct = TextFormat("%.2f", std::floor(session_.accuracy() * 10000.0) / 100.0);
         while (!pct.empty() && pct.back() == '0') pct.pop_back();
@@ -1754,11 +1754,11 @@ void PlayState::drawHud() {
     if (s.noteCounter > 0 && scoreShown) {
         std::string line;
         if (s.noteCounter == 2) {
-            const long long opp = session_.opponentHits, mine = session_.judged();
+            const Count opp = session_.opponentHits, mine = session_.judged();
             line = "Notes " + fmtThousands(opp) + " + " + fmtThousands(mine) + " = " + fmtThousands(opp + mine) + " / " +
-                   fmtThousands((long long)(session_.totalPlayerNotes + session_.totalOpponentNotes));
+                   fmtThousands(session_.totalPlayerNotes + session_.totalOpponentNotes);
         } else {
-            line = "Notes " + fmtThousands(session_.judged()) + " / " + fmtThousands((long long)session_.totalPlayerNotes);
+            line = "Notes " + fmtThousands(session_.judged()) + " / " + fmtThousands(session_.totalPlayerNotes);
         }
         if (s.noteCounter == 2)  // each side on its own: opponent / yours
             line += "   |   NPS " + fmtThousands(npsOpp_) + " / " + fmtThousands(nps_) + " (max " + fmtThousands(maxNpsOpp_) + " / " +
@@ -1906,7 +1906,7 @@ void PlayState::drawUnderNotes() {
                 const float ry = (gfx::H - rs.y) * 0.5f - 60.0f - off[1] + rvy * tau + 0.5f * 550.0f * tau * tau;
                 const float ra = tau < p.beat ? 1.0f : std::max(0.0f, 1.0f - (tau - p.beat) / 0.2f);
                 if (ra > 0.002f) ui.ratingAt(std::min(p.rating, 3), rx, ry, rk, ra * comboAlpha);
-                std::string digits = std::to_string(std::max(0LL, p.combo));
+                std::string digits = p.combo.str();
                 while (digits.size() < 3) digits.insert(digits.begin(), '0');
                 const float da = tau < 2.0f * p.beat ? 1.0f : std::max(0.0f, 1.0f - (tau - 2.0f * p.beat) / 0.2f);
                 for (size_t i = 0; i < digits.size(); ++i) {
@@ -1932,8 +1932,8 @@ void PlayState::drawUnderNotes() {
                 const float al = (age < 0.4f ? 1.0f : 1.0f - (age - 0.4f) / 0.3f) * comboAlpha;
                 const float y = py - age * 26.0f;
                 gfx::text(FontId::Title, p.text, px, y, 46 * pop, fade(p.c, al), Align::Center, 2.5f);
-                if (p.combo >= 3 && p.text != "MISS")
-                    gfx::text(FontId::Ui, "x" + std::to_string(p.combo), px, y + 52, 34 * pop, fade(WHITE, al), Align::Center, 2.0f);
+                if (p.combo >= Count(3) && p.text != "MISS")
+                    gfx::text(FontId::Ui, "x" + p.combo.str(), px, y + 52, 34 * pop, fade(WHITE, al), Align::Center, 2.0f);
                 if (!p.timing.empty()) gfx::text(FontId::Ui, p.timing, px, y - 26, 22, fade(kIvory, al * 0.9f), Align::Center, 1.5f);
             }
         }
@@ -2091,8 +2091,8 @@ void PlayState::drawDebugOverlay() {
     };
     rows.push_back({"CHART", chart_.title + " - " + chart_.difficulty + TextFormat("  |  %dK  |  speed %.2f  |  BPM %.1f", chart_.keys,
                                                                                     scrollSpeed(), chart_.bpmAt(std::max(0.0, songMs_)))});
-    rows.push_back({"", "notes P " + num(double(chart_.playerNotes)) + "  O " + num(double(chart_.opponentNotes)) + "  (in the file " +
-                            num(double(chart_.rawNoteCount)) + ")  sections " + num(double(chart_.sections.size()))});
+    rows.push_back({"", "notes P " + num(chart_.playerNotes.toDouble()) + "  O " + num(chart_.opponentNotes.toDouble()) + "  (in the file " +
+                            num(chart_.rawNoteCount.toDouble()) + ")  sections " + num(double(chart_.sections.size()))});
     rows.push_back({"CLOCK", TextFormat("%.3f s / %.1f s  |  beat %.2f  |  step %d  |  section %d  |  rate %.2fx", songMs_ / 1000.0,
                                         chart_.lengthMs / 1000.0, chart_.beatAt(songMs_), lastStep_, lastSection_, rate_)});
     auto track = [](const char* name, const PcmPtr& p) -> std::string {
@@ -2114,9 +2114,9 @@ void PlayState::drawDebugOverlay() {
                             (noteRaster_.cpu() ? TextFormat("  |  %d notes, %.2f Mpx, %.2f ms", noteRaster_.lastNotes(),
                                                             double(noteRaster_.lastPixels()) / 1e6, noteRaster_.lastMs())
                                                : "")});
-    rows.push_back({"", "judged " + num(double(session_.judged())) + "  combo " + num(double(session_.combo)) + "  misses " +
-                            num(double(session_.misses)) + "  opponent " + num(double(session_.opponentHits)) + "  NPS " +
-                            num(double(nps_))});
+    rows.push_back({"", "judged " + num(session_.judged().toDouble()) + "  combo " + num(session_.combo.toDouble()) + "  misses " +
+                            num(session_.misses.toDouble()) + "  opponent " + num(session_.opponentHits.toDouble()) + "  NPS " +
+                            num(nps_.toDouble())});
     rows.push_back({"FRAME", TextFormat("%d fps  |  update %.2f ms  |  draw %.2f ms  |  worst %.1f ms", int(a.fps + 0.5f), a.updateMs,
                                         a.drawMs, a.worstFrameMs)});
     if (scripts_) rows.push_back({"SCRIPTS", TextFormat("%zu loaded  |  note callbacks %s", scripts_->count(),

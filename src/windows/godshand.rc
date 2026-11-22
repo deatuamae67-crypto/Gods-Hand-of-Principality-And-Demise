@@ -1,2 +1,0 @@
-// MinGW builds: the manifest as a resource (MSVC builds take the .manifest directly).
-1 24 "godshand.manifest"

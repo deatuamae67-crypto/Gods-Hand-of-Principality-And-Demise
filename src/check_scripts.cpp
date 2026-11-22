@@ -208,11 +208,12 @@ int checkScripts(const std::string& dir) {
         SetTraceLogLevel(LOG_WARNING);
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
         InitWindow(64, 64, "check-scripts");
-        const bool gles = rlGetVersion() == RL_OPENGL_ES_20;
+        const int gl = rlGetVersion();
+        const Glsl target = gl == RL_OPENGL_ES_20 ? Glsl::Es100 : gl == RL_OPENGL_21 ? Glsl::Legacy120 : Glsl::Core330;
         for (const fs::path& p : frag) {
             std::string code;
             if (!scene::readFile(pathStr(p), code)) continue;
-            const std::string glsl = translateShader(code, gles);
+            const std::string glsl = translateShader(code, target);
             std::string log;
             g_log = &log;
             SetTraceLogCallback(captureLog);

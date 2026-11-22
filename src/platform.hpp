@@ -22,6 +22,8 @@ constexpr bool kAndroid =
 constexpr const char* kName =
 #if defined(__ANDROID__)
     "Android";
+#elif defined(_WIN32) && defined(GH_WINDOWS_LEGACY)
+    "Windows Legacy";  // the Vista/7 and OpenGL 2.1 build
 #elif defined(_WIN32)
     "Windows";
 #elif defined(__APPLE__)

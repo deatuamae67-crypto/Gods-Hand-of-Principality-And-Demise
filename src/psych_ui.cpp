@@ -84,32 +84,17 @@ bool fontMetrics(const std::string& path, float& upm, float& ascent, float& desc
 const char* kColors[4] = {"purple", "blue", "green", "red"};
 
 // red, green and blue of the template become the three colours.
-const char* kPaletteGl330 = R"GLSL(#version 330
-in vec2 fragTexCoord;
-in vec4 fragColor;
-uniform sampler2D texture0;
-uniform vec4 colDiffuse;
-uniform vec3 r;
-uniform vec3 g;
-uniform vec3 b;
-out vec4 finalColor;
-void main() {
-    vec4 c = texture(texture0, fragTexCoord);
-    finalColor = vec4(min(c.r * r + c.g * g + c.b * b, vec3(1.0)), c.a) * colDiffuse * fragColor;
-}
-)GLSL";
-const char* kPaletteGles = R"GLSL(#version 100
-precision mediump float;
-varying vec2 fragTexCoord;
-varying vec4 fragColor;
+const char* kPaletteBody = R"GLSL(
+GH_VARYING vec2 fragTexCoord;
+GH_VARYING vec4 fragColor;
 uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 uniform vec3 r;
 uniform vec3 g;
 uniform vec3 b;
 void main() {
-    vec4 c = texture2D(texture0, fragTexCoord);
-    gl_FragColor = vec4(min(c.r * r + c.g * g + c.b * b, vec3(1.0)), c.a) * colDiffuse * fragColor;
+    vec4 c = GH_TEX(texture0, fragTexCoord);
+    GH_FRAG = vec4(min(c.r * r + c.g * g + c.b * b, vec3(1.0)), c.a) * colDiffuse * fragColor;
 }
 )GLSL";
 const char* kDirs[4] = {"left", "down", "up", "right"};
@@ -346,11 +331,11 @@ bool PsychUi::loadNotes(const scene::Files& f) {
         // Skins in noteSkins/ (Psych 0.7, JS Engine) are colour templates.
         template_ = notePng.find("oteskins/") != std::string::npos || notePng.find("oteSkins/") != std::string::npos;
         if (template_) {
-            paletteShader_ = LoadShaderFromMemory(nullptr, rlGetVersion() == RL_OPENGL_ES_20 ? kPaletteGles : kPaletteGl330);
+            paletteShader_ = gfx::loadFragmentShader(kPaletteBody);
             locR_ = GetShaderLocation(paletteShader_, "r");
             locG_ = GetShaderLocation(paletteShader_, "g");
             locB_ = GetShaderLocation(paletteShader_, "b");
-            if (!paletteShader_.id || paletteShader_.id == rlGetShaderIdDefault()) template_ = false;
+            if (!paletteShader_.id) template_ = false;
         }
     }
     return notes_.id != 0;

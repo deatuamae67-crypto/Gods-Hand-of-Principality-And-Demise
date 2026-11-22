@@ -276,7 +276,7 @@ int App::run(int argc, char** argv) {
                     Chart c;
                     std::string err;
                     if (loadChartFile(path, e.diffs[i], c, err, meta, 0, true))
-                        std::printf("  -> ok %dK, %llu notes", c.keys, (unsigned long long)(c.playerNotes + c.opponentNotes));
+                        std::printf("  -> ok %dK, %s notes", c.keys, (c.playerNotes + c.opponentNotes).str().c_str());
                     else
                         std::printf("  -> ERROR %s", err.c_str());
                 }

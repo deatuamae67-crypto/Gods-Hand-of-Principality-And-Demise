@@ -15,6 +15,8 @@
 #include "chart.hpp"
 #include "chart_binary.hpp"
 #include "chart_stream.hpp"
+#include "count_charts.hpp"
+#include "miniz.h"
 #include "common.hpp"
 #include "flp_import.hpp"
 #include "scene.hpp"
@@ -530,6 +532,166 @@ void testBinaryChartsInMods() {
     fs::remove_all(base);
 }
 
+// The iutk engine's charts (FNC1, issue #36), written here as its
+// ChartBinary.hx reads them: version 2 (one note each), 3 (cells with 64-bit
+// counts) and 4 (run-length varint streams with CRC-32s).
+namespace iutk {
+std::string le32(uint32_t v) { return std::string{char(v), char(v >> 8), char(v >> 16), char(v >> 24)}; }
+std::string varint(uint64_t v) {
+    std::string o;
+    do {
+        const unsigned char b = v & 0x7F;
+        v >>= 7;
+        o += char(v ? (b | 0x80) : b);
+    } while (v);
+    return o;
+}
+// A stream of run-length items: runs of equal values as repeats, the rest literal.
+std::string runs(const std::vector<uint64_t>& vals, bool bytes) {
+    std::string o;
+    auto val = [&](uint64_t v) { o += bytes ? std::string(1, char(v)) : varint(v); };
+    size_t i = 0;
+    while (i < vals.size()) {
+        size_t j = i + 1;
+        while (j < vals.size() && vals[j] == vals[i]) ++j;
+        if (j - i >= 2) {
+            o += varint(((j - i - 2) << 1) | 1);  // one value, (n >> 1) + 2 times
+            val(vals[i]);
+            i = j;
+            continue;
+        }
+        size_t k = i + 1;  // literal values up to the next repeat
+        while (k < vals.size() && !(k + 1 < vals.size() && vals[k + 1] == vals[k])) ++k;
+        o += varint((k - i - 1) << 1);  // (n >> 1) + 1 values
+        for (size_t m = i; m < k; ++m) val(vals[m]);
+        i = k;
+    }
+    return o;
+}
+struct Cell {
+    int32_t time;
+    int lane;
+    uint64_t count;
+};
+std::string v4(const std::vector<Cell>& cells, uint64_t declared) {
+    std::vector<uint64_t> d, m, c;
+    size_t groups = 0;
+    uint64_t prevT = 0, firstT = 0;
+    for (size_t i = 0; i < cells.size();) {
+        const uint64_t t = uint64_t(int64_t(cells[i].time) + 2147483648LL);
+        if (groups == 0) firstT = t;
+        else d.push_back(t - prevT - 1);
+        prevT = t;
+        unsigned mask = 0;
+        size_t j = i;
+        for (; j < cells.size() && cells[j].time == cells[i].time; ++j) {
+            mask |= 1u << cells[j].lane;
+            c.push_back(cells[j].count - 1);
+        }
+        m.push_back(mask);
+        ++groups;
+        i = j;
+    }
+    const std::string sd = runs(d, false), sm = runs(m, true), sc = runs(c, false);
+    auto crc = [](const std::string& x) {
+        return uint32_t(mz_crc32(MZ_CRC32_INIT, reinterpret_cast<const unsigned char*>(x.data()), x.size()));
+    };
+    return std::string("FNC1") + char(4) + varint(cells.size()) + varint(groups) + varint(declared) + varint(firstT) +
+           varint(sd.size()) + varint(sm.size()) + varint(sc.size()) + le32(crc(sd)) + le32(crc(sm)) + le32(crc(sc)) + sd + sm + sc;
+}
+}  // namespace iutk
+
+void testIutkCharts() {
+    const fs::path base = fs::temp_directory_path() / "gh_iutk";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Version 2: one note each; the same time and lane twice is one note of two.
+    {
+        std::string f = "FNC1";
+        f += char(2);
+        f += iutk::le32(4);
+        for (int32_t t : {500, 500, 750, 1000}) f += iutk::le32(uint32_t(t));
+        f += std::string{char(4), char(4), char(1), char(7)};
+        put(base / "v2.bin", f);
+        Chart c;
+        SCHECK(isCountChart(str(base / "v2.bin")) && loadChartFile(str(base / "v2.bin"), "Normal", c, err));
+        SCHECK(c.notes.size() == 3 && c.playerNotes == Count(3) && c.opponentNotes == Count(1) && c.rawNoteCount == Count(4));
+        SCHECK(c.notes.size() == 3 && c.notes[0].time == 500 && c.notes[0].side == 1 && c.notes[0].lane == 0 &&
+               c.countOf(c.notes[0]) == Count(2));
+        SCHECK(c.notes.size() == 3 && c.notes[1].side == 0 && c.notes[1].lane == 1 && c.notes[2].lane == 3 && c.keys == 4 &&
+               c.bpmAt(0) == 120);
+    }
+    // Version 3 (what iutk's converter writes), through the game's writer:
+    // 64-bit counts, a stack of ten billion notes among them.
+    Chart src;
+    src.keys = 4;
+    auto addNote = [&](double t, int lane, int side, uint64_t count) {
+        Note n;
+        n.time = t;
+        n.lane = uint16_t(lane);
+        n.side = uint8_t(side);
+        src.notes.push_back(n);
+        src.setCount(src.notes.back(), Count(count));
+    };
+    addNote(0, 0, 0, 1);
+    addNote(0, 2, 1, 10000000000ull);
+    addNote(250, 3, 1, 7);
+    addNote(-40, 1, 0, 3);  // before the song starts: times are signed
+    src.finalize(120);
+    SCHECK(writeFnc1(str(base / "Chart.bin"), src, err));
+    Chart v3;
+    SCHECK(loadChartFile(str(base / "Chart.bin"), "Normal", v3, err));
+    SCHECK(v3.notes.size() == 4 && v3.playerNotes == Count(10000000007ull) && v3.opponentNotes == Count(4));
+    SCHECK(v3.notes.size() == 4 && v3.notes[0].time == -40 && v3.countOf(v3.notes[2]) == Count(10000000000ull) &&
+           v3.notes[2].lane == 2);
+    // A total that does not add up is refused.
+    {
+        std::ifstream in(base / "Chart.bin", std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        bytes[9] = char(bytes[9] + 1);  // the total's low byte
+        put(base / "bad3.bin", bytes);
+        Chart bad;
+        SCHECK(!loadChartFile(str(base / "bad3.bin"), "Normal", bad, err) && err.find("notes") != std::string::npos);
+    }
+    // Version 4: streams with runs (repeats in M and C), times far apart, a
+    // count near 2^64.
+    const std::vector<iutk::Cell> cells = {{-100, 1, 1}, {0, 4, 1}, {0, 5, 1}, {0, 7, 2}, {1000, 4, 1}, {1000, 5, 1},
+                                           {2000, 6, 18446744073709551000ull}, {2001, 0, 5}};
+    uint64_t total = 0;
+    for (const auto& cl : cells) total += cl.count;
+    put(base / "v4.bin", iutk::v4(cells, total));
+    Chart c4;
+    SCHECK(loadChartFile(str(base / "v4.bin"), "Normal", c4, err));
+    SCHECK(c4.notes.size() == cells.size() && c4.rawNoteCount == Count(total));
+    if (c4.notes.size() == cells.size()) {
+        SCHECK(c4.notes[0].time == -100 && c4.notes[0].side == 0 && c4.notes[0].lane == 1);
+        SCHECK(c4.countOf(c4.notes[6]) == Count(18446744073709551000ull) && c4.notes[6].side == 1 && c4.notes[6].lane == 2);
+        SCHECK(c4.notes[7].time == 2001 && c4.countOf(c4.notes[7]) == Count(5));
+    }
+    // A damaged stream fails its CRC-32.
+    {
+        std::string f = iutk::v4(cells, total);
+        f[f.size() - 1] = char(f[f.size() - 1] ^ 0x01);
+        put(base / "bad4.bin", f);
+        Chart bad;
+        SCHECK(!loadChartFile(str(base / "bad4.bin"), "Normal", bad, err));
+    }
+    // In a mod: iutk's Chart.bin beside the song's audio is the song's chart.
+    const fs::path mod = base / "mods" / "iutkpack";
+    put(mod / "songs" / "spam" / "Inst.ogg", "x");
+    fs::create_directories(mod / "data" / "spam");
+    fs::copy_file(base / "v4.bin", mod / "data" / "spam" / "Chart.bin");
+    SongScan s;
+    scanModsDir(str(base / "mods"), s);
+    const SongEntry* spam = nullptr;
+    for (const SongEntry& e : s.songs)
+        if (e.songKey == "spam") spam = &e;
+    SCHECK(spam && !spam->autoChart && spam->diffs.size() == 1 && spam->diffs[0] == "Normal" &&
+           endsWithI(spam->chartPaths[0], "Chart.bin"));
+    fs::remove_all(base);
+}
+
 // Freeplay's icons (issue #36): the chart's "player2", that character's
 // "healthicon", then images/icons/icon-<icon>.png or <icon>.png, in the
 // song's own folders first and the shared ones after.
@@ -563,6 +725,7 @@ void runScanTests() {
     testFlStudio();
     testPulseForgeCharts();
     testSongIcons();
+    testIutkCharts();
     testAudioSeconds();
     testModLayouts();
 }

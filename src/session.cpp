@@ -31,7 +31,8 @@ void Session::init(const Chart& chart, const SessionConfig& cfg) {
             maxSus_[s][l] = 0;
         }
     for (bool& h : held_) h = false;
-    totalPlayerNotes = totalOpponentNotes = 0;
+    totalPlayerNotes = totalOpponentNotes = Count();
+    bigCounts_ = chart.bigCounts;  // the notes' indexes into it stay as they are
     for (size_t i = 0; i < chart.notes.size(); ++i) {
         const Note& n = chart.notes[i];
         if (n.lane >= keys_) continue;
@@ -42,22 +43,22 @@ void Session::init(const Chart& chart, const SessionConfig& cfg) {
         ln.len = n.length;
         ln.kind = n.kind;
         ln.flags = n.flags;
-        ln.stack = std::max<uint16_t>(1, n.stack);
+        ln.stack = (n.flags & kFlagBigCount) ? n.count32() : std::max<uint32_t>(1, n.count32());
         lanes_[n.side][n.lane].push_back(ln);
-        maxSus_[n.side][n.lane] = std::max(maxSus_[n.side][n.lane], n.length);
-        if (n.kind == kNormal) (n.side == 1 ? totalPlayerNotes : totalOpponentNotes) += ln.stack;
+        maxSus_[n.side][n.lane] = std::max(maxSus_[n.side][n.lane], double(n.length));
+        if (n.kind == kNormal) (n.side == 1 ? totalPlayerNotes : totalOpponentNotes) += countOf(ln);
     }
     events.clear();
-    score = 0;
-    combo = maxCombo = misses = 0;
-    opponentHits = 0;
+    score = ScoreCount();
+    combo = maxCombo = misses = Count();
+    opponentHits = Count();
     autoLanes_.reset();
     mult_[0] = mult_[1] = 1;
-    counts.fill(0);
+    counts.fill(Count());
     health = 1.0;
     dead = false;
     hitErrors.clear();
-    hitErrors.reserve(size_t(std::min<uint64_t>(totalPlayerNotes, kMaxHitErrors)));
+    hitErrors.reserve(size_t(std::min<uint64_t>(totalPlayerNotes.sat64(), kMaxHitErrors)));
     errStride_ = 1;
     errTick_ = 0;
     lastMs_ = -1e18;
@@ -88,12 +89,12 @@ void Session::hitNote(int lane, size_t idx, double songMs, bool bot) {
 
     // A stack of notes is one press but every note in it counts.
     const RatingInfo& info = kRatings[r];
-    const long long k = (long long)n.stack * mult_[1];
-    score += (long long)info.score * k;
+    const Count k = countOf(n).times(uint64_t(mult_[1]));
+    score.add(k.times(uint64_t(info.score)));
     combo += k;
     maxCombo = std::max(maxCombo, combo);
     counts[r] += k;
-    accSum_ += info.accuracy * k;
+    accSum_ += info.accuracy * k.toDouble();
     addHealth(info.health);
     // Timing errors for the results graph: past kMaxHitErrors hits only every
     // other one is kept (then every fourth...), so memory stays bounded.
@@ -117,16 +118,17 @@ void Session::hitNote(int lane, size_t idx, double songMs, bool bot) {
     e.flags = n.flags;
     e.noteType = n.type;
     e.id = n.id;
-    e.stack = n.stack;
+    e.stack = uint32_t(std::min<uint64_t>(countOf(n).sat64(), UINT32_MAX));
     events.push_back(e);
 }
 
 void Session::missNote(int lane, size_t idx) {
     LaneNote& n = lanes_[1][lane][idx];
     n.state = kMissed;
-    misses += n.stack;
-    combo = 0;
-    score -= 10LL * n.stack;
+    const Count c = countOf(n);
+    misses += c;
+    combo = Count();
+    score.sub(c.times(10));
     addHealth(-0.0475);  // once per stack, like Psych removing the stacked duplicates
     GameEvent e{};
     e.type = GameEvent::PlayerMiss;
@@ -135,7 +137,7 @@ void Session::missNote(int lane, size_t idx) {
     e.flags = n.flags;
     e.noteType = n.type;
     e.id = n.id;
-    e.stack = n.stack;
+    e.stack = uint32_t(std::min<uint64_t>(c.sat64(), UINT32_MAX));
     events.push_back(e);
 }
 
@@ -162,7 +164,7 @@ void Session::press(int lane, double songMs) {
     } else if (mine >= 0) {
         LaneNote& n = v[size_t(mine)];
         n.state = kMineHit;
-        combo = 0;
+        combo = Count();
         addHealth(-0.3);
         GameEvent e{};
         e.type = GameEvent::PlayerMine;
@@ -173,8 +175,8 @@ void Session::press(int lane, double songMs) {
         events.push_back(e);
     } else if (!cfg_.ghostTapping) {
         ++misses;
-        combo = 0;
-        score -= 10;
+        combo = Count();
+        score.sub(10);
         addHealth(-0.04);
         GameEvent e{};
         e.type = GameEvent::GhostMiss;
@@ -202,7 +204,7 @@ void Session::release(int lane, double songMs) {
     if (songMs < end - 120.0 * cfg_.rate) {
         n.state = kDropped;
         ++misses;
-        combo = 0;
+        combo = Count();
         addHealth(-0.0475);
         e.type = GameEvent::HoldDrop;
     } else {
@@ -264,7 +266,7 @@ void Session::update(double songMs) {
                 } else {
                     if (oh >= 0) o[size_t(oh)].state = kHeldDone;
                     oh = -1;
-                    opponentHits += (long long)n.stack * mult_[0];
+                    opponentHits += countOf(n).times(uint64_t(mult_[0]));
                     n.state = n.len > 0 ? kHolding : kHit;
                     if (n.len > 0) oh = (long long)oc;
                     GameEvent e{};
@@ -275,7 +277,7 @@ void Session::update(double songMs) {
                     e.flags = n.flags;
                     e.noteType = n.type;
                     e.id = n.id;
-                    e.stack = n.stack;
+                    e.stack = uint32_t(std::min<uint64_t>(countOf(n).sat64(), UINT32_MAX));
                     events.push_back(e);
                 }
             }
@@ -314,21 +316,21 @@ void Session::skipTo(double songMs) {
     lastMs_ = songMs;
 }
 
-long long Session::judged() const {
-    long long n = 0;
-    for (long long c : counts) n += c;
+Count Session::judged() const {
+    Count n;
+    for (const Count& c : counts) n += c;
     return n;
 }
 
 double Session::accuracy() const {
-    const long long total = judged() + misses;
-    return total > 0 ? accSum_ / double(total) : 1.0;
+    const Count total = judged() + misses;
+    return total.isZero() ? 1.0 : accSum_ / total.toDouble();
 }
 
 std::string Session::rank() const {
-    if (judged() + misses == 0) return "-";
+    if ((judged() + misses).isZero()) return "-";
     const double a = accuracy();
-    if (a >= 0.995 && misses == 0) return "S+";
+    if (a >= 0.995 && misses.isZero()) return "S+";
     if (a >= 0.95) return "S";
     if (a >= 0.90) return "A";
     if (a >= 0.80) return "B";
@@ -337,13 +339,13 @@ std::string Session::rank() const {
 }
 
 std::string Session::clearLabel() const {
-    if (judged() == 0) return "";
-    if (misses == 0) {
-        if (counts[kGrace] + counts[kMortal] + counts[kSinful] == 0) return "SFC";  // Psych Engine's names
-        if (counts[kMortal] + counts[kSinful] == 0) return "GFC";
+    if (judged().isZero()) return "";
+    if (misses.isZero()) {
+        if ((counts[kGrace] + counts[kMortal] + counts[kSinful]).isZero()) return "SFC";  // Psych Engine's names
+        if ((counts[kMortal] + counts[kSinful]).isZero()) return "GFC";
         return "FC";
     }
-    return misses < 10 ? "SDCB" : "Clear";
+    return misses < Count(10) ? "SDCB" : "Clear";
 }
 
 bool Session::allResolved() const {

@@ -35,6 +35,7 @@
 #include "chart_stream.hpp"
 
 #include "chart_binary.hpp"
+#include "count_charts.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
 
@@ -1258,6 +1259,11 @@ bool loadChartFile(const std::string& path, const std::string& difficulty, Chart
         if (!readBinaryChart(path, skeleton, sn, err)) return false;
         return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
     }
+    if (isCountChart(path)) {  // a chart of counts: the iutk engine's
+        if (!loadCountChart(path, out, err)) return false;
+        out.difficulty = difficulty;
+        return true;
+    }
     const uint64_t size = fileSize(path);
     if (size == 0 && !fileExistsAt(path)) { err = "cannot read " + path; return false; }
     // A pipe has no size (gh_tests --chart /dev/stdin, fed by a decompressor):
@@ -1321,6 +1327,7 @@ std::string findStringField(std::string_view text, std::string_view key) {
 
 ChartPeek peekChart(const std::string& path) {
     ChartPeek pk;
+    if (isCountChart(path)) return pk;  // counts only: no song fields
     constexpr size_t kWin = 96 * 1024;
     std::string head, tail;
     if (isBinaryChart(path)) {  // its JSON part holds the song's fields

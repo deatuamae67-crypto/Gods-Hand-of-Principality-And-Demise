@@ -224,7 +224,7 @@ private:
         std::string text, timing;
         Color c;
         double t0;
-        long long combo;
+        Count combo;
         int rating = -1;     // 0 sick .. 3 shit (the Psych interface's pictures)
         uint32_t seed = 0;   // Psych's random fall for this one (popUpScore's velocities)
         float beat = 0.5f;   // a beat (s) when it popped: Psych fades the rating a beat later
@@ -292,10 +292,10 @@ private:
     // Notes per second for the note counter (JS Engine / H-Slice): hits in the last second.
     struct NpsMark {
         double t;
-        long long player, opponent;  // hits so far
+        Count player, opponent;  // hits so far
     };
     std::deque<NpsMark> npsWindow_;
-    long long nps_ = 0, maxNps_ = 0, npsOpp_ = 0, maxNpsOpp_ = 0;  // yours, the opponent's
+    Count nps_, maxNps_, npsOpp_, maxNpsOpp_;  // yours, the opponent's
     // Spam charts (S2X's adaptive note budget): notes of a lane closer than
     // noteGap_ pixels are drawn once. 1 = every pixel; doubled while the frame
     // rate stays under its target with thousands of notes on screen, halved
@@ -403,7 +403,7 @@ private:
     bool prevKeys_[kMaxKeys] = {};
     bool keyNow_[kMaxKeys] = {};
     bool prevMouse_[3] = {}, mouseNow_[3] = {};
-    long long lastCombo_ = 0;
+    Count lastCombo_;
     bool backdrop_ = false;
     std::map<std::string, scene::CharacterPtr> charCache_;  // "slot:name" (Change Character)
     // Replays and touch input

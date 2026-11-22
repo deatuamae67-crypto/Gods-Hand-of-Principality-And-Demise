@@ -73,12 +73,12 @@ struct PlayRequest {
 struct ResultData {
     PlayRequest req;
     std::string title, diff;
-    long long score = 0;
+    ScoreCount score;
     double acc = 0;
-    long long misses = 0, maxCombo = 0;
-    std::array<long long, kRatingCount> counts{};
-    long long totalNotes = 0;  // player notes in the chart, stacked ones included
-    long long opponentHits = 0, opponentNotes = 0;  // the opponent's side, for the "both sides" note count
+    Count misses, maxCombo;
+    std::array<Count, kRatingCount> counts{};
+    Count totalNotes;  // player notes in the chart, stacked ones included
+    Count opponentHits, opponentNotes;  // the opponent's side, for the "both sides" note count
     std::string rank, clear;
     std::vector<Session::HitError> errors;
     double lengthMs = 1;

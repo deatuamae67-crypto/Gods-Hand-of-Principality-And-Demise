@@ -391,10 +391,10 @@ void PlayState::setScriptGlobals() {
 void PlayState::updateStatGlobals() {
     if (!scripts_) return;
     ScriptHost& h = *scripts_;
-    h.setGlobal("score", double(session_.score));
-    h.setGlobal("misses", double(session_.misses));
-    h.setGlobal("hits", double(session_.judged()));
-    h.setGlobal("combo", double(session_.combo));
+    h.setGlobal("score", session_.score.toDouble());
+    h.setGlobal("misses", session_.misses.toDouble());
+    h.setGlobal("hits", session_.judged().toDouble());
+    h.setGlobal("combo", session_.combo.toDouble());
     h.setGlobal("rating", session_.accuracy());
     h.setGlobal("ratingName", ratingNameOverride_.empty() ? session_.rank() : ratingNameOverride_);
     h.setGlobal("ratingFC", ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_);
@@ -812,11 +812,11 @@ void PlayState::psychMiss(const GameEvent& ev, bool ghost) {
     } else if (ch && ch->hasMiss && !(ev.flags & kFlagNoMissAnim)) {
         ch->playAnim(singAnim(1, ev.lane, 0) + "miss", true);
     }
-    if (lastCombo_ > 5 && sc.gf && ch != sc.gf.get() && sc.gf->hasAnim("sad")) {
+    if (lastCombo_ > Count(5) && sc.gf && ch != sc.gf.get() && sc.gf->hasAnim("sad")) {
         sc.gf->playAnim("sad", true);
         sc.gf->specialAnim = true;
     }
-    lastCombo_ = 0;
+    lastCombo_ = Count();
     const std::string& type = chart_.noteTypes[ev.noteType < chart_.noteTypes.size() ? ev.noteType : 0];
     if (noteCallbacksFor(ev.noteType))
         scripts_->call("noteMiss", {Value(double(ev.id)), Value(double(ev.lane)), Value(type),
@@ -2036,10 +2036,10 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     // icon scripts swap to the losing face under 20.
     if (path == "healthBar.percent" || path == "healthBar.value")
         return num(path == "healthBar.percent" ? std::clamp(session_.health / 2.0 * 100.0, 0.0, 100.0) : session_.health);
-    if (path == "songScore") return num(double(session_.score));
-    if (path == "songMisses") return num(session_.misses);
-    if (path == "songHits") return num(session_.judged());
-    if (path == "combo") return num(session_.combo);
+    if (path == "songScore") return num(session_.score.toDouble());
+    if (path == "songMisses") return num(session_.misses.toDouble());
+    if (path == "songHits") return num(session_.judged().toDouble());
+    if (path == "combo") return num(session_.combo.toDouble());
     if (path == "ratingPercent") return num(session_.accuracy());
     if (path == "ratingName") { out = ratingNameOverride_.empty() ? session_.rank() : ratingNameOverride_; return true; }
     if (path == "ratingFC") { out = ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_; return true; }
@@ -2191,9 +2191,9 @@ bool PlayState::setGameProp(std::string_view path, const Value& v) {
     const double d = scene::toNum(v);
     if (path == "health") { session_.setHealth(clampv(d, 0.0, 2.0)); return true; }
     // The score line shows what scripts set (it is drawn from these values).
-    if (path == "songScore") { session_.score = (long long)d; scoreStale_ = true; return true; }
-    if (path == "songMisses") { session_.misses = (long long)d; scoreStale_ = true; return true; }
-    if (path == "combo") { session_.combo = (long long)d; return true; }
+    if (path == "songScore") { session_.score.set(d); scoreStale_ = true; return true; }
+    if (path == "songMisses") { session_.misses = Count::fromDouble(d); scoreStale_ = true; return true; }
+    if (path == "combo") { session_.combo = Count::fromDouble(d); return true; }
     if (path == "songHits") return true;
     if (path == "ratingName") { ratingNameOverride_ = scene::toStr(v); scoreStale_ = true; return true; }
     if (path == "ratingFC") { ratingFcOverride_ = scene::toStr(v); scoreStale_ = true; return true; }

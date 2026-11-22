@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "count.hpp"
 #include "psych.hpp"
 
 namespace gh {
@@ -20,22 +21,32 @@ enum NoteFlag : uint8_t {
     kFlagHey = 8,         // "Hey!" note
     kFlagNoMissAnim = 16,
     kFlagIgnore = 32,     // passes without a miss (scripts: ignoreNote)
+    kFlagBigCount = 64,   // counts for more notes than the note holds: Chart::bigCounts[count32()]
 };
 
 // 24 bytes, as charts hold millions of them.
 struct Note {
     double time = 0;          // ms
-    double length = 0;        // ms of sustain (0 = tap)
+    float length = 0;         // ms of sustain (0 = tap): exact to 1 ms for 4.6 hours
     uint16_t lane = 0;        // 0..keys-1 (up to 1023)
     uint8_t side : 1 = 0;     // 0 = opponent, 1 = player
     uint8_t kind : 7 = kNormal;
     uint8_t flags = 0;
     uint16_t type = 0;   // index into Chart::noteTypes (0 = default)
-    uint16_t stack = 1;  // notes of the file stacked here (same lane within 1 ms): each one counts
+    // The notes of the file stacked here (same lane within 1 ms; a cell of an
+    // iutk or God's Hand count chart): each one counts. Up to 4,294,967,295
+    // in the note itself (stack, stackHi); more in Chart::bigCounts.
+    uint16_t stack = 1;
+    uint16_t stackHi = 0;
+    uint32_t count32() const { return uint32_t(stack) | uint32_t(stackHi) << 16; }
+    void setCount32(uint32_t c) {
+        stack = uint16_t(c);
+        stackHi = uint16_t(c >> 16);
+    }
 };
 static_assert(sizeof(Note) == 24);
 
-constexpr uint16_t kMaxStack = 65535;
+constexpr uint32_t kMaxStack = 0xFFFFFFFFu;  // in a note itself; more goes to Chart::bigCounts
 
 struct TempoPoint { double timeMs = 0; double bpm = 120; double beat = 0; };
 struct FocusPoint { double timeMs = 0; uint8_t side = 0; };
@@ -66,8 +77,15 @@ struct Chart {
     std::vector<FocusPoint> focus;
     std::vector<SectionInfo> sections;  // empty for V-Slice charts and built-in songs
     double lengthMs = 0;       // end of the last note
-    uint64_t playerNotes = 0, opponentNotes = 0;  // stacked notes included
-    uint64_t rawNoteCount = 0;  // notes in the file, before stacked notes were merged
+    Count playerNotes, opponentNotes;  // stacked notes included, exact at any size
+    Count rawNoteCount;  // notes in the file, before stacked notes were merged
+    // Counts too large for a note (kFlagBigCount), up to 2^256 - 1 each.
+    std::vector<Count> bigCounts;
+    Count countOf(const Note& n) const {
+        if (!(n.flags & kFlagBigCount)) return Count(n.count32() ? n.count32() : 1);
+        return n.count32() < bigCounts.size() ? bigCounts[n.count32()] : Count(1);
+    }
+    void setCount(Note& n, const Count& c);  // in the note when it fits, else in bigCounts
 
     double bpmAt(double ms) const;
     double beatAt(double ms) const;
