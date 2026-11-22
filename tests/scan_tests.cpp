@@ -692,6 +692,240 @@ void testIutkCharts() {
     fs::remove_all(base);
 }
 
+// R-Slice's .raid (issue #36), written here op by op as its files are laid
+// out: a literal run, a pattern repeated with its lanes moved, a burst and a
+// clipped group, in a deflated version-2 chunk, beside a deflated meta.
+namespace raidw {
+struct Buf {
+    std::string b;
+    void u8(uint32_t v) { b += char(v); }
+    void u32(uint32_t v) { b += iutk::le32(v); }
+    void u64(uint64_t v) {
+        u32(uint32_t(v));
+        u32(uint32_t(v >> 32));
+    }
+    void var(uint64_t v) { b += iutk::varint(v); }
+    void zig(int64_t v) { var((uint64_t(v) << 1) ^ uint64_t(v >> 63)); }
+};
+struct Ev {
+    int64_t us;
+    uint32_t lenUs;
+    int lane, side, kind, type, stack;
+};
+// op 0 (absolute) or op 1 (inside a pattern, times and lanes from its origin)
+void literal(Buf& o, const std::vector<Ev>& e, bool relative) {
+    o.u8(relative ? 1 : 0);
+    o.u32(uint32_t(e.size()));
+    if (relative) o.var(uint64_t(e[0].us));
+    else o.zig(e[0].us);
+    for (size_t k = 1; k < e.size(); ++k) o.var(uint64_t(e[k].us - e[k - 1].us));
+    for (const Ev& x : e) o.var(x.lenUs);
+    for (size_t k = 0; k < e.size(); ++k) o.zig(relative ? 0 : 0);  // pitch (+1 when absolute: -1 + 1 = 0)
+    for (const Ev& x : e) relative ? o.zig(x.lane) : o.var(uint64_t(x.lane));
+    for (const Ev& x : e) o.var(uint64_t(x.side) | uint64_t(x.kind) << 1);
+    for (const Ev& x : e) o.var(uint64_t(x.type));
+    for (const Ev& x : e) o.var(uint64_t(x.stack));
+}
+std::string deflated(const std::string& raw) {
+    mz_ulong n = mz_compressBound(mz_ulong(raw.size()));
+    std::string out(n, '\0');
+    mz_compress2(reinterpret_cast<unsigned char*>(out.data()), &n, reinterpret_cast<const unsigned char*>(raw.data()), mz_ulong(raw.size()), 6);
+    out.resize(n);
+    return out;
+}
+uint32_t crc(const std::string& s) { return uint32_t(mz_crc32(MZ_CRC32_INIT, reinterpret_cast<const unsigned char*>(s.data()), s.size())); }
+}  // namespace raidw
+
+void testRaidCharts() {
+    using namespace raidw;
+    const fs::path base = fs::temp_directory_path() / "gh_raid";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Pattern 0: two notes half a second apart, a second long.
+    Buf pat;
+    pat.u32(1);
+    literal(pat, {{0, 0, 0, 1, 0, 0, 1}, {500000, 0, 1, 1, 0, 0, 1}}, true);
+    Buf pats;
+    pats.u32(1);
+    pats.u64(1000000);
+    pats.u8(0);
+    pats.u32(uint32_t(pat.b.size()));
+    pats.b += pat.b;
+    pats.u32(crc(pats.b));
+    // The chunk: 3 notes, the pattern 3 times one lane right, a burst of 2 a
+    // quarter second apart, and a group clipped to 8.0-9.6 s (4 of 8 notes).
+    Buf ch;
+    ch.u32(4);
+    literal(ch, {{0, 0, 0, 1, 0, 0, 1}, {100000, 250000, 2, 0, 0, 0, 5}, {200000, 0, 3, 1, 1, 1, 1}}, false);
+    ch.u8(2), ch.u32(0), ch.u32(3), ch.zig(1000000), ch.zig(0), ch.zig(1);
+    ch.u8(4), ch.u32(0), ch.u32(2), ch.zig(5000000), ch.zig(0), ch.zig(0), ch.zig(250000);
+    ch.u8(3), ch.u32(1), ch.u32(0), ch.u32(4), ch.zig(8000000), ch.zig(0), ch.zig(0), ch.zig(8000000), ch.zig(9600000);
+    ch.u64(17);
+    const std::string meta =
+        "{\"raid\":1,\"title\":\"Raided\",\"keys\":4,\"speed\":2.5,\"noteTypes\":[\"\",\"Hurt Note\"],\"tempo\":[{\"timeMs\":0,\"bpm\":150,\"beat\":0}]}";
+    std::string metaPayload = meta + iutk::le32(crc(meta));
+    const std::string metaStored = deflated(metaPayload), chunkStored = deflated(ch.b);
+    const uint64_t indexOff = 128, metaOff = indexOff + 56, patOff = metaOff + metaStored.size(), chunkOff = patOff + pats.b.size();
+    Buf h;
+    h.b = "RAID";
+    h.u32(2), h.u32(0), h.u32(0), h.u32(0);
+    h.u64(17), h.u64(1), h.u64(1), h.u64(indexOff), h.u64(56);
+    h.u64(metaOff), h.u64(metaStored.size()), h.u64(metaPayload.size());
+    h.u64(patOff), h.u64(0), h.u64(pats.b.size());
+    h.u32(0), h.u32(0);
+    h.b.resize(128, '\0');
+    const uint32_t hc = crc(h.b);
+    for (int i = 0; i < 4; ++i) h.b[size_t(108 + i)] = char(hc >> (8 * i));
+    Buf idx;
+    idx.u64(0), idx.u64(0), idx.u64(9500000), idx.u64(chunkOff);
+    idx.u32(uint32_t(chunkStored.size())), idx.u32(uint32_t(ch.b.size())), idx.u32(17), idx.u32(4), idx.u32(crc(ch.b)), idx.u32(1);
+    put(base / "song.raid", h.b + idx.b + metaStored + pats.b + chunkStored);
+    Chart c;
+    SCHECK(countChartKind(str(base / "song.raid")) == CountChartKind::Raid && loadChartFile(str(base / "song.raid"), "Hard", c, err));
+    SCHECK(c.title == "Raided" && c.difficulty == "Hard" && c.keys == 4 && c.speed == 2.5 && c.bpmAt(0) == 150 && c.noteTypes.size() == 2);
+    SCHECK(c.notes.size() == 17 && c.playerNotes + c.opponentNotes == Count(21));
+    if (c.notes.size() == 17) {
+        SCHECK(c.notes[1].time == 100 && c.notes[1].side == 0 && c.notes[1].lane == 2 && c.notes[1].length == 250.0f &&
+               c.countOf(c.notes[1]) == Count(5));
+        SCHECK(c.notes[2].time == 200 && c.notes[2].kind == kMine && c.notes[2].type == 1);
+        SCHECK(c.notes[3].time == 1000 && c.notes[3].lane == 1 && c.notes[4].time == 1500 && c.notes[4].lane == 2);  // moved a lane
+        SCHECK(c.notes[9].time == 5000 && c.notes[10].time == 5250 && c.notes[10].lane == 0);  // the burst
+        SCHECK(c.notes[13].time == 8000 && c.notes[16].time == 9500);  // the group, clipped at 9.6 s
+    }
+    // A damaged chunk is refused.
+    {
+        std::string bytes = h.b + idx.b + metaStored + pats.b + chunkStored;
+        bytes[bytes.size() - 3] = char(bytes[bytes.size() - 3] ^ 0x20);
+        put(base / "bad.raid", bytes);
+        Chart bad;
+        SCHECK(!loadChartFile(str(base / "bad.raid"), "Hard", bad, err));
+    }
+    fs::remove_all(base);
+}
+
+// God's Hand's own count chart (.ghn, issue #36).
+void testGhnCharts() {
+    const fs::path base = fs::temp_directory_path() / "gh_ghn";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Everything a chart holds, through a file and back.
+    Chart c;
+    c.title = "Counted \"song\"";
+    c.difficulty = "Insane";
+    c.opponent = "dad";
+    c.player = "bf";
+    c.gf = "gf";
+    c.stage = "stage";
+    c.keys = 1024;
+    c.sideKeys[0] = 7;
+    c.speed = 3.25;
+    c.noteTypes = {"", "Hurt Note", "Alt Animation"};
+    c.tempo = {{0, 128, 0}, {8000, 200, 0}};
+    c.sections = {{0, true, false, false, 4, 128}, {1875, false, true, true, 4, 0}};
+    c.focus = {{0, 1}, {1875, 0}};
+    c.events = {{500, "Hey!", "BF", "0.6"}, {9000, "Change Scroll Speed", "1.5", ""}};
+    Count huge;
+    huge.w[3] = uint64_t(1) << 8;  // 2^200
+    auto add = [&](double t, int lane, int side, float len, int kind, int type, uint8_t flags, const Count& k) {
+        Note n;
+        n.time = t;
+        n.lane = uint16_t(lane);
+        n.side = uint8_t(side);
+        n.length = len;
+        n.kind = uint8_t(kind);
+        n.type = uint16_t(type);
+        n.flags = flags;
+        c.notes.push_back(n);
+        c.setCount(c.notes.back(), k);
+    };
+    add(0.000001, 0, 1, 0, kNormal, 0, 0, Count(1));  // a nanosecond in
+    add(250.5, 1023, 1, 1234.75f, kNormal, 2, kFlagAlt, Count(3));
+    add(250.5, 6, 0, 0, kMine, 1, 0, Count(1));
+    add(9999.999999, 3, 1, 0, kNormal, 0, 0, huge);
+    add(12000, 2, 0, 500, kNormal, 0, kFlagGF, Count(5000000000ull));
+    c.finalize(128);
+    GhnStats st;
+    SCHECK(writeGhn(str(base / "song.ghn"), c, err, &st) && st.notes == 5 && st.total == c.playerNotes + c.opponentNotes);
+    Chart r;
+    SCHECK(countChartKind(str(base / "song.ghn")) == CountChartKind::Ghn && loadChartFile(str(base / "song.ghn"), "Insane", r, err));
+    SCHECK(r.title == c.title && r.opponent == "dad" && r.player == "bf" && r.gf == "gf" && r.stage == "stage" && r.keys == 1024 &&
+           r.sideKeys[0] == 7 && r.speed == 3.25);
+    SCHECK(r.noteTypes == c.noteTypes && r.tempo.size() == 2 && r.bpmAt(9000) == 200 && r.sections.size() == 2 && !r.sections[1].mustHit &&
+           r.sections[1].gf && r.focus.size() == 2 && r.events.size() == 2 && r.events[0].name == "Hey!" && r.events[1].v1 == "1.5");
+    SCHECK(r.notes.size() == c.notes.size() && r.playerNotes == c.playerNotes && r.opponentNotes == c.opponentNotes);
+    for (size_t i = 0; i < std::min(r.notes.size(), c.notes.size()); ++i) {
+        const Note& a = c.notes[i];
+        const Note& b = r.notes[i];
+        SCHECK(std::fabs(a.time - b.time) < 1e-9 && a.lane == b.lane && a.side == b.side && a.length == b.length && a.kind == b.kind &&
+               a.type == b.type && (a.flags & ~kFlagBigCount) == (b.flags & ~kFlagBigCount) && c.countOf(a) == r.countOf(b));
+    }
+    SCHECK(r.playerNotes == huge + Count(4) && r.playerNotes.str() == "1606938044258990275541962092341162602522202993782792835301380");
+    // Damage is found: a block's checksum, a total that does not add up.
+    {
+        std::ifstream in(base / "song.ghn", std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string b1 = bytes;
+        b1[b1.size() - 2] = char(b1[b1.size() - 2] ^ 0x10);
+        put(base / "bad1.ghn", b1);
+        Chart bad;
+        SCHECK(!loadChartFile(str(base / "bad1.ghn"), "Insane", bad, err));
+    }
+    // A spam chart repeats itself: stored once and repeated, it is a small file.
+    Chart spam;
+    spam.keys = 4;
+    const int lanes[7] = {0, 1, 2, 3, 2, 1, 0};
+    for (int i = 0; i < 7 * 140000; ++i) {
+        Note n;
+        n.time = 1000.0 + i * 1.5;  // 1.5 ms apart
+        n.lane = uint16_t(lanes[i % 7]);
+        n.side = 1;
+        spam.notes.push_back(n);
+    }
+    spam.finalize(150);
+    SCHECK(writeGhn(str(base / "spam.ghn"), spam, err, &st) && st.repeats >= 1 && st.blocks <= 2 && st.bytes < 300000);
+    Chart sr;
+    SCHECK(loadChartFile(str(base / "spam.ghn"), "Normal", sr, err) && sr.notes.size() == spam.notes.size() && sr.playerNotes == spam.playerNotes);
+    bool same = sr.notes.size() == spam.notes.size();
+    for (size_t i = 0; same && i < sr.notes.size(); i += 997) same = std::fabs(sr.notes[i].time - spam.notes[i].time) < 1e-6 && sr.notes[i].lane == spam.notes[i].lane;
+    SCHECK(same);
+    // A trillion notes a nanosecond apart, as one repeat: they load as a note
+    // a millisecond (each counting a million), every one of them counted.
+    {
+        auto le32 = iutk::le32;
+        std::string block{char(0), char(1), char(0), char(0), char(0), char(0)};  // one note: lane 0, the player's, count 1
+        const std::string meta = "{\"ghn\":1,\"title\":\"Trillion\",\"keys\":4,\"playerNotes\":\"1000000000001\",\"opponentNotes\":\"0\",\"rawNotes\":\"1000000000001\"}";
+        std::string dir;
+        dir += char(0);
+        dir += iutk::varint(1) + iutk::varint(block.size()) + iutk::varint(0) + le32(raidw::crc(block)) + iutk::varint(0) + iutk::varint(0);
+        dir += char(1);
+        dir += iutk::varint(0) + iutk::varint(1000000000000ull) + iutk::varint(2) + iutk::varint(0);  // shift 1 ns (zigzag 2), start 0
+        std::string head = "GHN1" + le32(1) + le32(0) + le32(2);
+        const uint64_t metaOff = 64, dirOff = metaOff + meta.size(), dataOff = dirOff + dir.size();
+        head += le32(uint32_t(metaOff)) + le32(0) + le32(0) + le32(uint32_t(meta.size())) + le32(raidw::crc(meta));
+        head += le32(uint32_t(dirOff)) + le32(0) + le32(uint32_t(dir.size())) + le32(raidw::crc(dir));
+        head += le32(uint32_t(dataOff)) + le32(0);
+        head += le32(raidw::crc(head));
+        put(base / "trillion.ghn", head + meta + dir + block);
+        Chart t;
+        SCHECK(loadChartFile(str(base / "trillion.ghn"), "Normal", t, err));
+        SCHECK(t.notes.size() == 1000000 && t.playerNotes == Count(1000000000001ull) && t.rawNoteCount == Count(1000000000001ull));
+        SCHECK(t.notes.size() == 1000000 && t.countOf(t.notes[1]) == Count(1000000) && t.notes.back().time == 999999);
+        // A total that does not match what the notes add up to is refused.
+        std::string wrong = meta;
+        wrong.replace(wrong.find("1000000000001"), 13, "1000000000002");
+        std::string head2 = head.substr(0, 60);
+        const std::string c2 = le32(raidw::crc(wrong));
+        head2.replace(32, 4, c2);
+        head2 += le32(raidw::crc(head2));
+        put(base / "wrong.ghn", head2 + wrong + dir + block);
+        Chart w;
+        SCHECK(!loadChartFile(str(base / "wrong.ghn"), "Normal", w, err) && err.find("add up") != std::string::npos);
+    }
+    fs::remove_all(base);
+}
+
 // Freeplay's icons (issue #36): the chart's "player2", that character's
 // "healthicon", then images/icons/icon-<icon>.png or <icon>.png, in the
 // song's own folders first and the shared ones after.
@@ -726,6 +960,8 @@ void runScanTests() {
     testPulseForgeCharts();
     testSongIcons();
     testIutkCharts();
+    testRaidCharts();
+    testGhnCharts();
     testAudioSeconds();
     testModLayouts();
 }

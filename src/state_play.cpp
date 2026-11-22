@@ -1909,13 +1909,17 @@ void PlayState::drawUnderNotes() {
                 std::string digits = p.combo.str();
                 while (digits.size() < 3) digits.insert(digits.begin(), '0');
                 const float da = tau < 2.0f * p.beat ? 1.0f : std::max(0.0f, 1.0f - (tau - 2.0f * p.beat) / 0.2f);
+                // A combo too long for the screen (count charts reach 78 digits)
+                // shrinks to fit from where Psych starts it to the right edge.
+                const float room = gfx::W - 20.0f - (gfx::W * 0.35f - 90.0f + off[2]);
+                const float fit = std::clamp(room / (43.0f * float(digits.size())), 0.05f, 1.0f);
                 for (size_t i = 0; i < digits.size(); ++i) {
                     const int d = digits[i] - '0';
                     const float ay = irange(200, 300), vy = -irange(140, 160), vx = rnd() * 10.0f - 5.0f;
                     const Vector2 ns = ui.numSize(d);
                     if (ns.x <= 0 || da <= 0.002f) continue;
-                    const float nk = std::floor(ns.x * 0.5f) / ns.x;
-                    const float x = gfx::W * 0.35f + 43.0f * float(i) - 90.0f + off[2] + vx * tau;
+                    const float nk = std::floor(ns.x * 0.5f) / ns.x * fit;
+                    const float x = gfx::W * 0.35f + 43.0f * fit * float(i) - 90.0f + off[2] + vx * tau;
                     const float y = (gfx::H - ns.y) * 0.5f + 80.0f - off[3] + vy * tau + 0.5f * ay * tau * tau;
                     ui.numAt(d, x, y, nk, da * comboAlpha);
                 }
@@ -1932,8 +1936,12 @@ void PlayState::drawUnderNotes() {
                 const float al = (age < 0.4f ? 1.0f : 1.0f - (age - 0.4f) / 0.3f) * comboAlpha;
                 const float y = py - age * 26.0f;
                 gfx::text(FontId::Title, p.text, px, y, 46 * pop, fade(p.c, al), Align::Center, 2.5f);
-                if (p.combo >= Count(3) && p.text != "MISS")
-                    gfx::text(FontId::Ui, "x" + p.combo.str(), px, y + 52, 34 * pop, fade(WHITE, al), Align::Center, 2.0f);
+                if (p.combo >= Count(3) && p.text != "MISS") {
+                    const std::string combo = "x" + p.combo.str();
+                    const float w = gfx::measure(FontId::Ui, combo, 34 * pop).x;
+                    const float size = 34 * pop * std::min(1.0f, (gfx::W - 40.0f) / std::max(1.0f, w));  // the longest fit
+                    gfx::text(FontId::Ui, combo, px, y + 52, size, fade(WHITE, al), Align::Center, 2.0f);
+                }
                 if (!p.timing.empty()) gfx::text(FontId::Ui, p.timing, px, y - 26, 22, fade(kIvory, al * 0.9f), Align::Center, 1.5f);
             }
         }

@@ -4,6 +4,7 @@
 #include "app.hpp"
 #include "app_icon.hpp"
 #include "check_scripts.hpp"
+#include "count_charts.hpp"
 #include "performance.hpp"
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
@@ -246,6 +247,10 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--list-songs")) listSongs = true;
         else if (!std::strcmp(a, "--check-charts")) checkCharts = true;
         else if (!std::strcmp(a, "--check-scripts")) checkScriptsDir = next();
+        else if (!std::strcmp(a, "--convert")) {
+            convertIn = next();
+            convertOut = next();
+        }
         else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
@@ -254,6 +259,7 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--size")) std::sscanf(next(), "%dx%d", &winW_, &winH_);  // e.g. 2400x1080
     }
     if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
+    if (!convertIn.empty()) return convertChartFile(convertIn, convertOut);  // --convert <chart> <out>
     if (listSongs) {
         // Prints what the song library finds (no window): --list-songs [--base dir]
         // [--check-charts: load every chart and print its keys and notes, or why it fails]

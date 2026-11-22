@@ -98,6 +98,7 @@ public:
     bool listSongs = false;
     bool checkCharts = false;  // --check-charts with --list-songs
     std::string checkScriptsDir;  // --check-scripts <folder>
+    std::string convertIn, convertOut;  // --convert <chart> <out.ghn|.ghc|.bin>
     std::string makeIconDir;      // --make-icon <folder>: the icon's pictures (tools/make_icons.py)
     bool autoChartCli = false;    // --autochart: the --autoplay song played with an AutoChart
     double frameBudget() const;   // seconds a frame may take (frame limit or the screen's refresh)

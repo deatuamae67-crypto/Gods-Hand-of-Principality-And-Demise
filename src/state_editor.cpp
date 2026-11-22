@@ -22,6 +22,7 @@
 #include "audio_decode.hpp"
 #include "chart_binary.hpp"
 #include "chart_stream.hpp"
+#include "count_charts.hpp"
 #include "flp_import.hpp"
 #include "common.hpp"
 #include "editor_ui.hpp"
@@ -49,8 +50,12 @@ const char* kBaseNoteTypes[] = {"", "Alt Animation", "Hurt Note", "GF Sing", "No
 const int kSnaps[] = {4, 8, 12, 16, 24, 32, 48, 64, 96, 192};
 const std::string kNoType;
 
-// Song tab, "Save as": what a save writes (issue #22).
-enum SaveFormat { kSaveJson = 0, kSaveGhc = 1, kSaveBoth = 2 };
+// Song tab, "Save as": what a save writes (issue #22); a count chart (.ghn,
+// issue #36) holds each stack as one note with its count.
+enum SaveFormat { kSaveJson = 0, kSaveGhc = 1, kSaveBoth = 2, kSaveGhn = 3 };
+// A JSON chart (and a .ghc) lists a stack's notes one by one: past this many
+// notes, the chart is saved as a count chart instead.
+constexpr uint64_t kMaxListedNotes = uint64_t(1) << 31;
 
 // Built-in events (Psych Engine and JS Engine), with what their values do.
 struct EventInfo {
@@ -413,6 +418,7 @@ private:
         std::vector<uint16_t> ids(c.noteTypes.size());
         for (size_t i = 0; i < ids.size(); ++i) ids[i] = typeId(c.noteTypes[i]);
         const uint16_t hurt = typeId("Hurt Note");
+        countsCut_ = 0;
         for (const Note& n : c.notes) {
             EdNote e;
             e.t = n.time;
@@ -420,7 +426,10 @@ private:
             e.len = n.length;
             e.type = n.type < ids.size() ? ids[n.type] : 0;
             if (e.type == 0 && n.kind == kMine) e.type = hurt;
-            e.stack = uint32_t(std::max<int>(1, n.stack));
+            // A stack of the editor holds up to 4,294,967,295 notes.
+            const Count k = c.countOf(n);
+            if (!k.fits64() || k.w[0] > UINT32_MAX) ++countsCut_;
+            e.stack = uint32_t(std::min<uint64_t>(std::max<uint64_t>(1, k.sat64()), UINT32_MAX));
             notes_.push_back(e);
         }
         sortNotes();
@@ -439,6 +448,8 @@ private:
         // keeps both.
         saveFormat_ = kSaveJson;
         for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
+            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kCountChartExt)) saveFormat_ = kSaveGhn;
+        for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
             if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kBinaryChartExt)) {
                 std::error_code ec;
                 const std::string& g = entry_->chartPaths[i];
@@ -450,6 +461,8 @@ private:
         a.mixer.setTracks(inst_, voiceP_, voiceO_);
         a.mixer.setRate(1.0);
         if (entry_->builtin) flash("Built-in song: saving makes an editable copy in songs/");
+        if (countsCut_)
+            flash(fmtThousands((long long)countsCut_) + " notes count past 4,294,967,295 notes: the editor keeps that many (play the file for all)");
         else if (entry_->autoChart) flash("AutoChart draft: save to keep it as a real chart");
     }
 
@@ -1245,13 +1258,13 @@ private:
                     // As num() writes them (6 decimals), so both files hold the same chart.
                     const double t6 = std::round(n.t * 1e6) / 1e6, l6 = std::round(n.len * 1e6) / 1e6;
                     const std::string& type = n.type ? typeNames_[n.type] : kNoType;
-                    for (uint32_t k = 0; k < std::max<uint32_t>(1, n.stack); ++k) bin->add(t6, data, l6, type);
+                    for (uint32_t k = 0; k < (onceStacks_ ? 1 : std::max<uint32_t>(1, n.stack)); ++k) bin->add(t6, data, l6, type);
                     continue;
                 }
                 std::string one = "[" + num(n.t) + ", " + std::to_string(data) + ", " + num(n.len);
                 if (n.type) one += ", " + jsonStr(typeNames_[n.type]);
                 one += "]";
-                for (uint32_t k = 0; k < std::max<uint32_t>(1, n.stack); ++k) {  // stacked notes stay stacked
+                for (uint32_t k = 0; k < (onceStacks_ ? 1 : std::max<uint32_t>(1, n.stack)); ++k) {  // stacked notes stay stacked
                     o += std::string(first ? "" : ", ") + one;
                     first = false;
                 }
@@ -1318,6 +1331,34 @@ private:
         return bool(out);
     }
 
+    // The chart as the game reads it with each stack as one note counting for
+    // all of its notes (notes of a lane within 1 ms are one, as the game
+    // merges them): what a count chart (.ghn) holds.
+    bool chartForCount(Chart& out, std::string& err) {
+        StreamedNotes sn;
+        StreamedNotesBuilder bin(sn);
+        onceStacks_ = true;
+        const std::string skeleton = buildJson(eventsInChart(), &bin);
+        onceStacks_ = false;
+        if (!parseChartStreamed(skeleton, sn, diff_, out, err, true)) return false;
+        std::vector<std::vector<const EdNote*>> byCol(size_t(2 * keys_));
+        for (const EdNote& n : notes_)
+            if (n.col < byCol.size()) byCol[n.col].push_back(&n);
+        std::vector<size_t> at(byCol.size(), 0);
+        for (Note& n : out.notes) {
+            const size_t col = size_t(n.side ? keys_ + n.lane : n.lane);
+            if (col >= byCol.size()) continue;
+            const std::vector<const EdNote*>& v = byCol[col];
+            size_t& i = at[col];
+            while (i < v.size() && v[i]->t < n.time - 1.0) ++i;
+            Count k;
+            for (; i < v.size() && std::fabs(v[i]->t - n.time) < 1.0; ++i) k += Count(std::max<uint32_t>(1, v[i]->stack));
+            if (!k.isZero()) out.setCount(n, k);
+        }
+        out.finalize(out.tempo.empty() ? 120 : out.tempo.front().bpm);  // the totals again
+        return true;
+    }
+
     bool save(bool playtest) {
         App& a = app();
         const std::string path = savePath();  // the JSON's place (the .ghc goes beside it)
@@ -1326,8 +1367,20 @@ private:
         fs::create_directories(p.parent_path(), ec);
         const std::string ghcPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kBinaryChartExt;
         const fs::path gp = toPath(ghcPath);
-        const bool wantJson = saveFormat_ != kSaveGhc, wantGhc = saveFormat_ != kSaveJson;
-        const bool hadJson = fs::exists(p, ec), hadGhc = fs::exists(gp, ec);
+        // The count chart: the one it was read from, or beside the JSON.
+        std::string ghnPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kCountChartExt;
+        for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
+            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kCountChartExt)) ghnPath = entry_->chartPaths[i];
+        const fs::path np = toPath(ghnPath);
+        const bool wantGhn = saveFormat_ == kSaveGhn;
+        const bool wantJson = !wantGhn && saveFormat_ != kSaveGhc, wantGhc = !wantGhn && saveFormat_ != kSaveJson;
+        const bool hadJson = fs::exists(p, ec), hadGhc = fs::exists(gp, ec), hadGhn = fs::exists(np, ec);
+        uint64_t listed = 0;
+        for (const EdNote& n : notes_) listed += std::max<uint32_t>(1, n.stack);
+        if ((wantJson || wantGhc) && listed > kMaxListedNotes) {
+            flash("A JSON chart lists its " + fmtThousands((long long)listed) + " notes one by one: Save as Count .ghn (Song tab)");
+            return false;
+        }
         // Each file as it was is kept once, as .bak.
         auto backUp = [&](const fs::path& f, bool& done) {
             if (done || !fs::exists(f, ec)) return;
@@ -1357,7 +1410,18 @@ private:
         // The binary chart, straight from the notes: what reading the JSON
         // would give, without writing the JSON first.
         std::string note;
-        bool wroteGhc = false;
+        bool wroteGhc = false, wroteGhn = false;
+        GhnStats ghn;
+        if (wantGhn) {
+            backUp(np, backedUpGhn_);
+            Chart c;
+            std::string err;
+            wroteGhn = chartForCount(c, err) && writeGhn(ghnPath, c, err, &ghn);
+            if (!wroteGhn) {
+                flash("Could not save the .ghn: " + err);
+                return false;
+            }
+        }
         if (wantGhc) {
             backUp(gp, backedUpGhc_);
             StreamedNotes sn;
@@ -1371,7 +1435,7 @@ private:
             }
             if (!wroteGhc) note = "; the .ghc failed: " + err;
             else if (!wantJson && hadJson) note = "; the .json beside it was left as it was";
-        } else if (hadGhc) {
+        } else if (hadGhc && !wantGhn) {
             // Saved as Psych JSON only: the old .ghc would still be what the
             // game plays, so it steps aside (as .ghc.bak, unless the original
             // is already kept there; the JSON just written holds the chart).
@@ -1391,16 +1455,21 @@ private:
         dirty_ = false;
         long long total = 0;
         for (const EdNote& n : notes_) total += n.stack;
-        const bool hasGhc = fs::exists(gp, ec), hasJson = fs::exists(p, ec);
+        const bool hasGhc = fs::exists(gp, ec), hasJson = fs::exists(p, ec), hasGhn = fs::exists(np, ec);
         const std::string stem = pathStr(p.stem());
-        const std::string wrote = wantJson && wroteGhc ? stem + ".json and .ghc" : wroteGhc ? stem + kBinaryChartExt : pathStr(p.filename());
-        flash("Saved " + wrote + " (" + fmtThousands(total) + " notes, " + std::to_string(events_.size()) + " events)" + note);
+        const std::string wrote = wroteGhn                ? pathStr(np.filename())
+                                  : wantJson && wroteGhc ? stem + ".json and .ghc"
+                                  : wroteGhc             ? stem + kBinaryChartExt
+                                                         : pathStr(p.filename());
+        flash("Saved " + wrote + " (" + (wroteGhn ? ghn.total.grouped() : fmtThousands(total)) + " notes, " +
+              std::to_string(events_.size()) + " events)" + note);
         // New files, or a .ghc gone: rescan so Freeplay (and the playtest)
         // see the chart the game will now play.
         std::string id = songId_;
-        if (entry_->builtin || entry_->autoChart || hasGhc != hadGhc || hasJson != hadJson) {
+        if (entry_->builtin || entry_->autoChart || hasGhc != hadGhc || hasJson != hadJson || hasGhn != hadGhn) {
             auto ours = [&](const std::string& cp) {
-                return !cp.empty() && (fs::equivalent(toPath(cp), p, ec) || fs::equivalent(toPath(cp), gp, ec));
+                return !cp.empty() &&
+                       (fs::equivalent(toPath(cp), p, ec) || fs::equivalent(toPath(cp), gp, ec) || fs::equivalent(toPath(cp), np, ec));
             };
             a.library.scan(a.base);
             for (const SongEntry& s : a.library.songs())
@@ -1933,7 +2002,7 @@ private:
                 if (ui_.stepper(row(), "Keys", k, 1, 1, kMaxKeys, "%.0f")) setKeys(int(k));  // 1 to 1024 a side
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
-                ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both"}, saveFormat_);
+                ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both", "Count .ghn"}, saveFormat_);
                 y += 6;
                 if (ui_.button(half(0), "Save (F2)")) save(false);
                 if (ui_.button(half(1), "Save and play")) {
@@ -2225,7 +2294,7 @@ private:
             e.col = n.side ? keys_ + n.lane : n.lane;
             e.len = n.length;
             if (n.side == 1 && (n.flags & kFlagAlt)) e.type = typeId("Alt Animation");
-            e.stack = std::max<int>(1, n.stack);
+            e.stack = uint32_t(std::min<uint64_t>(std::max<uint64_t>(1, c.countOf(n).sat64()), UINT32_MAX));
             notes_.push_back(e);
         }
         sortNotes();
@@ -2361,8 +2430,10 @@ private:
     unsigned editGen_ = 0, fullGen_ = 0;  // chart changes made / shown in the preview
     double editAt_ = -10, fullMs_ = 0, buildMs_ = 0;
     std::string fullError_;
-    int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, or both (as the chart was found)
-    bool backedUpGhc_ = false;
+    int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, both (as the chart was found), or a count .ghn
+    bool backedUpGhc_ = false, backedUpGhn_ = false;
+    bool onceStacks_ = false;  // buildJson writes each stack's note once (for a count chart)
+    size_t countsCut_ = 0;     // notes read counting past 4,294,967,295, kept as that many
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)
     bool ezMode_ = false;

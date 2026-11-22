@@ -170,8 +170,11 @@ bool chartContent(const fs::path& f) {
     return found;
 }
 
-// A count chart's name: the iutk engine's .bin (FNC1) - read for what it holds.
-bool countChartName(const std::string& lowerName) { return endsWithI(lowerName, ".bin"); }
+// A count chart's name: God's Hand's .ghn, R-Slice's .raid, the iutk
+// engine's .bin (FNC1) - each read for what it holds.
+bool countChartName(const std::string& lowerName) {
+    return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, ".raid") || endsWithI(lowerName, ".bin");
+}
 
 // A chart: Psych JSON, a binary .ghc (which may be the only one there: a
 // chart of a billion notes kept without its JSON) or a count chart.
@@ -480,15 +483,19 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
         if (endsWithI(n, "-chart.json")) vsliceChart = f;
         charts.push_back(f);
     }
-    // The same chart as .ghc and as .json: the binary one (it loads faster).
-    std::vector<std::string> binaryStems;
-    for (const fs::path& c : charts)
+    // The same chart as .ghc and as .json: the binary one (it loads faster);
+    // as .ghn too: the count chart (the editor saves its stacks there whole).
+    std::vector<std::string> binaryStems, countStems;
+    for (const fs::path& c : charts) {
         if (endsWithI(pathStr(c.filename()), kBinaryChartExt)) binaryStems.push_back(toLower(pathStr(c.stem())));
+        if (endsWithI(pathStr(c.filename()), kCountChartExt)) countStems.push_back(toLower(pathStr(c.stem())));
+    }
+    auto has = [](const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); };
     charts.erase(std::remove_if(charts.begin(), charts.end(),
                                 [&](const fs::path& c) {
-                                    return endsWithI(pathStr(c.filename()), ".json") &&
-                                           std::find(binaryStems.begin(), binaryStems.end(), toLower(pathStr(c.stem()))) !=
-                                               binaryStems.end();
+                                    const std::string n = pathStr(c.filename()), stem = toLower(pathStr(c.stem()));
+                                    if (endsWithI(n, ".json")) return has(binaryStems, stem) || has(countStems, stem);
+                                    return endsWithI(n, kBinaryChartExt) && has(countStems, stem);
                                 }),
                  charts.end());
     SongEntry e;
