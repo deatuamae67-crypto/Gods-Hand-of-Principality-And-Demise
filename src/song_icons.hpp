@@ -35,8 +35,9 @@ private:
         int frames = 1;
         std::future<Image> job;
     };
+    void finish(Slot& s);
     std::unordered_map<std::string, Slot> slots_;
-    int busy_ = 0;
+    std::vector<std::string> pending_;  // the songs whose lookups run (a few at a time)
 };
 
 // Draws frame 0 of a Psych icon in a size x size square centred on c.

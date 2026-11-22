@@ -923,6 +923,54 @@ void testGhnCharts() {
         Chart w;
         SCHECK(!loadChartFile(str(base / "wrong.ghn"), "Normal", w, err) && err.find("add up") != std::string::npos);
     }
+    // Blocks A A A B B: a repeat that grows, then a new block and its repeat
+    // (the directory and the blocks' first notes stay in step).
+    {
+        Chart ab;
+        ab.title = "ab";
+        const size_t kB = 65536;
+        for (size_t b = 0; b < 5; ++b)
+            for (size_t i = 0; i < kB; ++i) {
+                Note n;
+                n.time = double(b) * 100000.0 + double(i) * (b < 3 ? 1.0 : 1.5);
+                n.lane = uint16_t(b < 3 ? 0 : 1);
+                n.side = 1;
+                ab.notes.push_back(n);
+            }
+        ab.finalize(120);
+        GhnStats st2;
+        SCHECK(writeGhn(str(base / "ab.ghn"), ab, err, &st2) && st2.blocks == 2 && st2.repeats == 2);
+        Chart back;
+        SCHECK(loadChartFile(str(base / "ab.ghn"), "Normal", back, err) && back.notes.size() == ab.notes.size());
+        bool same = back.notes.size() == ab.notes.size();
+        for (size_t i = 0; same && i < ab.notes.size(); ++i)
+            same = std::fabs(back.notes[i].time - ab.notes[i].time) < 1e-6 && back.notes[i].lane == ab.notes[i].lane;
+        SCHECK(same);
+        // Saved again over itself (Windows does not rename over a file).
+        SCHECK(writeGhn(str(base / "ab.ghn"), ab, err) && !fs::exists(base / "ab.ghn.part"));
+    }
+    // Extra keys off: a 7-key count chart plays with 4 keys, as its JSON would.
+    {
+        Chart k7;
+        k7.keys = 7;
+        auto add7 = [&](double t, int lane, const Count& k) {
+            Note n;
+            n.time = t;
+            n.lane = uint16_t(lane);
+            n.side = 1;
+            k7.notes.push_back(n);
+            k7.setCount(k7.notes.back(), k);
+        };
+        add7(0, 0, Count(2));
+        add7(0, 4, Count(3));  // lane 4 -> 0: one stack of 5
+        add7(100, 6, Count(1));
+        k7.finalize(120);
+        SCHECK(writeGhn(str(base / "k7.ghn"), k7, err));
+        Chart on, off;
+        SCHECK(loadChartFile(str(base / "k7.ghn"), "Normal", on, err, {}, 0, true) && on.keys == 7 && on.notes.size() == 3);
+        SCHECK(loadChartFile(str(base / "k7.ghn"), "Normal", off, err, {}, 0, false) && off.keys == 4 && off.notes.size() == 2 &&
+               off.countOf(off.notes[0]) == Count(5) && off.notes[1].lane == 2 && off.playerNotes == Count(6));
+    }
     fs::remove_all(base);
 }
 

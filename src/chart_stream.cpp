@@ -1259,9 +1259,17 @@ bool loadChartFile(const std::string& path, const std::string& difficulty, Chart
         if (!readBinaryChart(path, skeleton, sn, err)) return false;
         return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
     }
-    if (isCountChart(path)) {  // a chart of counts: the iutk engine's
+    if (isCountChart(path)) {  // a chart of counts: the iutk engine's, R-Slice's, God's Hand's
         if (!loadCountChart(path, out, err)) return false;
         out.difficulty = difficulty;
+        if (!extraKeys && out.keys != 4) {
+            // Extra keys off: 4 keys, as a JSON chart gets (lane = value % 4);
+            // notes that land together count as one stack of all of them.
+            for (Note& n : out.notes) n.lane = uint16_t(n.lane % 4);
+            out.keys = 4;
+            out.sideKeys[0] = out.sideKeys[1] = 0;
+            out.finalize(out.tempo.empty() ? 120 : out.tempo.front().bpm);
+        }
         return true;
     }
     const uint64_t size = fileSize(path);

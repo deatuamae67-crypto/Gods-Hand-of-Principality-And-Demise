@@ -12,12 +12,36 @@
 
 namespace gh {
 
+// A finished lookup's picture, uploaded.
+void SongIcons::finish(Slot& s) {
+    Image img = s.job.get();
+    s.done = true;
+    if (img.data) {
+        s.tex = LoadTextureFromImage(img);
+        SetTextureFilter(s.tex, TEXTURE_FILTER_BILINEAR);
+        s.frames = std::max(1, int(std::lround(double(img.width) / std::max(1, img.height))));
+        UnloadImage(img);
+    }
+}
+
 const Texture2D* SongIcons::get(const SongEntry& e, int* frames) {
     if (e.builtin || e.autoChart) return nullptr;
+    // The lookups that are done, whichever songs they were for (those songs
+    // may have scrolled or been filtered away): they make room for new ones.
+    for (size_t i = 0; i < pending_.size();) {
+        Slot& p = slots_[pending_[i]];
+        if (p.job.valid() && p.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            finish(p);
+            pending_[i] = pending_.back();
+            pending_.pop_back();
+        } else {
+            ++i;
+        }
+    }
     Slot& s = slots_[e.id];
     if (!s.done && !s.job.valid()) {
-        if (busy_ >= 3) return nullptr;  // a few at a time: the list scrolls on
-        ++busy_;
+        if (pending_.size() >= 3) return nullptr;  // a few at a time: the list scrolls on
+        pending_.push_back(e.id);
         const SongEntry copy = e;
         const std::vector<std::string> shared = app().library.sharedAssetRootsFor(e);
         s.job = std::async(std::launch::async, [copy, shared] {
@@ -28,17 +52,6 @@ const Texture2D* SongIcons::get(const SongEntry& e, int* frames) {
                 img = LoadImageFromMemory(".png", reinterpret_cast<const unsigned char*>(bytes.data()), int(bytes.size()));
             return img;
         });
-    }
-    if (!s.done && s.job.valid() && s.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        Image img = s.job.get();
-        --busy_;
-        s.done = true;
-        if (img.data) {
-            s.tex = LoadTextureFromImage(img);
-            SetTextureFilter(s.tex, TEXTURE_FILTER_BILINEAR);
-            s.frames = std::max(1, int(std::lround(double(img.width) / std::max(1, img.height))));
-            UnloadImage(img);
-        }
     }
     if (!s.done || !s.tex.id) return nullptr;
     if (frames) *frames = s.frames;
@@ -54,7 +67,7 @@ void SongIcons::clear() {
         if (s.tex.id && IsWindowReady()) UnloadTexture(s.tex);
     }
     slots_.clear();
-    busy_ = 0;
+    pending_.clear();
 }
 
 void drawSongIcon(const Texture2D& tex, int frames, Vector2 c, float size, float alpha) {

@@ -1074,8 +1074,7 @@ bool writeGhn(const std::string& path, const Chart& chart, std::string& err, Ghn
                 ((prev.e.copies == 1 && toNs(chart.notes[from].time) - prev.e.start != 0) ||
                  (prev.e.copies > 1 && toNs(chart.notes[from].time) == prev.e.start + int64_t(prev.e.copies) * prev.e.shift))) {
                 if (prev.e.copies == 1) prev.e.shift = toNs(chart.notes[from].time) - prev.e.start;
-                ++prev.e.copies;
-                literalStart.push_back(SIZE_MAX);
+                ++prev.e.copies;  // no new entry: literalStart stays one a directory entry
                 continue;
             }
             Out rep;
@@ -1152,7 +1151,15 @@ bool writeGhn(const std::string& path, const Chart& chart, std::string& err, Ghn
     ok = std::fclose(f) == 0 && ok;
     std::error_code ec;
     auto u8 = [](const std::string& s) { return std::filesystem::path(std::u8string(s.begin(), s.end())); };
-    if (ok) std::filesystem::rename(u8(tmp), u8(path), ec);
+    if (ok) {
+        std::filesystem::rename(u8(tmp), u8(path), ec);
+        if (ec) {  // Windows does not rename over a file: the old chart goes first
+            std::error_code rm;
+            std::filesystem::remove(u8(path), rm);
+            ec.clear();
+            std::filesystem::rename(u8(tmp), u8(path), ec);
+        }
+    }
     if (!ok || ec) {
         std::filesystem::remove(u8(tmp), ec);
         err = "cannot write " + path;

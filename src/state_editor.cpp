@@ -1334,11 +1334,11 @@ private:
     // The chart as the game reads it with each stack as one note counting for
     // all of its notes (notes of a lane within 1 ms are one, as the game
     // merges them): what a count chart (.ghn) holds.
-    bool chartForCount(Chart& out, std::string& err) {
+    bool chartForCount(Chart& out, std::string& err, bool withEvents) {
         StreamedNotes sn;
         StreamedNotesBuilder bin(sn);
         onceStacks_ = true;
-        const std::string skeleton = buildJson(eventsInChart(), &bin);
+        const std::string skeleton = buildJson(withEvents, &bin);
         onceStacks_ = false;
         if (!parseChartStreamed(skeleton, sn, diff_, out, err, true)) return false;
         std::vector<std::vector<const EdNote*>> byCol(size_t(2 * keys_));
@@ -1416,7 +1416,7 @@ private:
             backUp(np, backedUpGhn_);
             Chart c;
             std::string err;
-            wroteGhn = chartForCount(c, err) && writeGhn(ghnPath, c, err, &ghn);
+            wroteGhn = chartForCount(c, err, eventsInChart()) && writeGhn(ghnPath, c, err, &ghn);
             if (!wroteGhn) {
                 flash("Could not save the .ghn: " + err);
                 return false;
@@ -1446,6 +1446,17 @@ private:
             note = fs::exists(gp, ec) ? "; the old .ghc beside it could not be moved, and the game still plays it"
                    : keptBefore       ? "; the old .ghc was removed (its original is in .ghc.bak)"
                                       : "; the old .ghc is now .ghc.bak";
+        }
+        if (hadGhn && !wantGhn) {
+            // Saved as JSON or .ghc: the old .ghn comes first for the game,
+            // so it steps aside the same way (as .ghn.bak).
+            const fs::path bak = toPath(ghnPath + ".bak");
+            const bool keptBefore = fs::exists(bak, ec);
+            if (!keptBefore) fs::rename(np, bak, ec);
+            else fs::remove(np, ec);
+            note += fs::exists(np, ec) ? "; the old .ghn beside it could not be moved, and the game still plays it"
+                    : keptBefore       ? "; the old .ghn was removed (its original is in .ghn.bak)"
+                                       : "; the old .ghn is now .ghn.bak";
         }
         if (!eventsInChart()) {
             const fs::path ep = toPath(eventsFile_);
@@ -1883,9 +1894,25 @@ private:
         full_.reset();  // one at a time: the old one gives back what it took first
         std::error_code ec;
         fs::create_directories(toPath(a.userDir + "cache"), ec);
-        const std::string path = a.userDir + "cache/editor-preview.json";
+        // Stacked notes (a count chart's, of any size) go to the preview as
+        // a .ghn - each stack one note counting for all of them, as the game
+        // plays it - never written out one by one.
+        bool counted = false;
+        for (const EdNote& n : notes_)
+            if (n.stack > 1) {
+                counted = true;
+                break;
+            }
+        const std::string path = a.userDir + (counted ? "cache/editor-preview.ghn" : "cache/editor-preview.json");
         const double t0 = nowSec();
-        if (!writeText(toPath(path), buildJson(true))) {
+        if (counted) {
+            Chart c;
+            std::string err;
+            if (!chartForCount(c, err, true) || !writeGhn(path, c, err)) {
+                fullError_ = err.empty() ? "cannot write " + path : err;
+                return;
+            }
+        } else if (!writeText(toPath(path), buildJson(true))) {
             fullError_ = "cannot write " + path;
             return;
         }

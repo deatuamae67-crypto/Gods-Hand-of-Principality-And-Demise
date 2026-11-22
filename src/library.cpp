@@ -114,9 +114,25 @@ static PcmPtr streamOrNull(const std::string& path, double startFraction = 0.0) 
 Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys, bool forceAutoChart,
                           const std::string& chartFile) {
     Prepared p;
+    // A chart given instead of the song's own (the chart editor's preview):
+    // it is played over the song's audio, whatever made the song's chart.
+    auto override = [&]() {
+        std::string err;
+        if (!loadChartFile(chartFile, diff, p.chart, err, {}, 0, extraKeys)) {
+            p.error = err;
+            return false;
+        }
+        if (p.chart.title.empty()) p.chart.title = e.title;
+        p.chart.difficulty = diff;
+        return true;
+    };
     if (e.builtin && e.def && !forceAutoChart) {
         BuiltinAudio a = builtinAudio(*e.def);
-        buildChart(*e.def, *a.comp, diff, p.chart);
+        if (!chartFile.empty()) {
+            if (!override()) return p;
+        } else {
+            buildChart(*e.def, *a.comp, diff, p.chart);
+        }
         p.inst = a.inst;
         p.voiceP = a.vp;
         p.voiceO = a.vo;
@@ -150,13 +166,17 @@ Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirr
             }
         }
         if (!p.inst) { p.error = "cannot decode " + e.inst; return p; }
-        AutoChartInfo info;
-        if (!autoChart(p.inst->data.data(), p.inst->frames(), p.inst->channels, Mixer::kRate, d, p.chart, &info)) {
-            p.error = "AutoChart found no rhythm in this audio";
-            return p;
+        if (!chartFile.empty()) {
+            if (!override()) return p;
+        } else {
+            AutoChartInfo info;
+            if (!autoChart(p.inst->data.data(), p.inst->frames(), p.inst->channels, Mixer::kRate, d, p.chart, &info)) {
+                p.error = "AutoChart found no rhythm in this audio";
+                return p;
+            }
+            p.chart.title = e.title;
+            p.chart.difficulty = diff;
         }
-        p.chart.title = e.title;
-        p.chart.difficulty = diff;
     } else {
         size_t idx = 0;
         for (size_t i = 0; i < e.diffs.size(); ++i)
