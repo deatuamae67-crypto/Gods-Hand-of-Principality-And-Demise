@@ -331,8 +331,9 @@ void PlayState::draw() {
         gfx::beginCanvas(0.94f * camZoom_, camFocus_);
         stage_.drawBack(now);
         const bool demise = left_.id == CharId::Demise;
-        drawCharacter(left_, {330, 600}, demise ? 0.95f : 1.0f, now, false);
-        drawCharacter(right_, {950, 612}, 1.0f, now, true);
+        // As large as FNF's cast on its stages (issue #36).
+        drawCharacter(left_, {320, 640}, demise ? 1.14f : 1.2f, now, false);
+        drawCharacter(right_, {960, 652}, 1.2f, now, true);
         stage_.drawFront(now);
         gfx::endCanvas();
 

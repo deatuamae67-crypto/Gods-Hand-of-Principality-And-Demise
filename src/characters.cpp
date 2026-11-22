@@ -86,9 +86,12 @@ void CharacterState::beat(double now) {
 
 namespace {
 
-constexpr Color kInk{18, 38, 76, 255};       // the outlines: a deep, glassy blue
-constexpr Color kMissTone{96, 84, 170, 255};  // a miss turns the colours to this
-constexpr float kLine = 4.2f;                 // outline width, in character units
+// Friday Night Funkin's look (issue #36): thick near-black outlines, flat
+// colours with one hard-edged shade away from the light, no gloss.
+constexpr Color kInk{14, 10, 22, 255};        // the outlines
+constexpr Color kShade{44, 22, 74, 255};      // what a colour's shaded side leans to
+constexpr Color kMissTone{96, 84, 170, 255};  // a miss turns the colours to this (FNF's purple)
+constexpr float kLine = 6.0f;                 // outline width, in character units
 constexpr float kPi = 3.14159265f;
 
 struct Xf {
@@ -130,100 +133,11 @@ void line(const Xf& X, float ax, float ay, float bx, float by, float w, Color c)
     DrawLineEx(X(ax, ay), X(bx, by), X.len(w), c);
 }
 
-// ------------------------------------------------- the glossy Aero finish --
+// ----------------------------------------------------------- the finish --
 
 Color withAlpha(Color c, unsigned char a) {
     c.a = a;
     return c;
-}
-
-// A colour lit from above: t is 0 at a shape's top (lighter) and 1 at its
-// bottom (deeper).
-Color shadeAt(Color c, float t) {
-    const Color hi = withAlpha(mix(c, WHITE, 0.45f), c.a), lo = withAlpha(mix(c, kInk, 0.3f), c.a);
-    return t < 0.5f ? mix(hi, c, t * 2.0f) : mix(c, lo, (t - 0.5f) * 2.0f);
-}
-
-void ellLit(const Xf& X, float cx, float cy, float rx, float ry, Color c, int seg = 34) {
-    const Vector2 o = X(cx, cy);
-    Vector2 prev = X(cx + rx, cy);
-    Color prevC = shadeAt(c, 0.5f);
-    for (int i = 1; i <= seg; ++i) {
-        const float a = float(i) / float(seg) * 2.0f * kPi;
-        const Vector2 p = X(cx + std::cos(a) * rx, cy + std::sin(a) * ry);
-        const Color pc = shadeAt(c, 0.5f + 0.5f * std::sin(a));
-        gfx::triColors(o, prev, p, c, prevC, pc);
-        prev = p;
-        prevC = pc;
-    }
-}
-
-void convexLit(const Xf& X, const std::vector<Vector2>& pts, Color c) {
-    float y0 = 1e9f, y1 = -1e9f;
-    for (const Vector2& q : pts) {
-        y0 = std::min(y0, q.y);
-        y1 = std::max(y1, q.y);
-    }
-    const float h = std::max(0.001f, y1 - y0);
-    std::vector<Vector2> v;
-    std::vector<Color> col;
-    for (const Vector2& q : pts) {
-        v.push_back(X(q.x, q.y));
-        col.push_back(shadeAt(c, (q.y - y0) / h));
-    }
-    for (size_t i = 1; i + 1 < v.size(); ++i) gfx::triColors(v[0], v[i], v[i + 1], col[0], col[i], col[i + 1]);
-}
-
-// The glassy shine on a shape's upper part: white, fading out downwards.
-void shineEll(const Xf& X, float cx, float cy, float rx, float ry) {
-    const float sx = cx - rx * 0.16f, sy = cy - ry * 0.42f, srx = rx * 0.62f, sry = ry * 0.36f;
-    auto white = [](float t) { return Color{255, 255, 255, (unsigned char)(std::max(0.0f, 1.0f - t) * 175.0f)}; };
-    const Vector2 o = X(sx, sy);
-    Vector2 prev = X(sx + srx, sy);
-    Color prevC = white(0.5f);
-    for (int i = 1; i <= 24; ++i) {
-        const float a = float(i) / 24.0f * 2.0f * kPi;
-        const Vector2 p = X(sx + std::cos(a) * srx, sy + std::sin(a) * sry);
-        const Color pc = white(0.5f + 0.5f * std::sin(a));
-        gfx::triColors(o, prev, p, white(0.5f), prevC, pc);
-        prev = p;
-        prevC = pc;
-    }
-}
-
-void shinePoly(const Xf& X, const std::vector<Vector2>& pts) {
-    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
-    for (const Vector2& q : pts) {
-        x0 = std::min(x0, q.x);
-        x1 = std::max(x1, q.x);
-        y0 = std::min(y0, q.y);
-        y1 = std::max(y1, q.y);
-    }
-    const float w = x1 - x0, h = y1 - y0;
-    if (w < 22 || h < 22) return;
-    const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
-    std::vector<Vector2> v;
-    std::vector<Color> col;
-    for (const Vector2& q : pts) {
-        const float x = cx + (q.x - cx) * 0.8f, y = cy + (q.y - cy) * 0.8f - h * 0.08f;
-        const float t = (y - y0) / h;
-        v.push_back(X(x, y));
-        col.push_back(Color{255, 255, 255, (unsigned char)(std::max(0.0f, 0.55f - t) / 0.55f * 150.0f)});
-    }
-    for (size_t i = 1; i + 1 < v.size(); ++i) gfx::triColors(v[0], v[i], v[i + 1], col[0], col[i], col[i + 1]);
-}
-
-// A tube's shine: a pale stripe along the side the light comes from.
-void shineCap(const Xf& X, float ax, float ay, float bx, float by, float r) {
-    const float dx = bx - ax, dy = by - ay;
-    const float len = std::max(0.001f, std::sqrt(dx * dx + dy * dy));
-    float nx = -dy / len, ny = dx / len;
-    if (nx * -0.4f + ny * -0.9f < 0) {  // the light is up and to the left
-        nx = -nx;
-        ny = -ny;
-    }
-    const float o = r * 0.42f;
-    cap(X, ax + nx * o, ay + ny * o, bx + nx * o, by + ny * o, r * 0.3f, Color{255, 255, 255, 80});
 }
 
 float hash01(float x) {
@@ -245,6 +159,7 @@ void bubble(Vector2 c, float r, float a) {
 // Bubbles rising from (x, y) across w for h units (the character's units);
 // each one's place comes from the time alone.
 void bubbles(const Xf& X, float x, float y, float w, float h, int n, double now, float speed, float seed) {
+    if (n >= 0) return;  // the Aero look's bubbles: not in FNF's
     for (int i = 0; i < n; ++i) {
         const float s = seed + float(i) * 7.31f;
         const float ph = std::fmod(float(now) * speed * (0.55f + 0.45f * hash01(s)) + hash01(s * 1.7f), 1.0f);
@@ -270,6 +185,65 @@ std::vector<Vector2> halfEllipse(float cx, float cy, float rx, float ry, bool lo
     for (int i = 0; i <= seg; ++i) {
         const float a = kPi * float(i) / float(seg);
         v.push_back({cx + std::cos(a) * rx, cy + (lower ? 1.0f : -1.0f) * std::sin(a) * ry});
+    }
+    return v;
+}
+
+// FNF's cel shading: the part of a shape away from the light (up and to the
+// left of the character), cut by a straight edge, in a deeper colour.
+std::vector<Vector2> shadePart(const std::vector<Vector2>& shape) {
+    if (shape.size() < 3) return {};
+    const Vector2 d{0.42f, 0.91f};  // towards the shade
+    Vector2 c{0, 0};
+    for (const Vector2& p : shape) c = {c.x + p.x, c.y + p.y};
+    c = {c.x / float(shape.size()), c.y / float(shape.size())};
+    float far = 0;
+    for (const Vector2& p : shape) far = std::max(far, (p.x - c.x) * d.x + (p.y - c.y) * d.y);
+    const float cut = far * 0.3f;
+    auto side = [&](const Vector2& p) { return (p.x - c.x) * d.x + (p.y - c.y) * d.y - cut; };
+    std::vector<Vector2> out;  // Sutherland-Hodgman against the cut
+    for (size_t i = 0; i < shape.size(); ++i) {
+        const Vector2 a = shape[i], b = shape[(i + 1) % shape.size()];
+        const float sa = side(a), sb = side(b);
+        if (sa >= 0) out.push_back(a);
+        if ((sa >= 0) != (sb >= 0)) {
+            const float t = sa / (sa - sb);
+            out.push_back({a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t});
+        }
+    }
+    return out;
+}
+
+Color shadeOf(Color c) { return withAlpha(mix(c, kShade, 0.34f), c.a); }
+
+void fillShade(const Xf& X, const std::vector<Vector2>& shape, Color col) {
+    const std::vector<Vector2> part = shadePart(shape);
+    if (part.size() < 3) return;
+    std::vector<Vector2> v;
+    v.reserve(part.size());
+    for (const Vector2& q : part) v.push_back(X(q.x, q.y));
+    gfx::convex(v, shadeOf(col));
+}
+
+std::vector<Vector2> ellipsePts(float cx, float cy, float rx, float ry, int seg = 34) {
+    std::vector<Vector2> v;
+    for (int i = 0; i < seg; ++i) {
+        const float a = float(i) / float(seg) * 2.0f * kPi;
+        v.push_back({cx + std::cos(a) * rx, cy + std::sin(a) * ry});
+    }
+    return v;
+}
+
+std::vector<Vector2> capsulePts(float ax, float ay, float bx, float by, float r) {
+    const float ang = std::atan2(by - ay, bx - ax);
+    std::vector<Vector2> v;
+    for (int i = 0; i <= 8; ++i) {  // round the end at b, then the one at a
+        const float t = ang - kPi * 0.5f + kPi * float(i) / 8.0f;
+        v.push_back({bx + std::cos(t) * r, by + std::sin(t) * r});
+    }
+    for (int i = 0; i <= 8; ++i) {
+        const float t = ang + kPi * 0.5f + kPi * float(i) / 8.0f;
+        v.push_back({ax + std::cos(t) * r, ay + std::sin(t) * r});
     }
     return v;
 }
@@ -310,20 +284,24 @@ private:
     void one(const Item& it, bool outline) const {
         const float o = outline ? w_ : 0.0f;
         const Color col = outline ? kInk : it.col;
-        if (!outline && gloss_) {  // lit from above, with a shine
+        if (!outline && gloss_) {  // flat, with FNF's hard-edged shade
             switch (it.kind) {
                 case 0:
-                    ellLit(X_, it.f[0], it.f[1], it.f[2], it.f[3], col);
-                    if (it.f[2] >= 9 && it.f[3] >= 9) shineEll(X_, it.f[0], it.f[1], it.f[2], it.f[3]);
+                    ell(X_, it.f[0], it.f[1], it.f[2], it.f[3], col, 34);
+                    if (it.f[2] >= 7 && it.f[3] >= 7) fillShade(X_, ellipsePts(it.f[0], it.f[1], it.f[2], it.f[3]), col);
                     break;
                 case 1:
                     cap(X_, it.f[0], it.f[1], it.f[2], it.f[3], it.f[4], col);
-                    if (it.f[4] >= 6) shineCap(X_, it.f[0], it.f[1], it.f[2], it.f[3], it.f[4]);
+                    if (it.f[4] >= 5) fillShade(X_, capsulePts(it.f[0], it.f[1], it.f[2], it.f[3], it.f[4]), col);
                     break;
-                default:
-                    convexLit(X_, it.pts, col);
-                    shinePoly(X_, it.pts);
+                default: {
+                    std::vector<Vector2> v;
+                    v.reserve(it.pts.size());
+                    for (const Vector2& q : it.pts) v.push_back(X_(q.x, q.y));
+                    gfx::convex(v, col);
+                    fillShade(X_, it.pts, col);
                     break;
+                }
             }
             return;
         }
@@ -378,16 +356,19 @@ Pose computePose(const CharacterState& s, double now) {
         const float pop = float(std::exp(-(now - s.singStart) * 12.0));
         p.pop = pop;
         p.dir = s.singDir;
+        // FNF's poses: a strong lean, a stretch up, a squat down, and a snap
+        // into each that settles (the first frames overshoot).
         switch (s.singDir) {
-            case 0: p.dx = -12 - 10 * pop; p.rot = -0.06f; break;
-            case 3: p.dx = 12 + 10 * pop; p.rot = 0.06f; break;
-            case 2: p.dy = -10 - 10 * pop; p.sy = 1.05f + 0.04f * pop; p.sx = 0.97f; break;
-            case 1: p.dy = 8 + 6 * pop; p.sy = 0.92f - 0.03f * pop; p.sx = 1.05f; break;
+            case 0: p.dx = -18 - 14 * pop; p.rot = -0.1f - 0.04f * pop; p.sx = 1.03f; break;
+            case 3: p.dx = 18 + 14 * pop; p.rot = 0.1f + 0.04f * pop; p.sx = 1.03f; break;
+            case 2: p.dy = -16 - 12 * pop; p.sy = 1.08f + 0.05f * pop; p.sx = 0.95f; break;
+            case 1: p.dy = 12 + 8 * pop; p.sy = 0.88f - 0.04f * pop; p.sx = 1.08f; break;
             default: break;
         }
-    } else {
-        p.sy = 1.0f - 0.035f * p.bop;
-        p.sx = 1.0f + 0.02f * p.bop;
+    } else {  // the idle bop on the beat, FNF's head-nod squash
+        p.sy = 1.0f - 0.05f * p.bop;
+        p.sx = 1.0f + 0.03f * p.bop;
+        p.dy = 4.0f * p.bop;
     }
     return p;
 }
@@ -581,7 +562,6 @@ void drawHype(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
     const HypeLook k = hypeLook(shade, s.tint, P.missing);
     Xf base{feet, sc};
     ell(base, 0, 0, 66, 11, fade(BLACK, 0.3f));
-    if (shade) gfx::glow({feet.x, feet.y - 150 * sc}, 220 * sc, fade(s.tint, 0.28f + 0.2f * P.bop));
     bubbles(base, 0, -30, 220, 320, 7, now, 0.16f, 1.0f);
     Xf X{{feet.x + P.dx * sc, feet.y + P.dy * sc}, sc, P.sx, P.sy, P.rot, flip};
     const Slot slot = slotOf(P, flip);
@@ -849,7 +829,6 @@ void drawHand(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
     Xf B{feet, sc, 1, 1, 0, flip};
     Ink(B).p({{-84, -98}, {84, -98}, {76, 0}, {-76, 0}}, Color{36, 104, 156, 255}).draw();
     line(B, -78, -74, 78, -74, 4, look.cuff);
-    gfx::glow(B(0, -74), 110 * sc, fade(look.cuff, 0.25f + 0.25f * P.bop));
     for (float x : {-42.0f, 42.0f}) {
         const float pump = 1.0f + 0.12f * P.bop;
         Ink(B, 3.0f).e(x, -36, 20 * pump, 20 * pump, Color{196, 210, 230, 255}).draw();
@@ -878,7 +857,6 @@ void drawHand(const CharacterState& s, const Pose& P, Vector2 feet, float sc, do
     }
     bubbles(B, 0, -70, 160, 330, 8, now, 0.22f, 3.0f);  // the speakers blow bubbles
     Xf G{{feet.x + P.dx * sc * 0.6f, feet.y + (-236 + hover + lift + P.dy * 0.5f) * sc}, sc, P.sx, P.sy, P.rot + tilt, flip};
-    gfx::glow(G(0, 0), 170 * sc, fade(look.cuff, 0.18f + 0.18f * P.bop));
     djGlove(G, faceFor(P, now, flip, 2.6f), look, spread, curl, point, now);
 }
 
