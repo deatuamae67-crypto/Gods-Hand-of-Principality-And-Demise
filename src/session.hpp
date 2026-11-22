@@ -34,17 +34,19 @@ enum NoteState : uint8_t { kPending = 0, kHit, kMissed, kHolding, kHeldDone, kDr
 struct LaneNote {
     double t = 0;
     double len = 0;
+    uint32_t id = 0;     // index of the note in the chart (script note id)
+    // The notes of the file it stands for (stacked ones); with kFlagBigCount
+    // in flags, an index into the session's big counts instead.
+    uint32_t stack = 1;
+    uint16_t type = 0;
     uint8_t kind = kNormal;
     uint8_t flags = 0;
     uint8_t state = kPending;
-    uint16_t type = 0;
-    uint16_t stack = 1;  // stacked notes of the file it stands for
-    uint32_t id = 0;     // index of the note in the chart (script note id)
 };
 
 struct GameEvent {
     enum Type : uint8_t { PlayerHit, PlayerMiss, PlayerMine, GhostMiss, HoldDrop, HoldDone, OpponentHit } type;
-    uint8_t lane = 0;
+    uint16_t lane = 0;
     Rating rating = kDivine;
     double time = 0;     // note time (ms)
     double errMs = 0;    // real-time error (negative = early)
@@ -52,6 +54,7 @@ struct GameEvent {
     uint8_t flags = 0;
     uint16_t noteType = 0;
     uint32_t id = 0;
+    uint32_t stack = 1;  // the notes hit at once (a stack): each one's hitsound sounds
 };
 
 using LaneMask = std::bitset<kMaxKeys>;  // one bit per lane
@@ -79,6 +82,9 @@ public:
     void update(double songMs);
     // Notes from `songMs` on can be played again (JS Engine loopTheSong); stats stay.
     void rewindTo(double songMs);
+    // Starting from `songMs` (the chart editor's preview, Psych's playtest
+    // from here): the notes before it are passed by, unjudged.
+    void skipTo(double songMs);
 
     // Accessors used for rendering.
     int keys() const { return keys_; }
@@ -98,22 +104,27 @@ public:
 
     std::vector<GameEvent> events;  // consumed (cleared) by the caller
 
-    // Stats. Every note of the file counts, stacked ones included.
-    // 64-bit everywhere: spam charts pass two billion notes.
-    long long score = 0;
-    long long combo = 0, maxCombo = 0, misses = 0;
-    std::array<long long, kRatingCount> counts{};
-    long long opponentHits = 0;
+    // Stats. Every note of the file counts, stacked ones included, exactly:
+    // 256-bit counts (iutk and God's Hand count charts hold notes by the
+    // trillion and far beyond).
+    ScoreCount score;
+    Count combo, maxCombo, misses;
+    std::array<Count, kRatingCount> counts{};
+    Count opponentHits;
     double health = 1.0;  // 0..2
     void setHealth(double v) { health = 0; addHealth(v); }
     bool dead = false;
-    long long judged() const;
+    Count judged() const;
     double accuracy() const;   // 0..1 (1 when nothing judged)
     std::string rank() const;  // S+, S, A, B, C, D
     std::string clearLabel() const;
     struct HitError { float t, err; };
     std::vector<HitError> hitErrors;
-    uint64_t totalPlayerNotes = 0, totalOpponentNotes = 0;  // every note of the file, stacked ones included
+    Count totalPlayerNotes, totalOpponentNotes;  // every note of the file, stacked ones included
+    Count countOf(const LaneNote& n) const {
+        if (!(n.flags & kFlagBigCount)) return Count(n.stack ? n.stack : 1);
+        return n.stack < bigCounts_.size() ? bigCounts_[n.stack] : Count(1);
+    }
     bool allResolved() const;
 
 private:
@@ -133,6 +144,7 @@ private:
     LaneMask autoLanes_;
     bool botLane(int lane) const { return autoLanes_[size_t(lane)] || cfg_.keylessLanes[size_t(lane)]; }
     long long mult_[2] = {1, 1};
+    std::vector<Count> bigCounts_;  // the chart's counts too large for a note
     static constexpr size_t kMaxHitErrors = size_t(1) << 21;
     uint64_t errStride_ = 1, errTick_ = 0;
 };

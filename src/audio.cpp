@@ -350,9 +350,9 @@ void Mixer::scope(float* out, size_t n, size_t behind) const {
     }
 }
 
-void Mixer::hitAt(double songSec, int side, float volume) {
+void Mixer::hitAt(double songSec, int side, float volume, double count) {
     side = side ? 1 : 0;
-    if (volume <= 0) return;
+    if (volume <= 0 || !(count > 0)) return;
     std::lock_guard<std::mutex> lk(hitMtx_);
     if (hitVersion_ != sfxVersion()) {  // the hitsound itself (a mod may bring its own)
         hitVersion_ = sfxVersion();
@@ -360,13 +360,16 @@ void Mixer::hitAt(double songSec, int side, float volume) {
     }
     const double at = songSec * kRate;
     std::deque<Grain>& q = hits_[side];
-    // In order of time; one per sample at most (a note on the same sample
-    // as the last one would only cut it at once).
+    // In order of time; one per sample at most: notes on the same sample as
+    // another add their count to it (they sound together, louder).
     if (!q.empty() && at < q.back().at) {
         auto it = std::upper_bound(q.begin(), q.end(), at, [](double v, const Grain& g) { return v < g.at; });
-        q.insert(it, Grain{at, volume});
+        if (it != q.begin() && at - std::prev(it)->at < 1.0) std::prev(it)->count += count;
+        else q.insert(it, Grain{at, volume, count});
     } else if (q.empty() || at - q.back().at >= 1.0) {
-        q.push_back(Grain{at, volume});
+        q.push_back(Grain{at, volume, count});
+    } else {
+        q.back().count += count;
     }
     if (q.size() > 200000) q.pop_front();  // never a backlog without end
 }
@@ -381,6 +384,7 @@ void Mixer::clearHits() {
     std::lock_guard<std::mutex> lk(hitMtx_);
     hits_[0].clear();
     hits_[1].clear();
+    clearVoices_.store(true);  // the voices sounding stop too (the audio thread clears them)
 }
 
 void Mixer::mixHits(float* out, unsigned frames, double pos0, double rate) {
@@ -406,6 +410,16 @@ void Mixer::mixHits(float* out, unsigned frames, double pos0, double rate) {
     const std::vector<float>* pcm = hitPcmAudio_.get();
     if (!pcm || pcm->empty()) return;
     const size_t n = pcm->size();
+    if (clearVoices_.exchange(false)) {
+        poly_.clear();
+        voice_[0] = voice_[1] = HitVoice{};
+    }
+    const int mode = hitMode_.load();
+    if (mode != kHitCut) {
+        mixHitsPoly(out, frames, pos0, rate, *pcm, mode == kHitLimiter);
+        return;
+    }
+    poly_.clear();
     for (int s = 0; s < 2; ++s) {
         HitVoice& v = voice_[s];
         const std::vector<Grain>& due = due_[s];
@@ -448,6 +462,46 @@ void Mixer::mixHits(float* out, unsigned frames, double pos0, double rate) {
             out[2 * f] += smp;
             out[2 * f + 1] += smp;
         }
+    }
+}
+
+// Every hit its own voice, playing to its end over the others; a stack (or
+// notes landing on the same sample) one voice as loud as all of them.
+void Mixer::mixHitsPoly(float* out, unsigned frames, double pos0, double rate, const std::vector<float>& pcm, bool limit) {
+    constexpr size_t kMaxVoices = 4096;  // a spam of thousands a second: the oldest end first
+    const size_t n = pcm.size();
+    if (hitBus_.size() < frames) hitBus_.resize(frames);
+    float* bus = hitBus_.data();
+    std::fill(bus, bus + frames, 0.0f);
+    // The voices already sounding, then this buffer's new ones from their frame.
+    auto play = [&](PolyVoice& v, unsigned from) {
+        const size_t start = size_t(v.pos);
+        if (start >= n) return;
+        const unsigned len = unsigned(std::min<size_t>(n - start, frames - from));
+        const float* src = pcm.data() + start;
+        for (unsigned i = 0; i < len; ++i) bus[from + i] += src[i] * v.vol;
+        v.pos += len;
+    };
+    for (PolyVoice& v : poly_) play(v, 0);
+    for (int s = 0; s < 2; ++s)
+        for (const Grain& g : due_[s]) {
+            const double f = std::ceil((g.at - pos0) / rate);
+            poly_.push_back(PolyVoice{0, float(double(g.vol) * g.count)});
+            play(poly_.back(), unsigned(std::clamp(f, 0.0, double(frames - 1))));
+        }
+    poly_.erase(std::remove_if(poly_.begin(), poly_.end(), [n](const PolyVoice& v) { return v.pos >= double(n); }), poly_.end());
+    if (poly_.size() > kMaxVoices) poly_.erase(poly_.begin(), poly_.begin() + ptrdiff_t(poly_.size() - kMaxVoices));
+    // The limiter: instant attack, ~60 ms release, never past 1.
+    const float release = 0.99962f;  // exp(-1 / (0.06 s * 44100))
+    for (unsigned f = 0; f < frames; ++f) {
+        float x = bus[f];
+        if (limit) {
+            const float a = std::fabs(x);
+            limEnv_ = a > limEnv_ ? a : limEnv_ * release + a * (1.0f - release);
+            if (limEnv_ > 1.0f) x /= limEnv_;
+        }
+        out[2 * f] += x;
+        out[2 * f + 1] += x;
     }
 }
 
@@ -740,7 +794,11 @@ void sfxShutdown() {
 
 void sfxSetVolume(float v) { g_sfxVol = v; }
 
+static bool g_sfxMuted = false;
+void sfxMute(bool on) { g_sfxMuted = on; }
+
 void sfxPlay(Sfx id, float volume, float pitch) {
+    if (g_sfxMuted) return;
     SfxSlot& s = g_sfx[int(id)];
     if (!s.ok && !s.hasOver) return;
     Sound& snd = s.hasOver ? s.overAlias[s.next] : s.alias[s.next];

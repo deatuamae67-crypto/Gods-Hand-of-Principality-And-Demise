@@ -11,12 +11,15 @@
 #include <set>
 #include <system_error>
 
+#include "basegame.hpp"
 #include "chart.hpp"
 #include "chart_binary.hpp"
+#include "count_charts.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
 #include "json.hpp"
+#include "scene.hpp"
 
 namespace gh {
 
@@ -167,11 +170,21 @@ bool chartContent(const fs::path& f) {
     return found;
 }
 
-// A chart: Psych JSON, or a binary .ghc (which may be the only one there:
-// a chart of a billion notes kept without its JSON).
+// A count chart's name: God's Hand's .ghn, R-Slice's .raid, the iutk
+// engine's .bin (FNC1) - each read for what it holds.
+bool countChartName(const std::string& lowerName) {
+    return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, ".raid") || endsWithI(lowerName, ".bin");
+}
+
+// A chart: Psych JSON, a binary .ghc (which may be the only one there: a
+// chart of a billion notes kept without its JSON) or a count chart.
 bool hasChartFile(const fs::path& dir) {
     for (const fs::path& f : listDir(dir, false)) {
         const std::string n = toLower(pathStr(f.filename()));
+        if (countChartName(n)) {
+            if (isCountChart(pathStr(f))) return true;
+            continue;
+        }
         if (endsWithI(n, kBinaryChartExt) ? isBinaryChart(pathStr(f)) : chartName(n) && chartContent(f)) return true;
     }
     return false;
@@ -460,21 +473,29 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             if (isBinaryChart(pathStr(f))) charts.push_back(f);
             continue;
         }
+        if (countChartName(n)) {  // the iutk engine's Chart.bin and other count charts
+            if (isCountChart(pathStr(f))) charts.push_back(f);
+            continue;
+        }
         if (!endsWithI(n, ".json")) continue;
         if (n.find("-metadata") != std::string::npos) { meta = f; continue; }
         if (!chartName(n) || !chartContent(f)) continue;  // dialogue.json and the like
         if (endsWithI(n, "-chart.json")) vsliceChart = f;
         charts.push_back(f);
     }
-    // The same chart as .ghc and as .json: the binary one (it loads faster).
-    std::vector<std::string> binaryStems;
-    for (const fs::path& c : charts)
+    // The same chart as .ghc and as .json: the binary one (it loads faster);
+    // as .ghn too: the count chart (the editor saves its stacks there whole).
+    std::vector<std::string> binaryStems, countStems;
+    for (const fs::path& c : charts) {
         if (endsWithI(pathStr(c.filename()), kBinaryChartExt)) binaryStems.push_back(toLower(pathStr(c.stem())));
+        if (endsWithI(pathStr(c.filename()), kCountChartExt)) countStems.push_back(toLower(pathStr(c.stem())));
+    }
+    auto has = [](const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); };
     charts.erase(std::remove_if(charts.begin(), charts.end(),
                                 [&](const fs::path& c) {
-                                    return endsWithI(pathStr(c.filename()), ".json") &&
-                                           std::find(binaryStems.begin(), binaryStems.end(), toLower(pathStr(c.stem()))) !=
-                                               binaryStems.end();
+                                    const std::string n = pathStr(c.filename()), stem = toLower(pathStr(c.stem()));
+                                    if (endsWithI(n, ".json")) return has(binaryStems, stem) || has(countStems, stem);
+                                    return endsWithI(n, kBinaryChartExt) && has(countStems, stem);
                                 }),
                  charts.end());
     SongEntry e;
@@ -516,7 +537,7 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             std::string stem = pathStr(c.stem());
             const std::string ls = toLower(stem);
             std::string diff;
-            if (ls == key || songPathName(stem) == key) diff = "Normal";
+            if (ls == key || songPathName(stem) == key || ls == "chart") diff = "Normal";  // "chart": iutk's Chart.bin
             else if (ls.rfind(key + "-", 0) == 0) diff = prettyName(stem.substr(key.size() + 1));
             else diff = prettyName(stem);
             for (auto& f : found)
@@ -1095,6 +1116,37 @@ std::vector<std::string> sharedRootsFor(const SongScan& scan, const SongEntry& e
     if (auto it = scan.packRoots.find(e.pack); it != scan.packRoots.end()) out = it->second;
     out.insert(out.end(), scan.sharedRoots.begin(), scan.sharedRoots.end());
     return out;  // Files::setSharedRoots drops repeats and the song's own roots
+}
+
+std::string findSongIcon(const SongEntry& e, const std::vector<std::string>& sharedRoots) {
+    if (e.builtin || e.autoChart) return "";
+    std::string character;
+    for (const std::string& path : e.chartPaths) {  // the first chart that names one
+        character = peekChart(path).player2;
+        if (!character.empty()) break;
+    }
+    if (character.empty()) return "";
+    scene::Files files;
+    files.setRoots(e.assetRoots);
+    files.setSharedRoots(sharedRoots);
+    // The character's "healthicon"; its own name when it has none.
+    std::string icon = character, text;
+    const std::string cj = files.find("characters/" + character + ".json");
+    const char* builtin = cj.empty() ? basegame::characterJson(character) : nullptr;
+    if (!cj.empty()) scene::readFile(cj, text);
+    else if (builtin) text = builtin;
+    if (!text.empty()) {
+        json::Document doc;
+        if (doc.parse(text)) {
+            const std::string_view hi = doc.strOr(doc.get(doc.root(), "healthicon"), "");
+            if (!hi.empty()) icon = std::string(hi);
+        }
+    }
+    for (const std::string& rel : {"images/icons/icon-" + icon + ".png", "images/icons/" + icon + ".png"}) {
+        const std::string f = files.find(rel);
+        if (!f.empty()) return f;
+    }
+    return "";
 }
 
 }  // namespace gh

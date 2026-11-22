@@ -4,6 +4,7 @@
 #include "app.hpp"
 #include "app_icon.hpp"
 #include "check_scripts.hpp"
+#include "count_charts.hpp"
 #include "performance.hpp"
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
@@ -21,6 +22,7 @@
 #include "common.hpp"
 #include "gfx.hpp"
 #include "platform.hpp"
+#include "psych_menus.hpp"
 #include "process.hpp"
 #include "sysinfo.hpp"
 #include "raylib.h"
@@ -245,6 +247,10 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--list-songs")) listSongs = true;
         else if (!std::strcmp(a, "--check-charts")) checkCharts = true;
         else if (!std::strcmp(a, "--check-scripts")) checkScriptsDir = next();
+        else if (!std::strcmp(a, "--convert")) {
+            convertIn = next();
+            convertOut = next();
+        }
         else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
@@ -253,6 +259,7 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--size")) std::sscanf(next(), "%dx%d", &winW_, &winH_);  // e.g. 2400x1080
     }
     if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
+    if (!convertIn.empty()) return convertChartFile(convertIn, convertOut);  // --convert <chart> <out>
     if (listSongs) {
         // Prints what the song library finds (no window): --list-songs [--base dir]
         // [--check-charts: load every chart and print its keys and notes, or why it fails]
@@ -275,7 +282,7 @@ int App::run(int argc, char** argv) {
                     Chart c;
                     std::string err;
                     if (loadChartFile(path, e.diffs[i], c, err, meta, 0, true))
-                        std::printf("  -> ok %dK, %llu notes", c.keys, (unsigned long long)(c.playerNotes + c.opponentNotes));
+                        std::printf("  -> ok %dK, %s notes", c.keys, (c.playerNotes + c.opponentNotes).str().c_str());
                     else
                         std::printf("  -> ERROR %s", err.c_str());
                 }
@@ -500,6 +507,7 @@ double App::frameBudget() const {
 void App::frame() {
     frameStart_ = nowSec();
     input.beginFrame(dt);
+    mixer.setHitMode(settings.hitsoundMode);  // Options: Hit sound polyphony
     if (GetScreenWidth() != shownW_ || GetScreenHeight() != shownH_) {
         shownW_ = GetScreenWidth();
         shownH_ = GetScreenHeight();
@@ -674,6 +682,36 @@ void App::drawFpsPanel() {
         }
         statsAt_ = now;
     }
+    // The panel is drawn into a picture of its own ten times a second and the
+    // picture put on the screen every frame (issue #36): its text, outlines
+    // and graph cost nothing per frame, however many lines it shows.
+    const float cs = gfx::canvasScale();
+    const int flags = int(s.showFps) | int(s.fpsMemory) << 1 | int(s.fpsFrameTimes) << 2 | int(s.fpsUsage) << 3 | int(s.fpsHardware) << 4;
+    if (now - fpsPanelAt_ >= 0.1 || now < fpsPanelAt_ || cs != fpsPanelScale_ || flags != fpsPanelFlags_) {
+        fpsPanelAt_ = now;
+        fpsPanelScale_ = cs;
+        fpsPanelFlags_ = flags;
+        refreshFpsPanel();
+    }
+    if (!fpsPanelRt_.id || fpsPanelW_ <= 0) return;
+    // Always the top left corner, below the touch buttons when they sit in
+    // that corner.
+    float px = 2, py = 2;
+    if (touchMode) {
+        std::vector<Rectangle> keys;
+        touch.buttonRects(keys);
+        for (const Rectangle& r : keys) {
+            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
+            if (a.x < px + fpsPanelW_ && b.x > px && a.y < py + fpsPanelH_ && b.y > py) py = std::max(py, b.y + 4);
+        }
+    }
+    const Texture2D& t = fpsPanelRt_.texture;
+    DrawTexturePro(t, {0, 0, fpsPanelW_ * cs, -fpsPanelH_ * cs}, {px, py, fpsPanelW_, fpsPanelH_}, {0, 0}, 0, WHITE);
+}
+
+// The panel's picture: its lines (wrapped to the screen), sized to fit them.
+void App::refreshFpsPanel() {
+    const Settings& s = settings;
     std::vector<std::pair<std::string, Color>> lines;
     const Color dim{205, 205, 215, 255};
     if (s.showFps) {
@@ -712,53 +750,73 @@ void App::drawFpsPanel() {
         if (!hw.os.empty()) lines.push_back({hw.os, dim});
         if (!device::status().empty()) lines.push_back({"Game mode: " + device::status(), dim});
     }
-    // Small and narrow, so that it stays in its corner of a song's HUD: the
-    // FPS in 18 pixels, the rest in 14, lines cut at 240 pixels.
-    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = 240;
+    // The panel fits what it shows (issue #36): no line is cut short; one
+    // wider than the screen wraps at its spaces. The FPS in 18 pixels, the
+    // rest in 14.
+    const float size = 14, lineH = 16, firstSize = 18, firstH = 21, maxW = float(gfx::W) - 24;
     const bool fpsFirst = s.showFps;
+    std::vector<std::pair<std::string, Color>> fit;
+    std::vector<bool> big;
     for (size_t i = 0; i < lines.size(); ++i) {
-        std::string& t = lines[i].first;
         const float sz = i == 0 && fpsFirst ? firstSize : size;
-        if (gfx::measure(gfx::FontId::Ui, t, sz).x <= maxW) continue;
-        while (t.size() > 4 && gfx::measure(gfx::FontId::Ui, t + "...", sz).x > maxW) {
-            t.pop_back();
-            while (!t.empty() && (static_cast<unsigned char>(t.back()) & 0xC0) == 0x80) t.pop_back();  // whole characters
+        std::string rest = lines[i].first;
+        bool wrapped = false;
+        while (gfx::measure(gfx::FontId::Ui, rest, sz).x > maxW) {
+            size_t cut = std::string::npos;  // the last space that keeps the line narrow enough
+            for (size_t sp = rest.find(' ', 1); sp != std::string::npos; sp = rest.find(' ', sp + 1)) {
+                if (gfx::measure(gfx::FontId::Ui, rest.substr(0, sp), sz).x > maxW) break;
+                cut = sp;
+            }
+            if (cut == std::string::npos) break;  // one long word: it stays whole
+            fit.push_back({rest.substr(0, cut), lines[i].second});
+            big.push_back(i == 0 && fpsFirst);
+            const size_t next = rest.find_first_not_of(' ', cut);
+            rest = next == std::string::npos ? std::string() : "  " + rest.substr(next);
+            wrapped = true;
         }
-        t += "...";
+        if (!rest.empty() || !wrapped) {
+            fit.push_back({rest, lines[i].second});
+            big.push_back(i == 0 && fpsFirst);
+        }
     }
+    lines.swap(fit);
     float w = 0, textH = 0;
     for (size_t i = 0; i < lines.size(); ++i) {
-        const bool first = i == 0 && fpsFirst;
-        w = std::max(w, gfx::measure(gfx::FontId::Ui, lines[i].first, first ? firstSize : size).x);
-        textH += first ? firstH : lineH;
+        w = std::max(w, gfx::measure(gfx::FontId::Ui, lines[i].first, big[i] ? firstSize : size).x);
+        textH += big[i] ? firstH : lineH;
     }
     const float graphW = 200, graphH = s.fpsFrameTimes ? 36.0f : 0.0f;
     if (graphH > 0) w = std::max(w, graphW);
     const bool panel = lines.size() > 1 || graphH > 0;
-    const float pw = w + 12, ph = textH + graphH + 6;
-    // Always the top left corner. Narrow enough to stay clear of a song's
-    // health bar and score (they start 260 pixels in); below the touch
-    // buttons when they sit in that corner.
-    float px = 2, py = 2;
-    if (touchMode) {
-        std::vector<Rectangle> keys;
-        touch.buttonRects(keys);
-        for (const Rectangle& r : keys) {
-            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
-            if (a.x < px + pw && b.x > px && a.y < py + ph && b.y > py) py = std::max(py, b.y + 4);
-        }
+    // It grows at once and shrinks only by more than a few pixels, so that
+    // numbers whose width changes do not make it twitch.
+    const float wantW = w + 12, wantH = textH + graphH + 6;
+    if (wantW > fpsPanelW_ || fpsPanelW_ - wantW > 24) fpsPanelW_ = wantW;
+    fpsPanelH_ = wantH;
+    const float cs = fpsPanelScale_;
+    const int rw = std::max(1, int(std::ceil(fpsPanelW_ * cs))), rh = std::max(1, int(std::ceil(fpsPanelH_ * cs)));
+    if (!fpsPanelRt_.id || fpsPanelRt_.texture.width < rw || fpsPanelRt_.texture.height < rh) {
+        if (fpsPanelRt_.id) UnloadRenderTexture(fpsPanelRt_);
+        fpsPanelRt_ = LoadRenderTexture(std::max(rw, 256), std::max(rh, 64));
+        SetTextureFilter(fpsPanelRt_.texture, TEXTURE_FILTER_BILINEAR);
     }
-    if (panel) DrawRectangleRec({px, py, pw, ph}, gfx::fade(BLACK, 0.55f));
-    float y = py + 3;
+    if (!fpsPanelRt_.id) return;
+    EndMode2D();  // out of the canvas, into the picture, at the window's scale
+    gfx::beginTexture(fpsPanelRt_);
+    ClearBackground(BLANK);
+    Camera2D cam{};
+    cam.zoom = cs;
+    BeginMode2D(cam);
+    if (panel) DrawRectangleRec({0, 0, fpsPanelW_, fpsPanelH_}, gfx::fade(BLACK, 0.55f));
+    float y = 3;
     for (size_t i = 0; i < lines.size(); ++i) {
-        const bool first = i == 0 && fpsFirst;
-        gfx::text(gfx::FontId::Ui, lines[i].first, px + 6, y, first ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
-        y += first ? firstH : lineH;
+        gfx::text(gfx::FontId::Ui, lines[i].first, 6, y, big[i] ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
+        y += big[i] ? firstH : lineH;
     }
     if (graphH > 0) {
         // One bar per frame (the newest on the right), 0 to 50 ms high; green
         // under 17 ms (60 FPS), yellow under 34, red above.
-        const float gx = px + 6, gy = y + 2, gh = graphH - 6;
+        const float gx = 6, gy = y + 2, gh = graphH - 6;
         DrawRectangleRec({gx, gy, graphW, gh}, gfx::fade(BLACK, 0.4f));
         DrawLineEx({gx, gy + gh - gh * 16.7f / 50.0f}, {gx + graphW, gy + gh - gh * 16.7f / 50.0f}, 1, gfx::fade(WHITE, 0.25f));
         const size_t n = frameHist_.size();
@@ -771,6 +829,9 @@ void App::drawFpsPanel() {
             DrawRectangleRec({gx + float(i - skip), gy + gh - hgt, 1, hgt}, c);
         }
     }
+    EndMode2D();
+    gfx::endTexture();
+    BeginMode2D(gfx::screenCamera());  // back to the canvas
 }
 
 // -------------------------------------------------------- rendering mode --
@@ -868,7 +929,7 @@ constexpr Color rgb3(int r, int g, int b) { return Color{(unsigned char)r, (unsi
 // The menus' backdrop, retro: a night sky of twinkling stars over a striped
 // sun, a grid floor running at you on the beat, and glassy cubes turning in
 // the air, mirrored in the floor. tintHex colours the whole scene.
-void drawMenuBackground(double now, unsigned tintHex, float pulse) {
+static void drawMenuScene(double now, unsigned tintHex, float pulse) {
     const Color tint = gfx::rgb(tintHex);
     const float t = float(now);
     constexpr float kHorizon = 468.0f;
@@ -929,6 +990,16 @@ void drawMenuBackground(double now, unsigned tintHex, float pulse) {
         gfx::cube({x, y}, size, ax, ay, c, 0.22f, true, kHorizon + 8.0f);
         gfx::cube({x, y}, size, ax, ay, c, 0.85f, false, kHorizon);
     }
+}
+
+void drawMenuBackground(double now, unsigned tintHex, float pulse) {
+    // The Psych look (issue #36): every other screen over menuDesat, in its colour.
+    const auto scene = [&] {
+        if (pm::on()) pm::background(pm::kDesat, gfx::mix(gfx::rgb(tintHex), WHITE, 0.15f));
+        else drawMenuScene(now, tintHex, pulse);
+    };
+    if (app().settings.menuBlur) gfx::drawBlurred(scene);  // Options: Menu background blur
+    else scene();
 }
 
 }  // namespace gh

@@ -270,6 +270,46 @@ void testSceneModel() {
     PCHECK(pnear(c.offsetX, 12));
     c.updateChar(0.5, 100, false);  // 0.5 s > 100 ms * 0.0011 * 4: back to dancing
     PCHECK(c.curAnimName().rfind("dance", 0) == 0);
+    // Fast songs and spam (issue #36): a note's pose is not started over at
+    // every note (its frames play), another direction waits for the frame to
+    // end, and at 1000 BPM the pose stays 0.2 s (Psych's would be 0.066 s).
+    {
+        scene::Character k;
+        k.setGraphic(fakeAtlas(4, 100, 100));
+        for (const char* n : {"idle", "singLEFT", "singRIGHT"}) {
+            scene::Anim an;
+            an.name = n;
+            an.frames = {0, 1, 2, 3};
+            an.fps = 24;
+            k.addAnim(an);
+        }
+        k.recalcDance(true);
+        k.dance();
+        auto tick = [&](double dt) {
+            k.updateAnim(dt);
+            k.updateChar(dt, 15.0, false);  // 1000 BPM
+        };
+        k.sing("singLEFT");
+        for (int i = 0; i < 6; ++i) {  // a note every 10 ms
+            tick(0.01);
+            k.sing("singLEFT");
+        }
+        PCHECK(k.curAnimName() == "singLEFT" && k.animFrame >= 1);  // it moved on
+        tick(0.03);
+        k.sing("singLEFT");  // two frames shown: it starts over
+        PCHECK(k.curAnimName() == "singLEFT" && k.animFrame == 0);
+        k.sing("singRIGHT");  // at once: after this frame
+        PCHECK(k.curAnimName() == "singLEFT" && k.pendingSing == "singRIGHT");
+        tick(0.05);
+        PCHECK(k.curAnimName() == "singRIGHT" && k.pendingSing.empty());
+        tick(0.1);
+        PCHECK(k.curAnimName() == "singRIGHT");  // 0.1 s: still singing
+        tick(0.15);
+        PCHECK(k.curAnimName() == "idle");  // 0.25 s: back to idle
+        k.playAnim("singLEFT", true);  // scripts are never held back
+        k.playAnim("singRIGHT", true);
+        PCHECK(k.curAnimName() == "singRIGHT");
+    }
 
     scene::Scene sc;
     auto spr = std::make_shared<scene::Sprite>();
@@ -789,7 +829,7 @@ void testAutoChart() {
 void testReplayDeterminism() {
     Chart c;
     c.keys = 4;
-    for (int i = 0; i < 64; ++i) c.notes.push_back({1000.0 + i * 180.0, i % 5 == 0 ? 300.0 : 0.0, uint8_t(i % 4), 1, kNormal, 0, 0});
+    for (int i = 0; i < 64; ++i) c.notes.push_back({1000.0 + i * 180.0, i % 5 == 0 ? 300.0f : 0.0f, uint8_t(i % 4), 1, kNormal, 0, 0});
     c.finalize(120);
     SessionConfig cfg;
     Session a;
@@ -1155,6 +1195,48 @@ void testShaderTranslation() {
     PCHECK(es.find("precision mediump float;") != std::string::npos && es.find("varying vec2 fragTexCoord;") != std::string::npos);
     PCHECK(es.find("gh_FragColor = gh_texBitmap( openfl_TextureCoordv)") != std::string::npos);
     PCHECK(es.find("#define gh_FragColor gl_FragColor") != std::string::npos && es.find(" in vec2") == std::string::npos);
+    // OpenGL 2.1 (the Windows Vista/7 build): GLSL 1.20, which has no precision qualifiers.
+    const std::string gl21 = translateShader(
+        "#pragma header\nprecision mediump float;\nuniform highp float t;\n"
+        "void main() { gl_FragColor = texture2D(bitmap, openfl_TextureCoordv) * t; }\n",
+        Glsl::Legacy120);
+    PCHECK(gl21.rfind("#version 120", 0) == 0);
+    PCHECK(gl21.find("precision mediump float;") == std::string::npos && gl21.find("#define highp") != std::string::npos);
+    PCHECK(gl21.find("varying vec2 fragTexCoord;") != std::string::npos && gl21.find("#define gh_FragColor gl_FragColor") != std::string::npos);
+    PCHECK(gl21.find("gh_FragColor = gh_texBitmap( openfl_TextureCoordv) * t") != std::string::npos);
+    PCHECK(gl21.find("out vec4") == std::string::npos && gl21.find("textureLod") == std::string::npos);
+    // GL_EXT_gpu_shader4 where the card has it (uint and bit operations on OpenGL 2.1).
+    PCHECK(gl21.find("#extension GL_EXT_gpu_shader4 : enable") != std::string::npos &&
+           gl21.find("#define uint unsigned int") != std::string::npos);
+    // inverse() (GLSL 1.40) for GLSL 1.20 and ES 1.0, unless the shader has its own.
+    const char* inv = "#pragma header\nvoid main() { mat3 m = mat3(2.0); gl_FragColor = vec4(inverse(m)[0], 1.0); }\n";
+    PCHECK(translateShader(inv, Glsl::Legacy120).find("mat3 inverse(mat3 m)") != std::string::npos);
+    PCHECK(translateShader(inv, Glsl::Es100).find("mat4 inverse(mat4 m)") != std::string::npos);
+    PCHECK(translateShader(inv, Glsl::Core330).find("mat3 inverse(mat3 m)") == std::string::npos);  // a built-in there
+    const std::string ownInv = translateShader(
+        "#pragma header\nmat2 inverse(mat2 m) { return m; }\nvoid main() { gl_FragColor = vec4(inverse(mat2(1.0))[0], 0.0, 1.0); }\n",
+        Glsl::Legacy120);
+    PCHECK(ownInv.find("mat3 inverse(mat3 m)") == std::string::npos);
+    // GLSL ES 1.0 (Android): uniforms lose their initial values to the game,
+    // globals set from non-constants get their values in main().
+    std::vector<UniformDefault> defs;
+    const std::string esInit = translateShader(
+        "#pragma header\nuniform float uSpeed = 2;\nuniform float uAmp = 0.1 / 3;\nuniform vec2 uDir = vec2(1.0, -0.5);\n"
+        "uniform bool uOn = true;\nvec2 uv = openfl_TextureCoordv.xy;\nconst float k = 2.0;\n"
+        "void main()\n{\n    gl_FragColor = texture2D(bitmap, uv) * uSpeed * uAmp * k;\n}\n",
+        Glsl::Es100, &defs);
+    PCHECK(esInit.find("uniform float uSpeed;") != std::string::npos && esInit.find("uniform vec2 uDir;") != std::string::npos);
+    PCHECK(esInit.find("uSpeed =") == std::string::npos && esInit.find("const float k = 2.0;") != std::string::npos);
+    PCHECK(esInit.find("vec2 uv;") != std::string::npos && esInit.find("{\nuv = openfl_TextureCoordv.xy;") != std::string::npos);
+    PCHECK(esInit.find("#extension GL_OES_standard_derivatives : enable") != std::string::npos);
+    PCHECK(defs.size() == 4 && defs[0].name == "uSpeed" && defs[0].values == std::vector<float>{2.0f} && !defs[0].isInt);
+    PCHECK(defs.size() == 4 && pnear(defs[1].values[0], 0.1f / 3.0f) && defs[2].values == std::vector<float>({1.0f, -0.5f}));
+    PCHECK(defs.size() == 4 && defs[3].isInt && defs[3].values == std::vector<float>{1.0f});
+    // Desktop GLSL keeps them as they are.
+    std::vector<UniformDefault> none;
+    const std::string coreInit = translateShader("#pragma header\nuniform float uSpeed = 2;\nvoid main() { gl_FragColor = vec4(uSpeed); }\n",
+                                                 Glsl::Core330, &none);
+    PCHECK(coreInit.find("uniform float uSpeed = 2;") != std::string::npos && none.empty());
     // texture2D with a bias, texture() used as a call, Shadertoy's main and names.
     const std::string st = translateShader(
         "#pragma header\nvoid main(out vec4 fragColor, in vec2 fragCoord) {\n"
@@ -1503,8 +1585,8 @@ void testJsEngineEffects() {
                           "__fx_distort", "__fx_pulse", "__fx_invert", "__fx_greyscale", "__fx_3d", "__fx_bloom", "__fx_blocked"}) {
         const std::string_view src = fx::source(n);
         PCHECK(!src.empty() && src.find("void main") != std::string_view::npos);
-        for (bool es : {false, true}) {
-            const std::string g = translateShader(src, es);
+        for (Glsl target : {Glsl::Core330, Glsl::Es100, Glsl::Legacy120}) {
+            const std::string g = translateShader(src, target);
             PCHECK(g.find("gh_FragColor") != std::string::npos && g.find("#pragma header") == std::string::npos);
         }
     }

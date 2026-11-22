@@ -13,7 +13,9 @@
 #include "editor_ui.hpp"
 #include "gfx.hpp"
 #include "platform.hpp"
+#include "psych_menus.hpp"
 #include "raylib.h"
+#include "song_icons.hpp"
 #include "video.hpp"
 
 #ifndef GH_VERSION
@@ -207,6 +209,10 @@ public:
         if (leaving_ && a.now - leaveAt_ > 0.75) a.change(makeMainMenu());
     }
     void draw() override {
+        if (pm::on()) {
+            drawPsych();
+            return;
+        }
         App& a = app();
         const double now = a.now;
         const float pulse = menuPulse();
@@ -236,6 +242,54 @@ public:
     }
 
 private:
+    // Psych's TitleState: on black, the bumping logo (logoBumpin, at -150,
+    // -100), GF dancing (gfDanceTitle, at 512, 40: left and right on
+    // alternate beats) and "Press Enter to Begin" (titleEnter, at 100, 576),
+    // its colour swaying between cyan and deep blue until it is pressed.
+    void drawPsych() {
+        App& a = app();
+        const double now = a.now;
+        const pm::Assets& pa = pm::assets();
+        const double beat = a.menuBeat(), sinceBeat = std::max(0.0, now - lastBeatTime());
+        gfx::beginCanvas();
+        DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
+        if (pa.gfTitle.ok()) {
+            const std::vector<int> all = pa.gfTitle.anim("gfDance");
+            const bool left = (long long)std::floor(beat) % 2 == 0;
+            std::vector<int> idx;  // Psych's indices: left 30, 0-14; right 15-29
+            if (left) idx.push_back(30);
+            for (int i = left ? 0 : 15; i <= (left ? 14 : 29); ++i) idx.push_back(i);
+            const int k = idx[size_t(std::min(int(sinceBeat * 24.0), int(idx.size()) - 1))];
+            if (!all.empty()) pa.gfTitle.draw(all[size_t(std::min(k, int(all.size()) - 1))], {512, 40}, 1.0f, WHITE);
+        }
+        if (pa.logo.ok()) {
+            const int f = pa.logo.frameAt(pa.logo.anim("logo bumpin"), sinceBeat, false);
+            pa.logo.draw(f, {-150, -100}, 1.0f, WHITE);
+        } else {
+            const float s = 1.0f + 0.06f * menuPulse();
+            gfx::text(FontId::Title, "GOD'S HAND", 330, 210 - 50 * s, 110 * s, WHITE, Align::Center, 9.0f, BLACK);
+            gfx::text(FontId::Title, "of Principality and Demise", 330, 300, 34, Color{255, 196, 56, 255}, Align::Center, 4.0f, BLACK);
+        }
+        if (pa.enter.ok()) {
+            std::vector<int> f = pa.enter.anim(leaving_ ? "ENTER PRESSED" : "ENTER IDLE");
+            if (f.empty() && !leaving_) f = pa.enter.anim("Press Enter to Begin");
+            Color c = WHITE;
+            if (!leaving_) {  // Psych 0.7's new title: the sway, two seconds back and forth
+                double tt = std::fmod(now, 2.0);
+                tt = tt <= 1.0 ? tt : 2.0 - tt;
+                const float q = float(tt < 0.5 ? 2 * tt * tt : 1 - std::pow(-2 * tt + 2, 2) / 2);
+                c = gfx::fade(gfx::mix(Color{0x33, 0xFF, 0xFF, 255}, Color{0x33, 0x33, 0xCC, 255}, q), 1.0f - 0.36f * q);
+            }
+            pa.enter.draw(pa.enter.frameAt(f, now - (leaving_ ? leaveAt_ : 0.0)), {100, 576}, 1.0f, c);
+        } else {
+            const float blink = leaving_ ? (std::fmod(float(now) * 12.0f, 2.0f) < 1.0f ? 1.0f : 0.2f) : 1.0f;
+            gfx::text(FontId::Title, a.touchMode ? "TAP TO BEGIN" : "PRESS ENTER TO BEGIN", gfx::W / 2, 600, 56,
+                      fade(leaving_ ? WHITE : Color{0x33, 0xFF, 0xFF, 255}, blink), Align::Center, 5.0f, BLACK);
+        }
+        if (flash_ > 0) DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(WHITE, flash_));
+        gfx::endCanvas();
+    }
+
     bool leaving_ = false;
     double leaveAt_ = 0;
     float flash_ = 0;
@@ -246,6 +300,8 @@ private:
 // RENDER MODE and AUTOCHART open the song list for recording a video or
 // for playing a chart made from the song's audio.
 constexpr const char* kMainItems[] = {"STORY MODE", "FREEPLAY", "RENDER MODE", "AUTOCHART", "OPTIONS", "CREDITS", "QUIT"};
+// Psych's pictures for them (mainmenu/menu_<name>); the others are lettered.
+constexpr const char* kMainPsych[] = {"story_mode", "freeplay", "", "", "options", "credits", ""};
 constexpr int kMainCount = int(sizeof(kMainItems) / sizeof(kMainItems[0]));
 
 class MainMenuState : public State {
@@ -258,8 +314,11 @@ public:
         App& a = app();
         int& sel = a.mainSel;
         anim_ = approach(anim_, float(sel), 14.0f, float(dt));
+        // Psych's camera follows the chosen item (JS Engine: lerp 7.5 a second).
+        camY_ = camY_ < -1e8f ? psychCamTarget(sel) : approach(camY_, psychCamTarget(sel), 7.5f, float(dt));
         if (chosen_ >= 0) {
-            if (a.now - chosenAt_ > 0.55) {
+            // Psych: the chosen item flickers for a second before its menu opens.
+            if (a.now - chosenAt_ > (pm::on() && chosen_ != kMainCount - 1 ? 1.0 : 0.55)) {
                 switch (chosen_) {
                     case 0: a.change(makeStory()); break;
                     case 1:
@@ -292,6 +351,10 @@ public:
         }
     }
     void draw() override {
+        if (pm::on()) {
+            drawPsych();
+            return;
+        }
         App& a = app();
         const double now = a.now;
         const float pulse = menuPulse();
@@ -325,7 +388,48 @@ public:
     }
 
 private:
+    // Psych 0.7's MainMenuState (JS Engine's, which keeps every item in the
+    // list): items 140 pixels apart from 108 - (n - 4) x 80, centred, and a
+    // camera that follows the chosen one, the picture behind at a tenth of its
+    // speed (scroll factor 0.25 - 0.05 x (n - 4)), the items at 0.135 x (n - 4).
+    static float psychItemY(int i) { return float(i) * 140.0f + 108.0f - float(std::max(kMainCount, 4) - 4) * 80.0f; }
+    static float psychCamTarget(int sel) {
+        const Vector2 sz = pm::menuItemSize(kMainPsych[sel], kMainItems[sel]);
+        return psychItemY(sel) + sz.y * 0.5f - (kMainCount > 4 ? float(kMainCount) * 8.0f : 0.0f);
+    }
+    void drawPsych() {
+        App& a = app();
+        const double now = a.now;
+        gfx::beginCanvas();
+        DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
+        const float scroll = camY_ - gfx::H * 0.5f;  // the camera's scroll
+        const float bgFactor = std::max(0.25f - 0.05f * float(kMainCount - 4), 0.1f);
+        const float itemFactor = kMainCount >= 6 ? float(kMainCount - 4) * 0.135f : 0.0f;
+        const auto bg = [&] { pm::background(pm::kMenuBG, WHITE, scroll * bgFactor, 1.175f); };
+        if (a.settings.menuBlur) gfx::drawBlurred(bg);
+        else bg();
+        const double since = now - chosenAt_;
+        // Confirming: the magenta picture flickers (Flashing lights), the
+        // chosen item too, faster, and the others fade away.
+        if (chosen_ >= 0 && a.settings.flashing && since < 1.1 && std::fmod(since, 0.30) < 0.15)
+            pm::background(pm::kDesat, Color{0xFD, 0x71, 0x9B, 255}, scroll * bgFactor, 1.175f);
+        for (int i = 0; i < kMainCount; ++i) {
+            const bool on = i == a.mainSel;
+            float alpha = 1.0f;
+            if (chosen_ >= 0 && !on) alpha = std::max(0.0f, 1.0f - float(since) / 0.4f);
+            if (chosen_ >= 0 && on && since < 1.0 && std::fmod(since, 0.12) >= 0.06) alpha = 0.0f;
+            if (alpha <= 0) continue;
+            const Vector2 sz = pm::menuItemSize(kMainPsych[i], kMainItems[i]);
+            const float y = psychItemY(i) - scroll * itemFactor;
+            pm::menuItem(kMainPsych[i], kMainItems[i], {gfx::W * 0.5f, y + sz.y * 0.5f}, on, alpha, now);
+        }
+        pm::vcr("God's Hand Engine v" GH_VERSION, 12, gfx::H - 44, 16);
+        pm::vcr("Friday Night Funkin' v0.2.8", 12, gfx::H - 24, 16);
+        gfx::endCanvas();
+    }
+
     float anim_ = 0;
+    float camY_ = -1e9f;
     int chosen_ = -1;
     double chosenAt_ = 0;
 };
@@ -339,21 +443,36 @@ public:
         static const char* diffs[3] = {"Easy", "Normal", "Hard"};
         int& d = a.storyDiff;
         d = clampv(d, 0, 2);
+        if (go_) {  // Psych: the week flashes for a second, then the first song
+            if (a.now - goAt_ > 1.0) startWeek(diffs[d]);
+            return;
+        }
         if (a.input.left()) { d = (d + 2) % 3; sfxPlay(Sfx::Scroll); }
         if (a.input.right()) { d = (d + 1) % 3; sfxPlay(Sfx::Scroll); }
         if (a.input.back()) { sfxPlay(Sfx::Cancel); a.change(makeMainMenu()); }
-        if (a.input.accept() && !go_) {
+        if (a.input.accept()) {
             go_ = true;
+            goAt_ = a.now;
             sfxPlay(Sfx::Confirm);
+            if (!pm::on()) startWeek(diffs[d]);
+        }
+    }
+    void startWeek(const char* diff) {
+        App& a = app();
+        {
             PlayRequest r;
             r.songId = "builtin:principality";
-            r.diff = diffs[d];
+            r.diff = diff;
             r.story = true;
             r.storyQueue = {"builtin:godshand", "builtin:demise"};
             a.change(makePlay(r));
         }
     }
     void draw() override {
+        if (pm::on()) {
+            drawPsych();
+            return;
+        }
         App& a = app();
         const double now = a.now;
         static const char* diffs[3] = {"Easy", "Normal", "Hard"};
@@ -389,7 +508,51 @@ public:
     }
 
 private:
+    // Psych's StoryMenuState: a black bar with the week's score and title,
+    // the yellow band (0xF9CF51) with the week's characters, the week under
+    // it, the difficulty between its arrows on the right, and the tracks in
+    // pink under Menu_Tracks.
+    void drawPsych() {
+        App& a = app();
+        const double now = a.now;
+        static const char* diffs[3] = {"Easy", "Normal", "Hard"};
+        const std::string d = diffs[clampv(a.storyDiff, 0, 2)];
+        gfx::beginCanvas();
+        DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
+        const ScoreEntry* best = a.scores.get(Scores::key("week:ascension", d));
+        pm::vcr("WEEK SCORE: " + std::to_string(best ? best->score : 0), 10, 10, 32, WHITE, -1, 0);
+        pm::vcr("THE BIG SHOW", gfx::W - 10, 10, 32, fade(WHITE, 0.7f), 1, 0);
+        DrawRectangleRec({0, 56, gfx::W, 386}, Color{0xF9, 0xCF, 0x51, 255});
+        const CharId ids[3] = {CharId::Principality, CharId::Hand, CharId::Demise};
+        const double bt = lastBeatTime();
+        for (int i = 0; i < 3; ++i) {  // Psych: at a quarter of the width apart
+            CharacterState c;
+            c.id = ids[i];
+            c.beatAt = bt;
+            drawCharacter(c, {gfx::W * 0.25f * float(i + 1), 420}, i == 2 ? 0.56f : 0.6f, now, false);
+        }
+        // The week (storymenu/<week>.png in Psych; lettered here, it has no picture).
+        const float ww = pm::boldWidth("WEEK 1", 64);  // chosen: it flashes, as Psych's
+        pm::bold("WEEK 1", (gfx::W - ww) * 0.5f, 466, 64, go_ && std::fmod((now - goAt_) * 10.0, 2.0) < 1.0 ? 0.35f : 1.0f);
+        // Difficulty: < picture >
+        const Vector2 as = pm::storyArrowSize();
+        const float lx = 850, ly = 476;
+        pm::storyArrow(true, a.input.isDown(KEY_LEFT), {lx, ly});
+        pm::storyArrow(false, a.input.isDown(KEY_RIGHT), {lx + 376, ly});
+        pm::difficulty(d, {lx + as.x + (376 - as.x) * 0.5f, ly + as.y * 0.5f}, 1.0f, diffColor(d));
+        // Tracks
+        const Assets& pa = pm::assets();
+        if (pa.tracks.id) DrawTexture(pa.tracks, int(gfx::W * 0.07f + 100), 56 + 425, WHITE);
+        else pm::vcr("TRACKS", gfx::W * 0.07f + 200, 56 + 430, 32, Color{0xE5, 0x57, 0x77, 255}, 0, 0);
+        const char* tracks[3] = {"Principality", "Godshand", "Demise"};
+        for (int i = 0; i < 3; ++i)
+            pm::vcr(tracks[i], gfx::W * 0.5f - gfx::W * 0.35f, 56 + 485 + 32.0f * float(i), 32, Color{0xE5, 0x57, 0x77, 255}, 0, 0);
+        gfx::endCanvas();
+    }
+    using Assets = pm::Assets;
+
     bool go_ = false;
+    double goAt_ = 0;
 };
 
 // --------------------------------------------------------------- Freeplay --
@@ -590,6 +753,110 @@ public:
         App& a = app();
         const double now = a.now;
         gfx::beginCanvas();
+        const int n = int(list_.size());
+        const bool psych = pm::on();
+        if (psych) drawPsychList();
+        else drawList();
+        if (a.library.customCount() == 0) {
+            const std::string tip = a.touchMode
+                ? "Tip: get mods in MOD PACKS, or copy them to " + platform::displayPath(a.base + "mods") + " and tap RESCAN"
+                : std::string("Tip: drop FNF / Psych Engine songs into the 'songs' or 'mods' folder, then press R");
+            gfx::text(FontId::Ui, tip, 40, psych ? 652 : 640, 20, fade(psych ? WHITE : kIvory, 0.75f), Align::Left, psych ? 1.5f : 0.0f);
+        }
+        if (!note_.empty() && a.now - noteAt_ < 4.0)
+            gfx::text(FontId::Ui, note_, 40, 600, 24, fade(kGold, float(std::min(1.0, 4.0 - (a.now - noteAt_)))), Align::Left, 1.5f);
+        if (typing_ || askingText_ || !query_.empty()) {
+            const std::string shown = (query_.empty() && !typing_ ? std::string("...") : query_) +
+                                      (typing_ && std::fmod(now, 1.0) < 0.5 ? "_" : "");
+            DrawRectangleRounded({40, 22, 740, 42}, 0.4f, 8, Color{8, 6, 16, 210});
+            gfx::text(FontId::Ui, "SEARCH", 58, 30, 22, kGold, Align::Left, 1.5f);
+            gfx::text(FontId::Ui, shown, 160, 28, 26, WHITE, Align::Left, 1.0f);
+            const std::string count = n == 0 ? std::string("no songs") : TextFormat("%d song%s", n, n == 1 ? "" : "s");
+            gfx::text(FontId::Ui, count, 766, 32, 20, fade(kIvory, 0.7f), Align::Right, 1.0f);
+        }
+        if (a.songListMode != App::SongListMode::Play) {
+            const bool render = a.songListMode == App::SongListMode::Render;
+            const float by = psych ? 76 : 18;  // under Psych's score box
+            DrawRectangleRounded({830, by, 410, 46}, 0.4f, 8, render ? Color{120, 20, 30, 230} : Color{20, 70, 120, 230});
+            gfx::text(FontId::Title, render ? "RENDER MODE" : "AUTOCHART", 1035, by + 2, 26, WHITE, Align::Center, 2.0f);
+            if (!psych)
+                gfx::text(FontId::Ui,
+                          render ? "The song plays by itself and is saved as a video"
+                                 : "A chart made from the song's own audio",
+                          1035, 640, 18, fade(kIvory, 0.75f), Align::Center);
+        }
+        if (modsOpen_) drawMods();
+        const char* go = a.songListMode == App::SongListMode::Render ? "ENTER record" : "ENTER play";
+        const std::string help = typing_ ? std::string("Type the song's name   ENTER keep   BACKSPACE erase   ESC clear")
+                                 : query_.empty()
+                                     ? std::string(go) + "   LEFT/RIGHT difficulty   F search   TAB modifiers   7 chart editor   M mod packs   R rescan   ESC back"
+                                     : std::string(go) + "   LEFT/RIGHT difficulty   F search   ESC clear the search   TAB modifiers   7 chart editor";
+        if (psych) {
+            // Psych's bottom line: a dark band with the keys in vcr.ttf.
+            if (!a.touchMode) {
+                DrawRectangleRec({0, gfx::H - 26, gfx::W, 26}, fade(BLACK, 0.6f));
+                pm::vcr(help, gfx::W * 0.5f, gfx::H - 24, 16, WHITE, 0);
+            }
+        } else {
+            hints(help.c_str());
+        }
+        gfx::endCanvas();
+    }
+
+private:
+    // Psych's FreeplayState: menuDesat tinted with the song's colour, the
+    // songs in Alphabet's bold letters gliding along a slanted list (90 + 20 x
+    // its place, 320 + 156 x its place), each with its icon after it; the
+    // best score and the difficulty in a dark box at the top right.
+    void drawPsychList() {
+        App& a = app();
+        const double now = a.now;
+        const auto bg = [&] { pm::background(pm::kDesat, bg_, 0, 1.0f); };
+        if (a.settings.menuBlur) gfx::drawBlurred(bg);
+        else bg();
+        const int n = int(list_.size());
+        for (int i = std::max(0, int(anim_) - 4); i < std::min(n, int(anim_) + 6); ++i) {
+            const float target = float(i) - anim_;
+            const float x = 90 + 20 * target, y = 320 + 156 * target;
+            const bool on = i == a.freeplaySel;
+            const float alpha = on ? 1.0f : 0.6f;
+            const SongEntry* e = list_[size_t(i)];
+            float h = 70;  // Psych 1.0: at most 980 pixels wide
+            const float w0 = pm::boldWidth(e->title, h);
+            if (w0 > 980) h *= 980.0f / w0;
+            const float w = pm::bold(e->title, x, y, h, alpha);
+            const Vector2 ic{x + w + 10 + 75, y - 30 + 75};
+            int frames = 1;
+            if (const Texture2D* t = icons_.get(*e, &frames)) drawSongIcon(*t, frames, ic, 150, alpha);
+            else drawIcon(e->builtin ? charFromName(e->opponent) : CharId::Shade, gfx::rgb(e->color), ic, 110, false, now);
+        }
+        // PERSONAL BEST: score (accuracy%), and the difficulty under it.
+        if (n > 0) {
+            const SongEntry* e = list_[size_t(a.freeplaySel)];
+            const std::vector<std::string> diffs = diffsOf(e);
+            std::string diff = diffs.empty() ? std::string("NORMAL") : diffs[size_t(diffIndex())];
+            const ScoreEntry* best = a.scores.get(Scores::key(scoreId(e), diff));
+            const std::string score = "PERSONAL BEST: " + std::to_string(best ? best->score : 0) + " (" +
+                                      TextFormat("%.2f", best ? best->acc * 100.0 : 0.0) + "%)";
+            for (char& c : diff) c = char(std::toupper((unsigned char)c));
+            const float tw = pm::vcrWidth(score, 32), boxX = gfx::W - tw - 12;
+            DrawRectangleRec({boxX, 0, gfx::W - boxX, 66}, fade(BLACK, 0.6f));
+            pm::vcr(score, gfx::W - 6, 5, 32, WHITE, 1, 0);
+            pm::vcr(diffs.size() > 1 ? "< " + diff + " >" : diff, boxX + (gfx::W - boxX) * 0.5f, 41, 24, WHITE, 0, 0);
+            const Modifiers& m = a.mods;
+            if (m.rate != 1.0 || m.botplay || m.practice || m.mirror || m.scrollType != 0) {
+                std::string ms = TextFormat("RATE %.2fx", m.rate);
+                if (m.botplay) ms += "  BOTPLAY";
+                if (m.practice) ms += "  PRACTICE";
+                if (m.mirror) ms += "  OPPONENT";
+                pm::vcr(ms, gfx::W - 6, 70, 16, kGold, 1);
+            }
+        }
+    }
+
+    void drawList() {
+        App& a = app();
+        const double now = a.now;
         const unsigned hex = (unsigned(bg_.r) << 16) | (unsigned(bg_.g) << 8) | bg_.b;
         drawMenuBackground(now, hex, previewPlaying_ ? 0.0f : menuPulse());
         const int n = int(list_.size());
@@ -600,8 +867,13 @@ public:
             const bool on = i == a.freeplaySel;
             const float alpha = std::max(0.0f, 1.0f - std::fabs(d) * 0.2f);
             const SongEntry* e = list_[size_t(i)];
-            const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
-            drawIcon(cid, gfx::rgb(e->color), {x - 50, y + 26}, on ? 70.0f : 56.0f, false, now);
+            int frames = 1;
+            if (const Texture2D* t = icons_.get(*e, &frames)) {  // the chart's character (issue #36)
+                drawSongIcon(*t, frames, {x - 50, y + 26}, on ? 84.0f : 68.0f, alpha);
+            } else {
+                const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
+                drawIcon(cid, gfx::rgb(e->color), {x - 50, y + 26}, on ? 70.0f : 56.0f, false, now);
+            }
             gfx::text(FontId::Ui, e->title, x, y, on ? 52.0f : 42.0f, fade(on ? WHITE : kIvory, alpha), Align::Left, 2.0f);
             if (on && !e->builtin)
                 gfx::text(FontId::Ui, e->subtitle, x + 4, y + 50, 20, fade(kGold, 0.8f), Align::Left, 1.0f);
@@ -610,8 +882,13 @@ public:
         DrawRectangleRounded({830, 70, 410, 560}, 0.06f, 12, Color{8, 6, 16, 190});
         if (n > 0) {
             const SongEntry* e = list_[size_t(a.freeplaySel)];
-            const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
-            drawIcon(cid, gfx::rgb(e->color), {1035, 175}, 150, false, now);
+            int frames = 1;
+            if (const Texture2D* t = icons_.get(*e, &frames)) {
+                drawSongIcon(*t, frames, {1035, 175}, 150);
+            } else {
+                const CharId cid = e->builtin ? charFromName(e->opponent) : CharId::Shade;
+                drawIcon(cid, gfx::rgb(e->color), {1035, 175}, 150, false, now);
+            }
             gfx::text(FontId::Title, e->title, 1035, 262, e->title.size() > 16 ? 26.0f : 34.0f, kGold, Align::Center, 2.0f);
             float y = 312;
             for (const std::string& l : wrap(e->builtin ? e->subtitle : ("From: " + e->subtitle), 36)) {
@@ -644,39 +921,6 @@ public:
             gfx::text(FontId::Ui, ms, 1035, 586, 22,
                       (m.rate != 1.0 || m.botplay || m.practice || m.mirror || m.scrollType != 0) ? kGold : fade(kIvory, 0.5f), Align::Center);
         }
-        if (a.library.customCount() == 0) {
-            const std::string tip = a.touchMode
-                ? "Tip: get mods in MOD PACKS, or copy them to " + platform::displayPath(a.base + "mods") + " and tap RESCAN"
-                : std::string("Tip: drop FNF / Psych Engine songs into the 'songs' or 'mods' folder, then press R");
-            gfx::text(FontId::Ui, tip, 40, 640, 20, fade(kIvory, 0.65f));
-        }
-        if (!note_.empty() && a.now - noteAt_ < 4.0)
-            gfx::text(FontId::Ui, note_, 40, 600, 24, fade(kGold, float(std::min(1.0, 4.0 - (a.now - noteAt_)))), Align::Left, 1.5f);
-        if (typing_ || askingText_ || !query_.empty()) {
-            const std::string shown = (query_.empty() && !typing_ ? std::string("...") : query_) +
-                                      (typing_ && std::fmod(now, 1.0) < 0.5 ? "_" : "");
-            DrawRectangleRounded({40, 22, 740, 42}, 0.4f, 8, Color{8, 6, 16, 210});
-            gfx::text(FontId::Ui, "SEARCH", 58, 30, 22, kGold, Align::Left, 1.5f);
-            gfx::text(FontId::Ui, shown, 160, 28, 26, WHITE, Align::Left, 1.0f);
-            const std::string count = n == 0 ? std::string("no songs") : TextFormat("%d song%s", n, n == 1 ? "" : "s");
-            gfx::text(FontId::Ui, count, 766, 32, 20, fade(kIvory, 0.7f), Align::Right, 1.0f);
-        }
-        if (a.songListMode != App::SongListMode::Play) {
-            const bool render = a.songListMode == App::SongListMode::Render;
-            DrawRectangleRounded({830, 18, 410, 46}, 0.4f, 8, render ? Color{120, 20, 30, 230} : Color{20, 70, 120, 230});
-            gfx::text(FontId::Title, render ? "RENDER MODE" : "AUTOCHART", 1035, 20, 26, WHITE, Align::Center, 2.0f);
-            gfx::text(FontId::Ui,
-                      render ? "The song plays by itself and is saved as a video"
-                             : "A chart made from the song's own audio",
-                      1035, 640, 18, fade(kIvory, 0.75f), Align::Center);
-        }
-        if (modsOpen_) drawMods();
-        const char* go = a.songListMode == App::SongListMode::Render ? "ENTER record" : "ENTER play";
-        if (typing_) hints("Type the song's name   ENTER keep   BACKSPACE erase   ESC clear");
-        else hints((query_.empty() ? std::string(go) + "   LEFT/RIGHT difficulty   F search   TAB modifiers   7 chart editor   M mod packs   R rescan   ESC back"
-                                   : std::string(go) + "   LEFT/RIGHT difficulty   F search   ESC clear the search   TAB modifiers   7 chart editor")
-                       .c_str());
-        gfx::endCanvas();
     }
 
 private:
@@ -773,6 +1017,7 @@ private:
     }
 
     std::vector<const SongEntry*> list_;
+    SongIcons icons_;  // the charts' characters' icons
     float anim_ = 0;
     Color bg_ = kGold;
     double selChangedAt_ = 0;
@@ -794,14 +1039,43 @@ private:
 
 class CreditsState : public State {
 public:
-    void enter() override { t0_ = app().now; }
-    void update(double) override {
-        if (app().input.back() || app().input.accept()) {
+    void enter() override {
+        t0_ = app().now;
+        sel_ = 1;
+        anim_ = float(sel_);
+        tint_ = gfx::rgb(kPsychCredits[sel_].color);
+    }
+    void update(double dt) override {
+        App& a = app();
+        if (pm::on()) {  // Psych's CreditsState: a list to move through
+            const int n = int(sizeof(kPsychCredits) / sizeof(kPsychCredits[0]));
+            auto step = [&](int d) {
+                do { sel_ = (sel_ + d + n) % n; } while (kPsychCredits[sel_].color == 0);
+                sfxPlay(Sfx::Scroll);
+            };
+            if (a.input.up()) step(-1);
+            if (a.input.down()) step(1);
+            anim_ = approach(anim_, float(sel_), 9.6f, float(dt));
+            // The background eases to the chosen line's colour (Psych tweens it in a second).
+            const Color want = gfx::rgb(kPsychCredits[sel_].color);
+            const float k = 1.0f - std::exp(-float(dt) * 4.0f);
+            tint_ = gfx::mix(tint_, want, k);
+            if (a.input.back()) {
+                sfxPlay(Sfx::Cancel);
+                a.change(makeMainMenu());
+            }
+            return;
+        }
+        if (a.input.back() || a.input.accept()) {
             sfxPlay(Sfx::Cancel);
-            app().change(makeMainMenu());
+            a.change(makeMainMenu());
         }
     }
     void draw() override {
+        if (pm::on()) {
+            drawPsych();
+            return;
+        }
         static const char* lines[] = {
             "#GOD'S HAND",
             "of Principality and Demise",
@@ -816,10 +1090,32 @@ public:
             "",
             "@LIBRARIES",
             "raylib 5.5 by Ramon Santamaria (zlib license)",
+            "Lua 5.4 (MIT license), miniz by Rich Geldreich (MIT), pl_mpeg by Dominic Szablewski (MIT)",
             "",
             "@FONTS",
             "Luckiest Guy by Astigmatic (Apache License 2.0)",
             "Rajdhani by Indian Type Foundry (SIL Open Font License)",
+            "",
+            "@CONTRIBUTORS",
+            "amogosgaming - ideas, testing and the Violets Tweak (older systems)",
+            "",
+            "@ENGINE INSPIRED BY",
+            "ShadowMario - Psych Engine",
+            "JordanSantiagoYT - JS Engine, SNIFF, Mods for JS Engine and his engine forks",
+            "HRK-EXEX - SNIFF, H-Slice",
+            "SENAndrhevn23 - Rust Funkin HP, H-Slice archive, FNF Tools, Java Funkin, Rust Editor,",
+            "midi-to-chart-rust, AndreCharts, HTML Engine",
+            "TofpFL - R-Slice (RAID Engine), Universal FNF Sprite Studio",
+            "IAmCyklus - iutk engine",
+            "buatedz - strand",
+            "NAEL2XD - fnf-sdl-showcase, JS Engine fork, Psych Lua scripts",
+            "A-Slice Productions - A-Slice",
+            "alediomacaj - DenpaEx",
+            "amogosgaming - Gods-Hand-Violets-Tweak",
+            "PulseForge, S2X Engine",
+            "The Funkin' Crew - Friday Night Funkin'",
+            "The Haxe Foundation and HaxeFlixel - Haxe, Flixel",
+            "Haxepixel - the audio visualizer's idea",
             "",
             "@LICENSE",
             "All rights reserved, every version (see LICENSE)",
@@ -851,7 +1147,103 @@ public:
     }
 
 private:
+    struct PsychCredit {
+        const char* name;
+        const char* desc;
+        unsigned color;  // 0: a section's title
+    };
+    static constexpr PsychCredit kPsychCredits[] = {
+        {"God's Hand", "", 0},
+        {"deatuamae67-crypto", "A project by deatuamae67-crypto: God's Hand of Principality and Demise, a rhythm duel", 0x8C6CFF},
+        {"Claude Code", "The engine, the music, the art and the charts, written from scratch in C++20: every song synthesized, "
+                        "every character drawn in code", 0xD97757},
+        {"Libraries", "", 0},
+        {"raylib", "raylib 5.5 by Ramon Santamaria (zlib license): windows, drawing, sound and input", 0xF5F5F5},
+        {"Lua", "Lua 5.4 (MIT license): the mods' scripts", 0x2C2D72},
+        {"miniz", "miniz by Rich Geldreich (MIT license): mods in .zip and the binary charts", 0x5AA0E6},
+        {"pl_mpeg", "pl_mpeg by Dominic Szablewski (MIT license): the videos", 0x9A6AD8},
+        {"Fonts", "", 0},
+        {"Luckiest Guy", "Luckiest Guy by Astigmatic (Apache License 2.0)", 0xFFC83D},
+        {"Rajdhani", "Rajdhani by Indian Type Foundry (SIL Open Font License)", 0x3DD1FF},
+        {"Contributors", "", 0},
+        {"amogosgaming", "Ideas (the Psych look everywhere, the chart editor's preview, shader layers...), testing, and the "
+                         "Violets Tweak that brought the game to older systems", 0x5CD6A0},
+        {"Engine inspired by", "", 0},
+        {"ShadowMario", "Psych Engine: the interface, the scripts and the menus God's Hand follows", 0xFF5DA0},
+        {"JordanSantiagoYT", "JS Engine, SNIFF (MIDI to chart), Mods for JS Engine, and his engine forks (ZS Engine, "
+                             "Psych EK Spam, SB Engine, DenpaEx PR, JS Engine Rewrite)", 0x58A8FF},
+        {"HRK-EXEX", "SNIFF and H-Slice", 0xB070FF},
+        {"SENAndrhevn23", "Rust Funkin HP, the H-Slice archive, FNF Tools, JS Engine without chart editor lag, Java Funkin, "
+                          "Rust Editor, midi-to-chart-rust, AndreCharts and HTML Engine", 0xFF8C42},
+        {"TofpFL", "R-Slice (RAID Engine) and its .raid charts, and Universal FNF Sprite Studio", 0x4CD7E0},
+        {"IAmCyklus", "iutk engine and its stacked-note charts", 0xE0C04C},
+        {"buatedz", "strand: big charts on little memory", 0x8CE04C},
+        {"NAEL2XD", "fnf-sdl-showcase, a JS Engine fork and Psych Lua scripts", 0xE04C8C},
+        {"A-Slice Productions", "A-Slice", 0x9A9AFF},
+        {"alediomacaj", "DenpaEx", 0xFF6464},
+        {"PulseForge", "The engine whose best parts and mod packs God's Hand took in", 0x6C8CFF},
+        {"S2X Engine", "Its loading and memory tricks (Psych 0.7.3 based)", 0x7FD0FF},
+        {"The Funkin' Crew", "Friday Night Funkin', where it all comes from", 0xFF9A3C},
+        {"Haxe and HaxeFlixel", "The Haxe Foundation and HaxeFlixel: what Psych and the others are made with", 0xF7A93B},
+        {"Haxepixel", "The idea of the audio visualizer", 0x6FE3B4},
+        {"License", "", 0},
+        {"All rights reserved", "Every version (see LICENSE). Play it, record it and make mods for it. No forks, copies or "
+                                "rebrands: contribute through issues", 0xE04848},
+        {"The Cast", "", 0},
+        {"Hype", "The hype man with the mic", 0x5CC8FF},
+        {"Principal P", "No rapping in the halls", 0xB48CDC},
+        {"DJ Hand", "The hand on the decks", 0xF4C76B},
+        {"D-Mize", "King of the underground", 0xFF5C8A},
+    };
+    // Psych's CreditsState: sections in bold letters, centred; people in the
+    // plain ones from the middle, 156 pixels apart; menuDesat in the chosen
+    // line's colour and its description in a dark box at the bottom.
+    void drawPsych() {
+        App& a = app();
+        gfx::beginCanvas();
+        const auto bg = [&] { pm::background(pm::kDesat, tint_); };
+        if (a.settings.menuBlur) gfx::drawBlurred(bg);
+        else bg();
+        const int n = int(sizeof(kPsychCredits) / sizeof(kPsychCredits[0]));
+        for (int i = 0; i < n; ++i) {
+            const PsychCredit& c = kPsychCredits[i];
+            const float y = 300 + 156 * (float(i) - anim_);
+            if (y < -120 || y > gfx::H + 40) continue;
+            if (c.color == 0) {
+                const float w = pm::boldWidth(c.name, 68);
+                pm::bold(c.name, (gfx::W - w) * 0.5f, y, 68);
+            } else {
+                pm::plain(c.name, gfx::W * 0.5f - 70, y, 60, i == sel_ ? 1.0f : 0.6f);
+            }
+        }
+        const std::string desc = kPsychCredits[sel_].desc;
+        std::vector<std::string> lines;
+        std::string cur;
+        for (size_t p = 0; p < desc.size();) {
+            size_t q = desc.find(' ', p);
+            if (q == std::string::npos) q = desc.size();
+            const std::string word = desc.substr(p, q - p), tryLine = cur.empty() ? word : cur + " " + word;
+            if (!cur.empty() && pm::vcrWidth(tryLine, 32) > 1180) {
+                lines.push_back(cur);
+                cur = word;
+            } else {
+                cur = tryLine;
+            }
+            p = q + 1;
+        }
+        if (!cur.empty()) lines.push_back(cur);
+        const float lh = 32 * 1.15f, th = lh * float(lines.size()), ty = gfx::H - th - 135;
+        float tw = 0;
+        for (const std::string& l : lines) tw = std::max(tw, pm::vcrWidth(l, 32));
+        DrawRectangleRec({(gfx::W - tw) * 0.5f - 10, ty - 10, tw + 20, th + 25}, fade(BLACK, 0.6f));
+        for (size_t k = 0; k < lines.size(); ++k) pm::vcr(lines[k], gfx::W * 0.5f, ty + lh * float(k), 32, WHITE, 0, 2.4f);
+        gfx::endCanvas();
+    }
+
     double t0_ = 0;
+    int sel_ = 1;
+    float anim_ = 1;
+    Color tint_ = WHITE;
 };
 
 std::unique_ptr<State> makeTitle() { return std::make_unique<TitleState>(); }

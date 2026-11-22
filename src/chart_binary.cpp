@@ -5,7 +5,8 @@
 //
 //   "GHCB" u32 version
 //   u64 notes, u64 rawCount, i32 maxData, u32 blockNotes, u32 blocks, u32 types
-//   u64 dataCount[256] (version 1: [64])
+//   version 3: u32 values, u64 dataCount[values] (up to 2048: 1024 keys a side);
+//   version 2: u64 dataCount[256]; version 1: [64]
 //   types: u32 length + bytes, each
 //   u64 skeleton bytes, u64 packed, packed bytes           (deflate)
 //   u64 ranges, u64 bytes, u64 packed, packed bytes        (varint gaps)
@@ -13,9 +14,10 @@
 //
 // A block holds five columns, their lengths first (u32 each): times (the
 // change of the gap from the note before, in ns, zigzag varints), lengths
-// (us, zigzag varints), noteData bytes, stack bytes, types (varints; bit 15
-// the alt flag). Version 1 kept the alt flag in bit 7 of noteData (values
-// 0..63 only); it is still read.
+// (us, zigzag varints), noteData (version 3: varints, 0..2047; before: bytes),
+// stack bytes, types (varints; bit 15 the alt flag). Version 1 kept the alt
+// flag in bit 7 of noteData (values 0..63 only). Versions 1 and 2 are still
+// read.
 #include "chart_binary.hpp"
 
 #include <algorithm>
@@ -37,7 +39,7 @@ namespace gh {
 namespace {
 
 constexpr uint32_t kMagic = 0x42434847u;  // "GHCB"
-constexpr uint32_t kVersion = 2;  // 1 is still read
+constexpr uint32_t kVersion = 3;  // 1 and 2 are still read
 constexpr uint32_t kBlockNotes = 1u << 18;  // 262144 notes: enough blocks for every core
 
 void putU32(std::string& o, uint32_t v) {
@@ -115,9 +117,9 @@ std::string encodeBlock(const StreamedNote* n, size_t count) {
         prevGap = gap;
         prevT = ns;
         putVar(l, zig(std::llround(double(std::isfinite(n[i].length) ? n[i].length : 0.0f) * 1000.0)));
-        d += char(n[i].data);
+        putVar(d, uint64_t(n[i].noteData()));
         s += char(n[i].stack);
-        putVar(y, n[i].type);
+        putVar(y, n[i].type & (StreamedNote::kAltBit | StreamedNote::kTypeMask));
     }
     std::string raw;
     raw.reserve(20 + t.size() + l.size() + d.size() + s.size() + y.size());
@@ -131,7 +133,7 @@ bool decodeBlock(const std::string& raw, StreamedNote* out, size_t count, uint32
     const uint8_t* p = reinterpret_cast<const uint8_t*>(raw.data());
     uint64_t lens[5], total = 20;
     for (int i = 0; i < 5; ++i) total += (lens[i] = getU32(p + 4 * i));
-    if (total != raw.size() || lens[2] != count || lens[3] != count) return false;
+    if (total != raw.size() || (version < 3 && lens[2] != count) || lens[3] != count) return false;
     const uint8_t* t = p + 20;
     const uint8_t* l = t + lens[0];
     const uint8_t* d = l + lens[1];
@@ -149,14 +151,19 @@ bool decodeBlock(const std::string& raw, StreamedNote* out, size_t count, uint32
         out[i].length = float(double(unzig(v)) / 1000.0);
         out[i].stack = s[i];
         if (!getVar(y, end, v) || v > 65535) return false;
-        out[i].type = uint16_t(v);
-        out[i].data = d[i];
-        if (version < 2) {  // the alt flag was bit 7 of noteData
-            out[i].data = uint8_t(d[i] & 63);
+        out[i].type = uint16_t(v & (StreamedNote::kAltBit | StreamedNote::kTypeMask));
+        if (version >= 3) {
+            uint64_t nd;
+            if (!getVar(d, s, nd) || nd >= uint64_t(kNoteDataValues)) return false;
+            out[i].setNoteData(int(nd));
+        } else if (version == 2) {
+            out[i].setNoteData(d[i]);
+        } else {  // the alt flag was bit 7 of noteData
+            out[i].setNoteData(d[i] & 63);
             if (d[i] & 128) out[i].type |= StreamedNote::kAltBit;
         }
     }
-    return t == p + 20 + lens[0] && y == end;
+    return t == p + 20 + lens[0] && y == end && (version < 3 || d == s);
 }
 
 int workerCount(int threads) {
@@ -212,7 +219,11 @@ bool writeBinaryChart(const std::string& path, const std::string& skeleton, cons
     putU32(head, kBlockNotes);
     putU32(head, blocks);
     putU32(head, uint32_t(sn.types.size()));
-    for (uint64_t c : sn.dataCount) putU64(head, c);
+    // The counts up to the last noteData used: most charts need 8.
+    size_t values = sn.dataCount.size();
+    while (values > 0 && sn.dataCount[values - 1] == 0) --values;
+    putU32(head, uint32_t(values));
+    for (size_t i = 0; i < values; ++i) putU64(head, sn.dataCount[i]);
     for (const std::string& t : sn.types) {
         putU32(head, uint32_t(t.size()));
         head += t;
@@ -287,7 +298,9 @@ bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::s
     }
     h.maxData = int32_t(maxData);
     std::array<uint64_t, kNoteDataValues> counts{};
-    for (size_t i = 0; i < (version < 2 ? size_t(64) : counts.size()); ++i)
+    uint32_t values = version < 2 ? 64 : 256;
+    if (version >= 3 && (!readU32(f, values) || values > counts.size())) { err = "damaged binary chart"; return false; }
+    for (size_t i = 0; i < values; ++i)
         if (!readU64(f, counts[i])) { err = "damaged binary chart"; return false; }
     std::vector<std::string> types(h.types);
     for (std::string& t : types) {

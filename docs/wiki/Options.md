@@ -46,7 +46,7 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Fullscreen | Borderless fullscreen (F11 works anywhere). | on / off |
 | VSync | Waits for the screen's refresh. OFF: the frame limit below decides (most precise input). | on / off |
 | Low latency | With VSync: no frames waiting in the driver, and each one drawn just before the screen shows it while the keys are read every millisecond. What you press shows a refresh or more sooner. | on / off |
-| Frame limit | Higher limits make notes smoother. Input is polled at ~1000 Hz regardless. | 6unlimited, 12unlimited, 144 fps, 165 fps, 24unlimited, 36unlimited, 50unlimited, unlimited |
+| Frame limit | Higher limits make notes smoother. Input is polled at ~1000 Hz regardless. | 60 fps, 120 fps, 144 fps, 165 fps, 240 fps, 360 fps, 500 fps, unlimited |
 | Show FPS | The frame rate at the top left. | on / off |
 | FPS: memory | Under the frame rate: the memory the game uses, and the most it has used. | on / off |
 | FPS: frame times | How long updating and drawing take, the slowest frame of the last second, and a graph. | on / off |
@@ -66,12 +66,14 @@ Every option of the Options menu, section by section (the text the game shows fo
 |---|---|---|
 | Note counter | Notes hit so far, under the score: your side only, or both sides added up. | Off, Your side, Both sides |
 | Psych Engine interface | Psych's notes, ratings, health and time bars, fonts, pause menu and sounds, from your own copy. | on / off |
+| Psych menus | With the Psych Engine interface: the title, main menu, Freeplay, Story Mode, Options and Credits laid out as Psych's too, with your copy's pictures (drawn by the game where it has none). | on / off |
 | Hit popups | Rating pictures and combo numbers that pop up on each hit. | on / off |
 | Time bar | The bar at the top of the screen, as in Psych. | Time left, Time elapsed, Song name, Off |
 | Health bar opacity | The health bar and the icons. | 0 to 1 |
 | Hide HUD | Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD. | on / off |
-| Watermark | "God's Hand Engine v.(version) (system) Slop Edition" in the bottom-left corner of songs, as JS Engine shows its own. | on / off |
-| Intro video | The engine's intro before the title screen. ENTER skips it (the SKIP button on a touchscreen). | on / off |
+| Watermark | "God's Hand Engine v.(version) (system) Edition" in the bottom-left corner of songs, as JS Engine shows its own. | on / off |
+| Play intro at start | The engine's intro video before the title screen. ENTER skips it (the SKIP button on a touchscreen). | on / off |
+| Menu background blur | Blurs the background of the main menu, Freeplay and the other menus. | on / off |
 | Audio visualizer | Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it is, how thick the notes are, your hits and misses, and your health. | on / off |
 | Score text zoom on hit | The score line grows a little on each note you hit, as in Psych. | on / off |
 | Botplay text | BOTPLAY (or REPLAY) on screen while the game plays by itself. | on / off |
@@ -102,7 +104,8 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Master volume | - | 0 to 1 |
 | Music volume | - | 0 to 1 |
 | Sound effects | - | 0 to 1 |
-| Hit sounds | A tick on every note you hit, on the note's own sample of the song: a fast spam becomes a tone at the rate of its notes instead of a louder, crackling pile. | 0 to 1 |
+| Hit sounds | A tick on every note you hit, on the note's own sample of the song. | 0 to 1 |
+| Hit sound polyphony | Limiter: every hit plays to its end over the others, and notes on the same tick add up (louder), held under a limiter. Unlimited: the same with no limiter. One at a time: each hit cuts the last (a fast spam becomes a tone). | Limiter, Unlimited, One at a time |
 
 ## Debug
 

@@ -43,16 +43,29 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, name: windows-x64 }
+          # Windows Vista and 7 on (32-bit, so 32-bit Windows too) and graphics
+          # cards with OpenGL 2.1 only, cross-compiled with MinGW-w64 (issue #36).
+          - { os: ubuntu-22.04, name: windows-vista-7-x86, legacy: true }
           - { os: ubuntu-22.04, name: linux-x64 }
           - { os: macos-15, name: macos-arm64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Linux dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.legacy
         run: tools/ci_apt_install.sh libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libasound2-dev
+      - name: MinGW-w64 (Windows Vista/7 x86)
+        if: matrix.legacy
+        run: tools/ci_apt_install.sh gcc-mingw-w64-i686-posix g++-mingw-w64-i686-posix binutils-mingw-w64-i686 ninja-build
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGH_BUILD_TESTS=OFF
+        shell: bash
+        run: |
+          if [ "${{ matrix.legacy }}" = "true" ]; then
+            cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-i686.cmake -DGH_WINDOWS_LEGACY=ON \
+              -DCMAKE_BUILD_TYPE=Release -DGH_BUILD_TESTS=OFF
+          else
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGH_BUILD_TESTS=OFF
+          fi
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Note renderer assembly (MSVC)
@@ -73,6 +86,18 @@ jobs:
           cmake -S . -B build-raster -DGH_BUILD_GAME=OFF -DGH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build build-raster --target gh_tests --parallel
           build-raster/gh_tests
+      - name: Check the Windows Vista/7 program
+        # A function newer than Vista in its import table would stop the game
+        # before it starts there; and it must say Windows 6.0 (Vista) as its system.
+        if: matrix.legacy
+        run: |
+          i686-w64-mingw32-objdump -p build/godshand.exe > pe.txt
+          grep -E "MajorSubsystemVersion[[:space:]]+6" pe.txt
+          grep -E "MinorSubsystemVersion[[:space:]]+0" pe.txt
+          if grep -E "DLL Name: (psapi|pdh|api-ms-|ucrtbase|vcruntime)" -i pe.txt; then echo "Imports a DLL Vista does not have"; exit 1; fi
+          if grep -E "[[:space:]](K32[A-Za-z]+|TryAcquireSRWLock[A-Za-z]+|GetSystemTimePreciseAsFileTime|CreateFile2|WaitOnAddress|WakeByAddress[A-Za-z]+|SetThreadDescription|GetThreadDescription|GetCurrentProcessorNumberEx|GetLogicalProcessorInformationEx|QueryUnbiasedInterruptTime|SetDefaultDllDirectories|AddDllDirectory|GetActiveProcessorCount|PrefetchVirtualMemory|GetDpiFor[A-Za-z]+|SetProcessDpiAwareness[A-Za-z]*|SetThreadDpiAwarenessContext)$" pe.txt; then
+            echo "Imports a function Windows Vista does not have"; exit 1
+          fi
       - name: Package
         shell: bash
         run: |
@@ -193,6 +218,7 @@ jobs:
           | Download | System | How to play |
           |---|---|---|
           | `GodsHand-windows-x64.zip` | Windows 10/11 | Extract, run `godshand.exe` |
+          | `GodsHand-windows-vista-7-x86.zip` | Windows Vista, 7, 8 and later (32 or 64-bit), older graphics cards (OpenGL 2.1) | Extract, run `godshand.exe` |
           | `GodsHand-linux-x64.zip` | Linux x64 | Extract, run `./godshand` |
           | `GodsHand-macos-arm64.zip` | macOS (Apple Silicon) | Extract; the first time, right-click `godshand` > Open |
           | `GodsHand-android.apk` | Android 7+ | Open it on the phone and allow installing from this source |

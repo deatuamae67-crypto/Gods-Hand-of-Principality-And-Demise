@@ -272,7 +272,7 @@ void PlayState::setScriptGlobals() {
     set("scrollSpeed", chart_.speed);
     set("crochet", 60000.0 / bpm);
     set("stepCrochet", 15000.0 / bpm);
-    set("songLength", chart_.lengthMs);
+    set("songLength", songEndMs());
     set("songName", chart_.title.empty() ? entry_->title : chart_.title);
     set("songPath", entry_->songKey);
     set("startedCountdown", false);
@@ -391,10 +391,10 @@ void PlayState::setScriptGlobals() {
 void PlayState::updateStatGlobals() {
     if (!scripts_) return;
     ScriptHost& h = *scripts_;
-    h.setGlobal("score", double(session_.score));
-    h.setGlobal("misses", double(session_.misses));
-    h.setGlobal("hits", double(session_.judged()));
-    h.setGlobal("combo", double(session_.combo));
+    h.setGlobal("score", session_.score.toDouble());
+    h.setGlobal("misses", session_.misses.toDouble());
+    h.setGlobal("hits", session_.judged().toDouble());
+    h.setGlobal("combo", session_.combo.toDouble());
     h.setGlobal("rating", session_.accuracy());
     h.setGlobal("ratingName", ratingNameOverride_.empty() ? session_.rank() : ratingNameOverride_);
     h.setGlobal("ratingFC", ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_);
@@ -755,8 +755,7 @@ void PlayState::psychHoldRefresh() {
             if (ch && !(n.flags & kFlagNoAnim)) {
                 std::string anim = singAnim(side, l, n.flags);
                 if ((n.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(side, l, 0);
-                ch->playAnim(anim, true);
-                ch->holdTimer = 0;
+                ch->sing(anim);
             }
             const char* fn = side == 1 ? "goodNoteHit" : "opponentNoteHit";
             if (noteCallbacksFor(n.type))
@@ -771,8 +770,7 @@ void PlayState::psychNoteHit(const GameEvent& ev, bool opponent) {
     if (ch && !(ev.flags & kFlagNoAnim)) {
         std::string anim = singAnim(side, ev.lane, ev.flags);
         if ((ev.flags & kFlagAlt) && !ch->builtin && !ch->hasAnim(anim)) anim = singAnim(side, ev.lane, 0);
-        ch->playAnim(anim, true);
-        ch->holdTimer = 0;
+        ch->sing(anim);
         if (ev.flags & kFlagHey) {
             const char* chk = ch == sc.gf.get() ? "cheer" : "hey";
             if (ch->hasAnim(chk)) {
@@ -788,7 +786,7 @@ void PlayState::psychNoteHit(const GameEvent& ev, bool opponent) {
     // ease back (Psych / JS Engine: camZooming; Tutorial keeps its own zoom).
     if (toLower(entry_->songKey) != "tutorial") sc.camZooming = true;
     if (opponent) {
-        app().mixer.setTrackVolume(Mixer::kVoiceOpponent, 1.0f);
+        mixer().setTrackVolume(Mixer::kVoiceOpponent, 1.0f);
         if (noteCallbacksFor(ev.noteType))
             scripts_->call("opponentNoteHit", {Value(double(ev.id)), Value(double(ev.lane)), Value(type), Value(false)});
     } else {
@@ -814,11 +812,11 @@ void PlayState::psychMiss(const GameEvent& ev, bool ghost) {
     } else if (ch && ch->hasMiss && !(ev.flags & kFlagNoMissAnim)) {
         ch->playAnim(singAnim(1, ev.lane, 0) + "miss", true);
     }
-    if (lastCombo_ > 5 && sc.gf && ch != sc.gf.get() && sc.gf->hasAnim("sad")) {
+    if (lastCombo_ > Count(5) && sc.gf && ch != sc.gf.get() && sc.gf->hasAnim("sad")) {
         sc.gf->playAnim("sad", true);
         sc.gf->specialAnim = true;
     }
-    lastCombo_ = 0;
+    lastCombo_ = Count();
     const std::string& type = chart_.noteTypes[ev.noteType < chart_.noteTypes.size() ? ev.noteType : 0];
     if (noteCallbacksFor(ev.noteType))
         scripts_->call("noteMiss", {Value(double(ev.id)), Value(double(ev.lane)), Value(type),
@@ -1432,7 +1430,7 @@ bool PlayState::handleJsEngineEvent(const psych::ChartEvent& e) {
         notices_.push_back({e.v1, e.v2, a.now, 2});
         if (n == "Popup" && !popupHold_) {
             popupHold_ = true;
-            a.mixer.pause();
+            mixer().pause();
         }
         return true;
     }
@@ -1790,7 +1788,7 @@ void PlayState::releaseAudio() {
 }
 
 void PlayState::playSound(const std::string& file, double volume, const std::string& tag, bool loop) {
-    if (!psych_ || file.empty()) return;
+    if (!psych_ || file.empty() || req_.preview) return;
     const bool music = tag == "__music";
     std::string path;
     for (const char* ext : {".ogg", ".mp3", ".wav"}) {
@@ -1893,6 +1891,7 @@ bool PlayState::openVideo(VideoSlot& v) {
 }
 
 bool PlayState::startVideo(const std::string& name, bool canSkip) {
+    if (req_.preview) return false;  // no cutscenes in the editor's preview
     if (!psych_) return false;
     auto slot = std::make_unique<VideoSlot>();
     slot->name = name;
@@ -2037,10 +2036,10 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     // icon scripts swap to the losing face under 20.
     if (path == "healthBar.percent" || path == "healthBar.value")
         return num(path == "healthBar.percent" ? std::clamp(session_.health / 2.0 * 100.0, 0.0, 100.0) : session_.health);
-    if (path == "songScore") return num(double(session_.score));
-    if (path == "songMisses") return num(session_.misses);
-    if (path == "songHits") return num(session_.judged());
-    if (path == "combo") return num(session_.combo);
+    if (path == "songScore") return num(session_.score.toDouble());
+    if (path == "songMisses") return num(session_.misses.toDouble());
+    if (path == "songHits") return num(session_.judged().toDouble());
+    if (path == "combo") return num(session_.combo.toDouble());
     if (path == "ratingPercent") return num(session_.accuracy());
     if (path == "ratingName") { out = ratingNameOverride_.empty() ? session_.rank() : ratingNameOverride_; return true; }
     if (path == "ratingFC") { out = ratingFcOverride_.empty() ? session_.clearLabel() : ratingFcOverride_; return true; }
@@ -2056,7 +2055,7 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
     if (path == "startingSong") return flag(songMs_ < 0);
     if (path == "endingSong") return flag(phase_ == Phase::Ending);
     if (path == "generatedMusic") return flag(true);
-    if (path == "songLength") return num(chart_.lengthMs);
+    if (path == "songLength") return num(songEndMs());
     if (path == "curBeat") return num(lastBeat_);
     if (path == "curStep") return num(lastStep_);
     if (path == "curSection") return num(std::max(0, lastSection_));
@@ -2097,7 +2096,7 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
         if (c.rfind(prefix, 0) == 0) return flag(keyboardState(c.substr(prefix.size()), mode));
     }
     if (c == "FlxG.sound.music.pitch") return num(rate_);
-    if (c == "FlxG.sound.music.length") return num(prep_.inst ? a.mixer.lengthSec() * 1000.0 : chart_.lengthMs);
+    if (c == "FlxG.sound.music.length") return num(prep_.inst ? double(prep_.inst->frames()) / Mixer::kRate * 1000.0 : chart_.lengthMs);
     if (c == "FlxG.sound.music.playing") return flag(phase_ == Phase::Playing && songMs_ >= 0);
     if (c == "FlxG.mouse.visible") return flag(false);
     if (c == "FlxG.timeScale" || c == "FlxG.game.timeScale") return num(1);
@@ -2192,9 +2191,9 @@ bool PlayState::setGameProp(std::string_view path, const Value& v) {
     const double d = scene::toNum(v);
     if (path == "health") { session_.setHealth(clampv(d, 0.0, 2.0)); return true; }
     // The score line shows what scripts set (it is drawn from these values).
-    if (path == "songScore") { session_.score = (long long)d; scoreStale_ = true; return true; }
-    if (path == "songMisses") { session_.misses = (long long)d; scoreStale_ = true; return true; }
-    if (path == "combo") { session_.combo = (long long)d; return true; }
+    if (path == "songScore") { session_.score.set(d); scoreStale_ = true; return true; }
+    if (path == "songMisses") { session_.misses = Count::fromDouble(d); scoreStale_ = true; return true; }
+    if (path == "combo") { session_.combo = Count::fromDouble(d); return true; }
     if (path == "songHits") return true;
     if (path == "ratingName") { ratingNameOverride_ = scene::toStr(v); scoreStale_ = true; return true; }
     if (path == "ratingFC") { ratingFcOverride_ = scene::toStr(v); scoreStale_ = true; return true; }
@@ -2210,7 +2209,7 @@ bool PlayState::setGameProp(std::string_view path, const Value& v) {
     if (path == "inCutscene") { inCutscene_ = scene::toBool(v); return true; }
     if (path.rfind("class:", 0) != 0) return false;
     const std::string_view c = path.substr(6);
-    if (c == "FlxG.sound.music.volume") { app().mixer.setTrackVolume(Mixer::kInst, float(d)); return true; }
+    if (c == "FlxG.sound.music.volume") { mixer().setTrackVolume(Mixer::kInst, float(d)); return true; }
     if (c == "FlxG.width" || c == "Lib.current.stage.stageWidth" || c == "Lib.application.window.width" ||
         c == "Application.current.window.width") {
         // Only the game's width matters here; the window keeps its size.
@@ -2282,8 +2281,9 @@ void PlayState::endSong() {
 
 void PlayState::restartSong() {
     App& a = app();
+    if (req_.preview) return;
     if (psych_) {
-        a.mixer.stop();
+        mixer().stop();
         a.change(makePlay(req_));  // fresh scene and scripts, like Psych's resetState
         return;
     }
@@ -2543,9 +2543,8 @@ std::string PlayState::modsDir() { return app().base + "mods/"; }
 
 // JS Engine loopTheSong: back to `ms`, the notes from there on can be played again.
 void PlayState::loopSong(double ms) {
-    App& a = app();
     ms = clampv(ms, 0.0, std::max(0.0, chart_.lengthMs));
-    a.mixer.play(ms / 1000.0);
+    mixer().play(ms / 1000.0);
     songMs_ = ms;
     session_.rewindTo(ms);
     eventIdx_ = size_t(std::lower_bound(chart_.events.begin(), chart_.events.end(), ms,
@@ -2573,7 +2572,7 @@ void PlayState::openCustomSubstate(const std::string& name, bool pauseGame) {
     substate_.active = true;
     substate_.pausesGame = pauseGame;
     if (pauseGame) {
-        app().mixer.pause();
+        mixer().pause();
         for (auto& kv : sounds_)
             if (kv.second.started && !kv.second.paused) PauseMusicStream(kv.second.mus);
     }
@@ -2590,7 +2589,7 @@ void PlayState::closeCustomSubstate() {
     for (const std::string& tag : st.members)
         if (auto it = scene_->objects.find(tag); it != scene_->objects.end()) scene_->remove(it->second);
     if (st.pausesGame && phase_ == Phase::Playing) {
-        app().mixer.resume();
+        mixer().resume();
         for (auto& kv : sounds_)
             if (kv.second.started && !kv.second.paused) ResumeMusicStream(kv.second.mus);
     }
@@ -2607,6 +2606,7 @@ void PlayState::insertToCustomSubstate(const std::string& tag) {
 }
 
 bool PlayState::loadSong(const std::string& name, int difficulty) {
+    if (req_.preview) return false;
     // Another song of the same mod (Psych's loadSong).
     App& a = app();
     const std::string want = songPathName(name.empty() ? entry_->songKey : name);
@@ -2616,7 +2616,7 @@ bool PlayState::loadSong(const std::string& name, int difficulty) {
         r.songId = e.id;
         if (difficulty >= 0 && difficulty < int(e.diffs.size())) r.diff = e.diffs[size_t(difficulty)];
         else if (std::find(e.diffs.begin(), e.diffs.end(), r.diff) == e.diffs.end() && !e.diffs.empty()) r.diff = e.diffs[0];
-        a.mixer.stop();
+        mixer().stop();
         a.change(makePlay(r));
         return true;
     }

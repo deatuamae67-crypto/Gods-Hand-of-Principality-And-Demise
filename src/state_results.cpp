@@ -103,8 +103,8 @@ public:
                   kIvory, Align::Left, 1.5f);
         const float shown = saturate(t * 1.5f);
         gfx::text(FontId::Ui, "SCORE", x, 150, 22, fade(kGold, 0.8f));
-        fitText(FontId::Ui, fmtThousands(shown >= 1 ? r_.score : (long long)(double(r_.score) * shown)), x, 170, 56, 360, WHITE,
-                Align::Left, 2.0f);
+        fitText(FontId::Ui, shown >= 1 || !r_.score.gained.fits64() ? fmtThousands(r_.score) : fmtThousands((long long)(r_.score.toDouble() * shown)),
+                x, 170, 56, 360, WHITE, Align::Left, 2.0f);
         gfx::text(FontId::Ui, "ACCURACY", x + 380, 150, 22, fade(kGold, 0.8f));
         gfx::text(FontId::Ui, TextFormat("%.2f%%", r_.acc * 100.0 * shown), x + 380, 170, 56, WHITE, Align::Left, 2.0f);
         static const char* names[4] = {"SICK!", "GOOD", "BAD", "WACK"};
@@ -119,8 +119,8 @@ public:
         gfx::text(FontId::Ui, "TIMING", x + 380, 326, 30, kIvory, Align::Left, 1.5f);
         gfx::text(FontId::Ui, TextFormat("%+.1f / %.1f ms", mean_, sd_), x + 640, 326, 30, WHITE, Align::Right, 1.5f);
         // Notes hit / notes in the chart; "Both sides" (Options, Note counter) adds the opponent's.
-        long long hit = 0, total = r_.totalNotes;
-        for (long long c : r_.counts) hit += c;
+        Count hit, total = r_.totalNotes;
+        for (const Count& c : r_.counts) hit += c;
         const bool both = app().settings.noteCounter == 2;
         if (both) {
             hit += r_.opponentHits;

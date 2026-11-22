@@ -73,12 +73,18 @@ public:
     void audioCallback(float* out, unsigned frames);  // audio thread
 
     // Hitsounds that follow the notes (issue #22): each one starts on the
-    // very sample of its note in the song, on a voice of its side that the
-    // next note cuts (a sampler set to cut itself). A fast spam becomes a
-    // tone at the rate of its notes (16 a step at 520 BPM: 554.67 Hz)
-    // instead of a louder pile that crackles, and a hitch of the game does
-    // not move them. side: 0 player, 1 opponent.
-    void hitAt(double songSec, int side, float volume);
+    // very sample of its note in the song, so a hitch of the game does not
+    // move them. side: 0 player, 1 opponent; count: the notes hit at once
+    // (a stack), which all sound.
+    // Polyphony (issue #36): every hit plays to its end over the others, and
+    // notes on the same tick add up - louder, as in Psych where each note
+    // plays its own sound. kHitLimiter keeps the sum under a limiter,
+    // kHitUnlimited does not; kHitCut is the sampler of 1.9.0, one voice a
+    // side that the next note cuts (a fast spam becomes a tone at the rate of
+    // its notes: 16 a step at 520 BPM, 554.67 Hz).
+    enum HitMode { kHitLimiter = 0, kHitUnlimited = 1, kHitCut = 2 };
+    void setHitMode(int mode) { hitMode_.store(mode); }
+    void hitAt(double songSec, int side, float volume, double count = 1);
     void clearHits();
     void setHitSound(std::vector<float> mono);  // instead of the game's (or the mod's) hitsound
 
@@ -116,9 +122,11 @@ private:
     void hintStreams(double sec);  // tells streamed tracks where playing goes on
     // The hitsounds of this buffer, from song frame pos0 on (audio thread).
     void mixHits(float* out, unsigned frames, double pos0, double rate);
+    void mixHitsPoly(float* out, unsigned frames, double pos0, double rate, const std::vector<float>& pcm, bool limit);
     struct Grain {
         double at = 0;  // song frame
         float vol = 1;
+        double count = 1;  // notes starting on this frame
     };
     std::mutex hitMtx_;  // guards hits_ and hitPcm_
     std::deque<Grain> hits_[2];
@@ -131,6 +139,15 @@ private:
     };
     HitVoice voice_[2];
     std::vector<Grain> due_[2];  // this buffer's (audio thread)
+    std::atomic<int> hitMode_{kHitLimiter};
+    std::atomic<bool> clearVoices_{false};
+    struct PolyVoice {
+        double pos = 0;  // in the sound
+        float vol = 0;
+    };
+    std::vector<PolyVoice> poly_;  // the hits sounding now (audio thread)
+    std::vector<float> hitBus_;    // this buffer's hits, before the limiter
+    float limEnv_ = 0;             // the limiter's level
     // Mixes `frames` frames from `pos` into out (pos moves on); true when a
     // streamed track has not decoded that part yet (silence, pos kept).
     bool mixTracks(float* out, unsigned frames, double& pos);
@@ -154,6 +171,9 @@ enum class Sfx { Scroll, Confirm, Cancel, Hit, Miss, Mine, Count3, Count2, Count
 void sfxInit();
 void sfxShutdown();
 void sfxPlay(Sfx s, float volume = 1.0f, float pitch = 1.0f);
+// While on, sfxPlay is silent (the chart editor's full preview runs a song
+// that must not be heard over the editor).
+void sfxMute(bool on);
 void sfxSetVolume(float v);
 // The samples of a sound effect (the mod's when it overrides it), mono,
 // 44.1 kHz; sfxVersion() changes whenever the overrides do.

@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "count.hpp"
 
 namespace gh {
 
@@ -102,6 +103,8 @@ inline std::string fmtTime(double sec) {
     std::snprintf(buf, sizeof buf, "%d:%02d", s / 60, s % 60);
     return buf;
 }
+inline std::string fmtThousands(const Count& v) { return v.grouped(); }
+inline std::string fmtThousands(const ScoreCount& v) { return v.grouped(); }
 inline std::string fmtThousands(long long v) {
     bool neg = v < 0;
     unsigned long long u = neg ? (unsigned long long)(-v) : (unsigned long long)v;

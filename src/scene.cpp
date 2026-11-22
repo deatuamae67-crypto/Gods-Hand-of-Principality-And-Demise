@@ -626,8 +626,39 @@ void Character::playAnim(const std::string& n, bool force, bool rev, int startFr
     }
 }
 
+void Character::sing(const std::string& anim) {
+    holdTimer = 0;
+    if (builtin) {
+        playAnim(anim, true);
+        return;
+    }
+    const Anim* a = curAnim();
+    const double frameSec = 1.0 / std::max(1.0, a ? a->fps : 24.0);
+    const double since = now - lastAnimAt;
+    const bool singing = lastAnim.rfind("sing", 0) == 0 && !specialAnim;
+    if (singing && anim == lastAnim && !finished && since < 2 * frameSec) {
+        pendingSing.clear();  // the same pose: let it play on
+        return;
+    }
+    if (singing && anim != lastAnim && since < frameSec) {
+        pendingSing = anim;  // another direction too soon: after this frame
+        return;
+    }
+    pendingSing.clear();
+    playAnim(anim, true);
+}
+
 void Character::updateChar(double dt, double stepMs, bool playerHolding) {
     now += dt;
+    if (!pendingSing.empty()) {
+        const Anim* a = curAnim();
+        if (specialAnim || lastAnim.rfind("sing", 0) != 0) pendingSing.clear();  // a script or an event took over
+        else if (now - lastAnimAt >= 1.0 / std::max(1.0, a ? a->fps : 24.0)) {
+            playAnim(pendingSing, true);
+            pendingSing.clear();
+            holdTimer = 0;
+        }
+    }
     const std::string an = builtin ? lastAnim : curAnimName();
     const bool animDone = builtin ? (now - lastAnimAt > 0.4) : finished;
     if (heyTimer > 0) {
@@ -646,7 +677,10 @@ void Character::updateChar(double dt, double stepMs, bool playerHolding) {
     const bool singing = an.rfind("sing", 0) == 0;
     if (singing) holdTimer += dt;
     else if (isPlayer) holdTimer = 0;
-    const double limit = stepMs * 0.0011 * singDuration;
+    // Psych's stepCrochet * 0.0011 * singDuration, but never under 0.2 s: past
+    // ~330 BPM a pose would flick back to idle between notes (JS Engine
+    // lengthens it from 500 BPM for the same reason).
+    const double limit = std::max(stepMs * 0.0011 * singDuration, 0.2);
     if (singing && holdTimer >= limit) {
         const bool missAnim = an.size() >= 4 && an.compare(an.size() - 4, 4, "miss") == 0;
         if (!isPlayer || (!playerHolding && !missAnim)) {

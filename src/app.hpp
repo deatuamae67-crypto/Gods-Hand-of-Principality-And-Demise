@@ -57,6 +57,12 @@ struct PlayRequest {
     bool render = false;     // Render Mode (main menu): the song plays by itself and is recorded to a video
     bool autoChart = false;  // AutoChart (main menu): a chart made from the song's audio, whatever charts it has
     std::string replayPath;  // watch this replay instead of playing
+    // The chart editor's full preview (issue #36): the song plays itself in a
+    // window of the editor, from previewFromMs on, with the editor's chart
+    // (chartFile) and its clock; no sound, no input, no other screen.
+    bool preview = false;
+    std::string chartFile;
+    double previewFromMs = 0;
     std::vector<std::string> storyQueue;  // songs still to play after this one
     long long storyScore = 0;
     long long storyMisses = 0;
@@ -67,12 +73,12 @@ struct PlayRequest {
 struct ResultData {
     PlayRequest req;
     std::string title, diff;
-    long long score = 0;
+    ScoreCount score;
     double acc = 0;
-    long long misses = 0, maxCombo = 0;
-    std::array<long long, kRatingCount> counts{};
-    long long totalNotes = 0;  // player notes in the chart, stacked ones included
-    long long opponentHits = 0, opponentNotes = 0;  // the opponent's side, for the "both sides" note count
+    Count misses, maxCombo;
+    std::array<Count, kRatingCount> counts{};
+    Count totalNotes;  // player notes in the chart, stacked ones included
+    Count opponentHits, opponentNotes;  // the opponent's side, for the "both sides" note count
     std::string rank, clear;
     std::vector<Session::HitError> errors;
     double lengthMs = 1;
@@ -92,6 +98,7 @@ public:
     bool listSongs = false;
     bool checkCharts = false;  // --check-charts with --list-songs
     std::string checkScriptsDir;  // --check-scripts <folder>
+    std::string convertIn, convertOut;  // --convert <chart> <out.ghn|.ghc|.bin>
     std::string makeIconDir;      // --make-icon <folder>: the icon's pictures (tools/make_icons.py)
     bool autoChartCli = false;    // --autochart: the --autoplay song played with an AutoChart
     double frameBudget() const;   // seconds a frame may take (frame limit or the screen's refresh)
@@ -188,6 +195,12 @@ private:
     // processor use, hardware), sampled twice a second.
     void drawFpsPanel();
     double statsAt_ = -10, cpuAt_ = 0, cpuSecs_ = 0;
+    float fpsPanelW_ = 0, fpsPanelH_ = 0;  // the FPS panel's size (it fits its lines)
+    RenderTexture2D fpsPanelRt_{};         // the panel's picture, drawn ten times a second
+    double fpsPanelAt_ = -10;
+    float fpsPanelScale_ = 0;
+    int fpsPanelFlags_ = -1;
+    void refreshFpsPanel();
     float cpuUse_ = 0;
     unsigned long long memNow_ = 0, memPeak_ = 0, sysUsed_ = 0;
     double gpuBusy_ = -1;  // the graphics card's use (-1: the system does not say)

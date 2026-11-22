@@ -21,6 +21,7 @@
 #include "keys.hpp"
 #include "session.hpp"
 #include "spectrum.hpp"
+#include "miniz.h"
 
 using namespace gh;
 
@@ -192,7 +193,7 @@ static void testPsychV1AndExtraKeys() {
     bn.time = 500;
     bn.lane = 0;
     bn.side = 1;
-    bn.stack = kMaxStack;
+    bn.stack = 65535;
     big.notes.push_back(bn);
     bn.side = 0;
     big.notes.push_back(bn);
@@ -203,7 +204,7 @@ static void testPsychV1AndExtraKeys() {
     s.update(600);
     const long long expect = 65535LL * 100000LL;
     CHECK(s.judged() == expect && s.combo == expect && s.maxCombo == expect);
-    CHECK(s.score == expect * ratingInfo(kDivine).score);
+    CHECK(s.score.satLL() == expect * ratingInfo(kDivine).score && !s.score.negative());
     CHECK(s.opponentHits == expect);
     CHECK(s.totalPlayerNotes == 65535 && s.totalOpponentNotes == 65535);
     CHECK(fmtThousands(expect) == "6,553,500,000");
@@ -211,6 +212,81 @@ static void testPsychV1AndExtraKeys() {
 
 // Psych Extra Keys up to 18 keys (mania 17), Denpa's "options" mania and
 // Leather Engine's own key count for each side.
+
+// A .ghc file as God's Hand 1.9.0 to 2.0.0 wrote them (version 2: noteData
+// in one byte, 256 counts), to check that they still load.
+static bool writeGhcV2(const std::string& path, const std::string& skeleton, const StreamedNotes& sn) {
+    auto u32 = [](std::string& o, uint32_t v) { for (int i = 0; i < 4; ++i) o += char(v >> (8 * i) & 0xFF); };
+    auto u64 = [](std::string& o, uint64_t v) { for (int i = 0; i < 8; ++i) o += char(v >> (8 * i) & 0xFF); };
+    auto var = [](std::string& o, uint64_t v) {
+        for (; v >= 0x80; v >>= 7) o += char(uint8_t(v) | 0x80);
+        o += char(uint8_t(v));
+    };
+    auto zig = [](int64_t v) { return (uint64_t(v) << 1) ^ uint64_t(v >> 63); };
+    auto deflate = [](const std::string& raw, std::string& out) {
+        mz_ulong n = mz_compressBound(mz_ulong(raw.size()));
+        out.resize(size_t(n));
+        const bool ok = mz_compress2(reinterpret_cast<unsigned char*>(out.data()), &n,
+                                     reinterpret_cast<const unsigned char*>(raw.data()), mz_ulong(raw.size()), 3) == MZ_OK;
+        out.resize(size_t(n));
+        return ok;
+    };
+    const size_t n = sn.notes.size();
+    if (n > (1u << 18)) return false;  // one block
+    std::string t, l, d, st, y;
+    int64_t prevT = 0, prevGap = 0;
+    for (const StreamedNote& x : sn.notes) {
+        if (x.noteData() > 255) return false;
+        const int64_t ns = std::llround(x.time * 1e6), gap = ns - prevT;
+        var(t, zig(gap - prevGap));
+        prevGap = gap;
+        prevT = ns;
+        var(l, zig(std::llround(double(x.length) * 1000.0)));
+        d += char(x.noteData());
+        st += char(x.stack);
+        var(y, x.type & (StreamedNote::kAltBit | StreamedNote::kTypeMask));
+    }
+    std::string block;
+    for (const std::string* c : {&t, &l, &d, &st, &y}) u32(block, uint32_t(c->size()));
+    for (const std::string* c : {&t, &l, &d, &st, &y}) block += *c;
+    std::string head, skel, ranges, rangesPacked, blockPacked;
+    uint32_t prev = 0;
+    for (uint32_t r : sn.rangeStart) {
+        var(ranges, r - prev);
+        prev = r;
+    }
+    if (!deflate(skeleton, skel) || !deflate(ranges, rangesPacked) || !deflate(block, blockPacked)) return false;
+    u32(head, 0x42434847u);
+    u32(head, 2);
+    u64(head, n);
+    u64(head, sn.rawCount);
+    u32(head, uint32_t(sn.maxData));
+    u32(head, 1u << 18);
+    u32(head, n ? 1 : 0);
+    u32(head, uint32_t(sn.types.size()));
+    for (int i = 0; i < 256; ++i) u64(head, sn.dataCount[size_t(i)]);
+    for (const std::string& ty : sn.types) {
+        u32(head, uint32_t(ty.size()));
+        head += ty;
+    }
+    u64(head, skeleton.size());
+    u64(head, skel.size());
+    head += skel;
+    u64(head, sn.rangeStart.size());
+    u64(head, ranges.size());
+    u64(head, rangesPacked.size());
+    head += rangesPacked;
+    if (n) {
+        u32(head, uint32_t(block.size()));
+        u32(head, uint32_t(blockPacked.size()));
+        head += blockPacked;
+    }
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    const bool ok = std::fwrite(head.data(), 1, head.size(), f) == head.size();
+    return std::fclose(f) == 0 && ok;
+}
+
 static void testExtraKeys18() {
     // Notes on every value 0-35, in sections on both sides.
     auto ekChart = [](const std::string& fields, int values, bool alsoOpponentSection = true) {
@@ -292,7 +368,7 @@ static void testExtraKeys18() {
     s.init(c, bot);
     CHECK(s.keys() == 18);
     s.update(3000);
-    CHECK(s.misses == 0 && s.judged() == (long long)s.totalPlayerNotes && s.accuracy() > 0.999);
+    CHECK(s.misses == 0 && s.judged() == s.totalPlayerNotes && s.accuracy() > 0.999);
     // By hand: lane 17 is the eighteenth key.
     s.init(c, SessionConfig{});
     s.press(17, 1500);
@@ -314,9 +390,11 @@ static void testExtraKeys18() {
         CHECK(ek::kLaneWidth[k] * float(k) <= 640.0f);  // a side fits on half the screen
     }
     // Past 18 keys: directions 0-4, a centre arrow in the middle of odd counts,
-    // and a side still fits on half the screen at 100 keys.
+    // and a side still fits on half the screen at 1024 keys.
     for (int k = ek::kTableKeys + 1; k <= kMaxKeys; ++k) {
-        for (int a = 0; a < k; ++a) CHECK(ek::manyDir(k, a) >= 0 && ek::manyDir(k, a) <= 4);
+        bool dirs = true;
+        for (int a = 0; a < k; ++a) dirs = dirs && ek::manyDir(k, a) >= 0 && ek::manyDir(k, a) <= 4;
+        CHECK(dirs);
         CHECK((ek::manyDir(k, k / 2) == 4) == (k % 2 == 1));
         CHECK(ek::manyLaneWidth(k) * float(k) <= 640.0f && ek::manyLaneWidth(k) <= ek::kLaneWidth[ek::kTableKeys]);
     }
@@ -330,7 +408,84 @@ static void testExtraKeys18() {
     CHECK(parseChart(ekChart(R"("mania": 99)", 200), "Insane", c, err) && c.keys == 100);
     CHECK(c.notes.size() == 1200 && c.playerNotes == 600 && c.opponentNotes == 600);
     CHECK(parseChart(ekChart(R"("keyCount": 50)", 100), "Insane", c, err) && c.keys == 50 && c.notes.size() == 600);
-    CHECK(parseChart(ekChart(R"("keyCount": 101)", 8), "Insane", c, err) && c.keys == 4);  // past 100: ignored
+    // Up to 1024 keys a side (issue #36): "mania" 1023 or "keyCount" 1024, values up to 2047.
+    CHECK(parseChart(ekChart(R"("mania": 1023)", 2048), "Insane", c, err) && c.keys == 1024);
+    CHECK(c.notes.size() == 12288 && c.playerNotes == 6144 && c.opponentNotes == 6144);
+    {
+        static bool lanes[2][1024];
+        for (auto& side : lanes) std::fill(std::begin(side), std::end(side), false);
+        for (const Note& n : c.notes) lanes[n.side][n.lane] = true;
+        int used = 0;
+        for (auto& side : lanes)
+            for (bool b : side) used += b;
+        CHECK(used == 2048);  // every lane of both sides
+    }
+    CHECK(parseChart(ekChart(R"("keyCount": 1024)", 2048), "Insane", c, err) && c.keys == 1024 && c.notes.size() == 12288);
+    CHECK(parseChart(ekChart(R"("keyCount": 513)", 8), "Insane", c, err) && c.keys == 513);
+    CHECK(parseChart(ekChart(R"("keyCount": 1025)", 8), "Insane", c, err) && c.keys == 4);  // past 1024: ignored
+    // 1024 keys through the streaming reader and a binary chart (version 3:
+    // values past 255 as varints, beside the alt flag and the note types).
+    {
+        std::string j = ekChart(R"("mania": 1023)", 2048);
+        const size_t at = j.find("[7000,700,0]");
+        CHECK(at != std::string::npos);
+        if (at != std::string::npos) j.replace(at, 12, "[7000,700,0,true]");  // an alt note on value 700
+        const size_t at2 = j.find("[19000,1900,0]");
+        CHECK(at2 != std::string::npos);
+        if (at2 != std::string::npos) j.replace(at2, 14, R"([19000,1900,0,"Hurt Note"])");  // a typed note on 1900
+        const std::string dir = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+        const std::string jpath = dir + "/gh_1024k.json", bpath = dir + "/gh_1024k.ghc";
+        if (FILE* f = std::fopen(jpath.c_str(), "wb")) {
+            std::fwrite(j.data(), 1, j.size(), f);
+            std::fclose(f);
+        }
+        std::string skel, err2;
+        StreamedNotes sn;
+        CHECK(streamChartSkeleton(jpath, skel, sn, err2, 0));
+        CHECK(sn.maxData == 2047 && sn.dataCount[700] == 6 && sn.dataCount[2047] == 6);
+        int alts = 0, hurts = 0;
+        for (const StreamedNote& n : sn.notes) {
+            alts += n.alt() && n.noteData() == 700;
+            hurts += n.typeIdx() != 0 && n.noteData() == 1900 && sn.types[n.typeIdx() - 1] == "Hurt Note";
+        }
+        CHECK(alts == 1 && hurts == 1);
+        Chart a;
+        CHECK(parseChartStreamed(skel, sn, "Insane", a, err2) && a.keys == 1024 && a.notes.size() == 12288);
+        CHECK(writeBinaryChart(bpath, skel, sn, 3, err2));
+        std::string skel2;
+        StreamedNotes back;
+        CHECK(readBinaryChart(bpath, skel2, back, err2));
+        bool same = back.notes.size() == sn.notes.size() && back.dataCount == sn.dataCount && back.maxData == sn.maxData;
+        for (size_t i = 0; same && i < sn.notes.size(); ++i)
+            same = back.notes[i].noteData() == sn.notes[i].noteData() && back.notes[i].type == sn.notes[i].type &&
+                   back.notes[i].stack == sn.notes[i].stack;
+        CHECK(same);
+        Chart b;
+        CHECK(parseChartStreamed(skel2, back, "Insane", b, err2) && b.keys == 1024 && b.notes.size() == 12288);
+        std::remove(jpath.c_str());
+        std::remove(bpath.c_str());
+    }
+    // A version 2 file (1.9.0 to 2.0.0) still loads, note for note.
+    {
+        const std::string j = ekChart(R"("mania": 99)", 200);
+        const std::string dir = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+        const std::string jpath = dir + "/gh_v2.json", bpath = dir + "/gh_v2.ghc";
+        if (FILE* f = std::fopen(jpath.c_str(), "wb")) {
+            std::fwrite(j.data(), 1, j.size(), f);
+            std::fclose(f);
+        }
+        std::string skel, err2, skel2;
+        StreamedNotes sn, back;
+        CHECK(streamChartSkeleton(jpath, skel, sn, err2, 0) && writeGhcV2(bpath, skel, sn));
+        CHECK(readBinaryChart(bpath, skel2, back, err2) && skel2 == skel);
+        bool same = back.notes.size() == sn.notes.size() && back.dataCount == sn.dataCount && back.maxData == sn.maxData;
+        for (size_t i = 0; same && i < sn.notes.size(); ++i)
+            same = back.notes[i].noteData() == sn.notes[i].noteData() && back.notes[i].type == sn.notes[i].type &&
+                   back.notes[i].time == sn.notes[i].time;
+        CHECK(same);
+        std::remove(jpath.c_str());
+        std::remove(bpath.c_str());
+    }
     // The same through the streaming reader and a binary chart (version 2:
     // values past 63, and the alt flag kept apart from them).
     {
@@ -434,6 +589,80 @@ static Chart simpleChart() {
     return c;
 }
 
+// Note counts of any size (issue #36): 256-bit, exact, never wrapping around.
+static void testCounts() {
+    Count a(UINT64_MAX);
+    a += Count(1);
+    CHECK(!a.fits64() && a.w[1] == 1 && a.w[0] == 0);
+    CHECK(a.str() == "18446744073709551616" && a.grouped() == "18,446,744,073,709,551,616");
+    Count top;
+    const char* kTop = "115792089237316195423570985008687907853269984665640564039457584007913129639935";  // 2^256 - 1
+    CHECK(Count::parse(kTop, top) && top.isMax() && top.str() == kTop);
+    CHECK(!Count::parse("115792089237316195423570985008687907853269984665640564039457584007913129639936", top));  // 2^256
+    CHECK(!Count::parse("12a", top) && !Count::parse("", top));
+    CHECK(Count::max() + Count(1) == Count::max() && Count::max().times(2) == Count::max());  // saturates
+    CHECK((Count(5) - Count(7)).isZero() && Count(7) - Count(5) == Count(2));
+    CHECK(Count(3560023825730ull).times(350).str() == "1246008339005500");
+    Count p128;
+    p128.w[2] = 1;  // 2^128
+    CHECK(p128.str() == "340282366920938463463374607431768211456");
+    CHECK((p128 - Count(1)).str() == "340282366920938463463374607431768211455");
+    CHECK(Count(10) < p128 && p128 > Count(UINT64_MAX) && Count(4) <= Count(4));
+    CHECK(near(Count(1000).toDouble(), 1000.0) && near(p128.toDouble() / 3.4028236692093846e38, 1.0));
+    CHECK(Count::fromDouble(1e30).str().size() == 31 && Count::fromDouble(-5).isZero());
+    // Variable-length numbers of any size: 2^256 - 1 takes 37 bytes; 2^256 is refused, not cut.
+    std::string v;
+    Count::max().appendVarint(v);
+    CHECK(v.size() == 37);
+    const unsigned char* q = reinterpret_cast<const unsigned char*>(v.data());
+    Count back;
+    CHECK(Count::readVarint(q, q + v.size(), back) == Count::Read::Ok && back.isMax() && q == reinterpret_cast<const unsigned char*>(v.data()) + v.size());
+    std::string over(36, char(0x80));
+    over += char(0x10);  // bit 256
+    q = reinterpret_cast<const unsigned char*>(over.data());
+    CHECK(Count::readVarint(q, q + over.size(), back) == Count::Read::TooLarge);
+    std::string cut = v.substr(0, 10);
+    q = reinterpret_cast<const unsigned char*>(cut.data());
+    CHECK(Count::readVarint(q, q + cut.size(), back) == Count::Read::Truncated);
+    std::string small;
+    Count(300).appendVarint(small);
+    CHECK(small == std::string("\xAC\x02", 2));  // LEB128, as iutk and protobuf write it
+    // A score below zero.
+    ScoreCount sc;
+    sc.add(5);
+    sc.sub(15);
+    CHECK(sc.negative() && sc.str() == "-10" && sc.satLL() == -10);
+    sc.set(1234.0);
+    CHECK(!sc.negative() && sc.grouped() == "1,234");
+
+    // A note that counts for more notes than fit in it, and stacks adding up past 32 bits.
+    Chart c;
+    c.keys = 4;
+    Note n;
+    n.time = 100;
+    n.side = 1;
+    c.notes.push_back(n);
+    c.setCount(c.notes.back(), Count(5000000000ull));
+    c.notes.push_back(n);  // stacked on it: one more
+    n.time = 400;
+    c.notes.push_back(n);
+    c.setCount(c.notes.back(), p128);
+    c.finalize(120);
+    CHECK(c.notes.size() == 2 && (c.notes[0].flags & kFlagBigCount) && c.countOf(c.notes[0]) == Count(5000000001ull));
+    CHECK(c.countOf(c.notes[1]) == p128 && c.playerNotes == p128 + Count(5000000001ull));
+    Session s;
+    SessionConfig bot;
+    bot.botplay = true;
+    s.init(c, bot);
+    for (double t = 0; t <= 1000; t += 16) s.update(t);
+    CHECK(s.totalPlayerNotes == c.playerNotes && s.judged() == c.playerNotes && s.counts[kDivine] == c.playerNotes);
+    CHECK(s.score.gained == c.playerNotes.times(350) && s.combo == c.playerNotes && s.misses.isZero());
+    // Missed, they count as misses in full.
+    s.init(c, SessionConfig{});
+    s.update(2000);
+    CHECK(s.misses == c.playerNotes && s.score.negative() && s.score.magnitude() == c.playerNotes.times(10));
+}
+
 static void testSession() {
     Chart c = simpleChart();
     Session s;
@@ -509,6 +738,15 @@ static void testSession() {
     CHECK(s.counts[kDivine] + s.counts[kGrace] + s.counts[kMortal] + s.counts[kSinful] == 0);
     s.update(1100);
     CHECK(s.misses == 1);
+
+    // The chart editor's preview starting part-way (issue #36): the notes
+    // before that point pass by, neither hit nor missed, and botplay plays on.
+    s.init(c, bot);
+    s.skipTo(1800);
+    for (double t = 1800; t <= 8000; t += 16.6) s.update(t);
+    CHECK(s.misses == 0);
+    CHECK(s.counts[kDivine] == 3);  // the player's notes at 1000 and 1500 were before it
+    CHECK(s.allResolved());
 }
 
 static void testComposer(bool audio, const char* wavDir) {
@@ -536,8 +774,8 @@ static void testComposer(bool audio, const char* wavDir) {
             s.init(c, bot);
             for (double t = -1000; t <= c.lengthMs + 1000; t += 8.0) s.update(t);
             CHECK(s.misses == 0 && s.allResolved());
-            std::printf("  %-13s %-9s notes P%5zu O%5zu  len %.1fs\n", def.title.c_str(), d.c_str(), c.playerNotes,
-                        c.opponentNotes, c.lengthMs / 1000.0);
+            std::printf("  %-13s %-9s notes P%5s O%5s  len %.1fs\n", def.title.c_str(), d.c_str(), c.playerNotes.str().c_str(),
+                        c.opponentNotes.str().c_str(), c.lengthMs / 1000.0);
         }
         if (audio) {
             const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -588,8 +826,7 @@ static int printKeys(int argc, char** argv, int first) {
             std::printf("FAILED  %s: %s\n", argv[i], err.c_str());
             continue;
         }
-        std::printf("%dK  P%llu O%llu  %s\n", c.keys, (unsigned long long)c.playerNotes, (unsigned long long)c.opponentNotes,
-                    argv[i]);
+        std::printf("%dK  P%s O%s  %s\n", c.keys, c.playerNotes.str().c_str(), c.opponentNotes.str().c_str(), argv[i]);
     }
     return 0;
 }
@@ -612,8 +849,9 @@ static int benchCharts(int argc, char** argv, int first) {
         auto t2 = std::chrono::steady_clock::now();
         const double pm = std::chrono::duration<double, std::milli>(t1 - t0).count();
         const double sm = std::chrono::duration<double, std::milli>(t2 - t1).count();
-        std::printf("%-48s %7.1f MB  %dK  raw %10llu  notes P%8zu O%8zu  bpm %.0f  len %6.1fs  parse %6.0f ms  sim %6.0f ms  %s\n",
-                    argv[i], sizeMb, c.keys, (unsigned long long)c.rawNoteCount, c.playerNotes, c.opponentNotes, c.bpmAt(0), c.lengthMs / 1000.0, pm, sm,
+        std::printf("%-48s %7.1f MB  %dK  raw %10s  notes P%8s O%8s  bpm %.0f  len %6.1fs  parse %6.0f ms  sim %6.0f ms  %s\n",
+                    argv[i], sizeMb, c.keys, c.rawNoteCount.str().c_str(), c.playerNotes.str().c_str(), c.opponentNotes.str().c_str(),
+                    c.bpmAt(0), c.lengthMs / 1000.0, pm, sm,
                     (s.misses == 0 && s.allResolved()) ? "ok" : "BOT MISSED");
         if (s.misses != 0) ++bad;
     }
@@ -670,6 +908,7 @@ int main(int argc, char** argv) {
     testExtraKeys18();
     testSpectrum();
     testVSlice();
+    testCounts();
     testSession();
     runPsychTests();
     runScanTests();

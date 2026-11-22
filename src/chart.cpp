@@ -83,6 +83,19 @@ int Chart::sectionAt(double ms) const {
     return int(lo);
 }
 
+void Chart::setCount(Note& n, const Count& c) {
+    if (c.fits64() && c.w[0] <= kMaxStack) {
+        n.flags = uint8_t(n.flags & ~kFlagBigCount);
+        n.setCount32(uint32_t(c.w[0] ? c.w[0] : 1));
+    } else if ((n.flags & kFlagBigCount) && n.count32() < bigCounts.size()) {
+        bigCounts[n.count32()] = c;  // its own place again
+    } else {
+        n.flags = uint8_t(n.flags | kFlagBigCount);
+        n.setCount32(uint32_t(bigCounts.size()));
+        bigCounts.push_back(c);
+    }
+}
+
 void Chart::finalize(double baseBpm) {
     if (!(baseBpm > 0)) baseBpm = 120;
     if (tempo.empty()) tempo.push_back({0, baseBpm, 0});
@@ -125,12 +138,11 @@ void Chart::finalize(double baseBpm) {
     clean.reserve(notes.size());
     for (const Note& n : notes) {
         long long& lk = lastKept[size_t(n.side * keys + n.lane)];
-        if (lk >= 0 && std::fabs(clean[size_t(lk)].time - n.time) < 1.0 &&
-            uint32_t(clean[size_t(lk)].stack) + n.stack <= kMaxStack) {
+        if (lk >= 0 && std::fabs(clean[size_t(lk)].time - n.time) < 1.0) {
             Note& k = clean[size_t(lk)];
             k.length = std::max(k.length, n.length);
             if (n.kind == kNormal) k.kind = kNormal;
-            k.stack = uint16_t(k.stack + n.stack);
+            setCount(k, countOf(k) + countOf(n));
             continue;
         }
         lk = (long long)clean.size();
@@ -139,10 +151,10 @@ void Chart::finalize(double baseBpm) {
     notes.swap(clean);
 
     lengthMs = 0;
-    playerNotes = opponentNotes = 0;
+    playerNotes = opponentNotes = Count();
     for (const Note& n : notes) {
-        lengthMs = std::max(lengthMs, n.time + std::max(0.0, n.length));
-        (n.side ? playerNotes : opponentNotes) += n.stack;
+        lengthMs = std::max(lengthMs, n.time + std::max(0.0, double(n.length)));
+        (n.side ? playerNotes : opponentNotes) += countOf(n);
     }
 
     std::stable_sort(focus.begin(), focus.end(), [](const FocusPoint& a, const FocusPoint& b) { return a.timeMs < b.timeMs; });
@@ -347,7 +359,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
         Note n;
         n.time = t;
         n.length = (std::isfinite(l) && l >= stepMs * 0.999) ? l : 0.0;
-        n.lane = uint8_t(di % keys);
+        n.lane = uint16_t(di % keys);
         n.stack = std::max<uint16_t>(1, stack);
         if (v1) n.side = di < keys ? 1 : 0;
         else n.side = ((di < keys) ? must : !must) ? 1 : 0;
@@ -355,7 +367,7 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
             const bool focusPlayer = must;
             const bool player = di < sideKeys[focusPlayer ? 1 : 0] ? focusPlayer : !focusPlayer;
             n.side = player ? 1 : 0;
-            n.lane = uint8_t(di % sideKeys[n.side]);
+            n.lane = uint16_t(di % sideKeys[n.side]);
         }
         if (hasTypeName) {
             applyNoteType(typeName, n, out);
@@ -641,7 +653,7 @@ static bool parsePulseForge(const json::Document& doc, Chart& out, std::string& 
         Note n;
         n.time = t;
         n.length = std::isfinite(len) && len > 0 ? len : 0;
-        n.lane = uint8_t(lane % out.keys);
+        n.lane = uint16_t(lane % out.keys);
         n.side = owner == 0 ? 1 : 0;
         n.stack = std::max<uint16_t>(1, stack);
         if (owner == 2) n.flags |= kFlagGF;

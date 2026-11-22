@@ -15,12 +15,14 @@
 #include <fstream>
 #include <future>
 #include <map>
+#include <memory>
 #include <random>
 
 #include "app.hpp"
 #include "audio_decode.hpp"
 #include "chart_binary.hpp"
 #include "chart_stream.hpp"
+#include "count_charts.hpp"
 #include "flp_import.hpp"
 #include "common.hpp"
 #include "editor_ui.hpp"
@@ -28,6 +30,7 @@
 #include "gfx.hpp"
 #include "raylib.h"
 #include "scene.hpp"
+#include "state_play.hpp"
 
 namespace gh {
 
@@ -47,8 +50,12 @@ const char* kBaseNoteTypes[] = {"", "Alt Animation", "Hurt Note", "GF Sing", "No
 const int kSnaps[] = {4, 8, 12, 16, 24, 32, 48, 64, 96, 192};
 const std::string kNoType;
 
-// Song tab, "Save as": what a save writes (issue #22).
-enum SaveFormat { kSaveJson = 0, kSaveGhc = 1, kSaveBoth = 2 };
+// Song tab, "Save as": what a save writes (issue #22); a count chart (.ghn,
+// issue #36) holds each stack as one note with its count.
+enum SaveFormat { kSaveJson = 0, kSaveGhc = 1, kSaveBoth = 2, kSaveGhn = 3 };
+// A JSON chart (and a .ghc) lists a stack's notes one by one: past this many
+// notes, the chart is saved as a count chart instead.
+constexpr uint64_t kMaxListedNotes = uint64_t(1) << 31;
 
 // Built-in events (Psych Engine and JS Engine), with what their values do.
 struct EventInfo {
@@ -98,7 +105,7 @@ struct EdNote {
     double len = 0;
     uint32_t stack = 1;  // notes of the file stacked here (written back that many times)
     uint16_t type = 0;   // the editor's note type list (0: a normal note)
-    uint8_t col = 0;     // 0..K-1 opponent, K..2K-1 player
+    uint16_t col = 0;    // 0..K-1 opponent, K..2K-1 player
     bool sel = false;
 };
 
@@ -117,7 +124,17 @@ bool writeWav(const std::string& path, const Pcm& p) { return writeWavFile(path,
 
 class ChartEditorState : public State {
 public:
-    ChartEditorState(std::string songId, std::string diff) : songId_(std::move(songId)), diff_(std::move(diff)) {}
+    ChartEditorState(std::string songId, std::string diff) : songId_(std::move(songId)), diff_(std::move(diff)) {
+        const Settings& s = app().settings;
+        previewMode_ = s.editorPreview;
+        previewDown_ = s.editorPreviewDown;
+        previewRect_ = {s.editorPreviewBox[0], s.editorPreviewBox[1], s.editorPreviewBox[2], s.editorPreviewBox[3]};
+        clampPreview();
+    }
+    ~ChartEditorState() override {
+        full_.reset();
+        if (fullRt_.id && IsWindowReady()) UnloadRenderTexture(fullRt_);
+    }
 
     void enter() override {
         App& a = app();
@@ -178,7 +195,6 @@ public:
             a.quit = true;
             return;
         }
-        (void)dt;
         // SNIFF in the editor: an FL Studio project or score dropped on the window.
         if (IsFileDropped()) {
             FilePathList dropped = LoadDroppedFiles();
@@ -206,15 +222,36 @@ public:
             cur_ = t;
             if (a.mixer.ended() || cur_ > songLength() + 2000) stopPlay();
         }
+        updateFullPreview(dt);
         if (typing_) {
             if (in.pressed(KEY_ESCAPE)) ui_.focus.clear();
             return;  // keys go to the text field (the panel still runs in draw)
         }
         if (in.pressed(KEY_SPACE)) togglePlay();
 
-        // Navigation (the wheel scrolls the grid unless it is over the panel)
+        // Navigation (the wheel scrolls the grid unless it is over the panel;
+        // with CTRL, a chart too wide for the screen sideways)
         const bool overPanel = ui_.mouse.x >= kPanelX - 10;
-        const float wheel = overPanel ? 0.0f : in.wheel();
+        float wheel = overPanel ? 0.0f : in.wheel();
+        if (wheel != 0 && ctrl && wideGrid()) {
+            scrollColumns(-wheel * 4.0f);
+            wheel = 0;
+        }
+        {
+            const Rectangle bar = laneBar();
+            const bool onBar = wideGrid() && ui_.mouse.y >= bar.y - 6 && ui_.mouse.y <= bar.y + bar.height + 4 &&
+                               ui_.mouse.x >= bar.x && ui_.mouse.x <= bar.x + bar.width;
+            if (onBar && ui_.click) {
+                laneDrag_ = true;
+                ui_.click = false;
+            }
+            if (laneDrag_ && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) laneDrag_ = false;
+            if (laneDrag_) {
+                const float total = float(2 * keys_), shown = (viewR() - viewL()) / laneW();
+                colScroll_ = (ui_.mouse.x - bar.x) / bar.width * total - shown * 0.5f;
+            }
+            scrollColumns(0);  // keeps it in range (the key count may have changed)
+        }
         if (wheel != 0 || in.pressed(KEY_UP) || in.pressed(KEY_DOWN) || in.pressed(KEY_W) || in.pressed(KEY_S)) {
             if (!(ctrl && in.pressed(KEY_S))) {
                 if (playing_) stopPlay();
@@ -305,9 +342,22 @@ public:
         }
         drawGrid();
         drawInfo();
-        if (preview_) drawPreview();
+        // The preview window takes the clicks on it (moving, resizing) from
+        // the panel and the grid under it, and is drawn over them.
+        const bool onPreview = previewMode_ != kPreviewOff && previewMouse();
+        const bool click = ui_.click, rclick = ui_.rclick;
+        const float wheel = ui_.wheel;
+        if (onPreview) {
+            ui_.click = ui_.rclick = false;
+            ui_.wheel = 0;
+        }
         drawPanel();  // also handles the panel's clicks (immediate mode)
-        if (!ui_.used && !typing_) handleGridMouse();
+        if (previewMode_ != kPreviewOff) drawPreviewWindow();
+        ui_.overlays();  // the panel's open lists, over everything
+        if (!ui_.used && !typing_ && !onPreview) handleGridMouse();
+        ui_.click = click;
+        ui_.rclick = rclick;
+        ui_.wheel = wheel;
         if (a.now - flashAt_ < 3.0)
             gfx::text(FontId::Ui, flash_, kGridCenter, gfx::H - 40, 24,
                       gfx::fade(gfx::rgb(0xFFE08A), float(std::min(1.0, 3.0 - (a.now - flashAt_)))), Align::Center, 1.5f);
@@ -368,14 +418,18 @@ private:
         std::vector<uint16_t> ids(c.noteTypes.size());
         for (size_t i = 0; i < ids.size(); ++i) ids[i] = typeId(c.noteTypes[i]);
         const uint16_t hurt = typeId("Hurt Note");
+        countsCut_ = 0;
         for (const Note& n : c.notes) {
             EdNote e;
             e.t = n.time;
-            e.col = uint8_t(n.side ? keys_ + n.lane : n.lane);
+            e.col = uint16_t(n.side ? keys_ + n.lane : n.lane);
             e.len = n.length;
             e.type = n.type < ids.size() ? ids[n.type] : 0;
             if (e.type == 0 && n.kind == kMine) e.type = hurt;
-            e.stack = uint32_t(std::max<int>(1, n.stack));
+            // A stack of the editor holds up to 4,294,967,295 notes.
+            const Count k = c.countOf(n);
+            if (!k.fits64() || k.w[0] > UINT32_MAX) ++countsCut_;
+            e.stack = uint32_t(std::min<uint64_t>(std::max<uint64_t>(1, k.sat64()), UINT32_MAX));
             notes_.push_back(e);
         }
         sortNotes();
@@ -394,6 +448,8 @@ private:
         // keeps both.
         saveFormat_ = kSaveJson;
         for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
+            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kCountChartExt)) saveFormat_ = kSaveGhn;
+        for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
             if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kBinaryChartExt)) {
                 std::error_code ec;
                 const std::string& g = entry_->chartPaths[i];
@@ -405,6 +461,8 @@ private:
         a.mixer.setTracks(inst_, voiceP_, voiceO_);
         a.mixer.setRate(1.0);
         if (entry_->builtin) flash("Built-in song: saving makes an editable copy in songs/");
+        if (countsCut_)
+            flash(fmtThousands((long long)countsCut_) + " notes count past 4,294,967,295 notes: the editor keeps that many (play the file for all)");
         else if (entry_->autoChart) flash("AutoChart draft: save to keep it as a real chart");
     }
 
@@ -581,6 +639,7 @@ private:
     // on a chart of millions of notes those are what keeps editing quick.
     void snapshot() { snapshotRange(-1e300, 1e300); }
     void snapshotRange(double a, double b) {
+        edited();
         UndoStep st;
         st.sections = sections_;
         st.events = events_;
@@ -608,6 +667,7 @@ private:
     }
     void restore(std::vector<UndoStep>& from, std::vector<UndoStep>& to, const char* what) {
         if (from.empty()) return;
+        edited();
         UndoStep& st = from.back();
         UndoStep back;
         back.sections = sections_;
@@ -921,13 +981,27 @@ private:
     }
 
     // ------------------------------------------------------------- layout --
-    // The event lane and both sides share the space between the panels.
-    float laneW() const { return std::min(48.0f, 590.0f / float(2 * keys_ + 1)); }
+    // The event lane and both sides share the space between the panels
+    // (x 250 to 860). Lanes are never narrower than 12 pixels: a chart with
+    // more of them than fit (from 25 keys a side, up to 1024) scrolls sideways
+    // under a fixed event lane (Ctrl + wheel, or the bar at the top).
+    static constexpr float kGridL = 250, kGridW = 610, kMinLaneW = 12;
+    float laneW() const { return std::max(kMinLaneW, std::min(48.0f, (kGridW - 20) / float(2 * keys_ + 1))); }
+    bool wideGrid() const { return float(2 * keys_ + 1) * laneW() + 10 > kGridW + 0.5f; }
     float gridX() const {
-        const float lw = laneW(), total = float(2 * keys_ + 1) * lw + 10;
-        return 250 + (610 - total) * 0.5f + lw + 10;
+        const float lw = laneW();
+        if (wideGrid()) return kGridL + lw + 10 - colScroll_ * lw;
+        const float total = float(2 * keys_ + 1) * lw + 10;
+        return kGridL + (kGridW - total) * 0.5f + lw + 10;
     }
-    float eventX() const { return gridX() - laneW() - 10; }
+    float eventX() const { return wideGrid() ? kGridL : gridX() - laneW() - 10; }
+    // The part of the screen the lanes are shown in.
+    float viewL() const { return wideGrid() ? kGridL + laneW() + 10 : gridX(); }
+    float viewR() const { return wideGrid() ? kGridL + kGridW : gridX() + laneW() * float(2 * keys_); }
+    float maxColScroll() const { return wideGrid() ? std::max(0.0f, float(2 * keys_) - (viewR() - viewL()) / laneW()) : 0.0f; }
+    void scrollColumns(float by) { colScroll_ = std::clamp(colScroll_ + by, 0.0f, maxColScroll()); }
+    // The lane bar: where the view is among all the lanes (wide charts only).
+    Rectangle laneBar() const { return {viewL(), 31, viewR() - viewL(), 7}; }
     float lineY() const { return 220.0f; }
     float pxPerMs() const { return 0.45f * zoom_; }
     double snappedTimeAtY(float y) {
@@ -937,8 +1011,9 @@ private:
     bool mouseCell(int& col, double& t) {
         const Vector2 m = ui_.mouse;
         const float x0 = gridX();
-        if (m.x < x0 || m.x >= x0 + laneW() * 2 * keys_ || m.y < 40 || m.y > gfx::H) return false;
-        col = int((m.x - x0) / laneW());
+        if (m.x < std::max(x0, viewL()) || m.x >= std::min(x0 + laneW() * 2 * keys_, viewR()) || m.y < 40 || m.y > gfx::H)
+            return false;
+        col = std::clamp(int((m.x - x0) / laneW()), 0, 2 * keys_ - 1);
         t = snappedTimeAtY(m.y);
         return t >= 0;
     }
@@ -1039,7 +1114,7 @@ private:
                 clearSelection();
                 EdNote n;
                 n.t = t;
-                n.col = uint8_t(col);
+                n.col = uint16_t(col);
                 n.type = typeId(noteTypes_[size_t(typeIdx_)]);
                 n.sel = true;
                 insertNote(n);
@@ -1108,7 +1183,8 @@ private:
             for (; it != notes_.end() && it->t <= ahead; ++it) {
                 const bool player = it->col >= keys_;
                 if (player ? !hitPlayer_ : !hitOpponent_) continue;
-                m.hitAt(it->t / 1000.0, player ? 0 : 1, float(player ? hitVolPlayer_ : hitVolOpponent_));
+                m.hitAt(it->t / 1000.0, player ? 0 : 1, float(player ? hitVolPlayer_ : hitVolOpponent_),
+                        double(std::max<uint32_t>(1, it->stack)));
             }
         }
         schedUpTo_ = std::max(schedUpTo_, ahead);
@@ -1182,13 +1258,13 @@ private:
                     // As num() writes them (6 decimals), so both files hold the same chart.
                     const double t6 = std::round(n.t * 1e6) / 1e6, l6 = std::round(n.len * 1e6) / 1e6;
                     const std::string& type = n.type ? typeNames_[n.type] : kNoType;
-                    for (uint32_t k = 0; k < std::max<uint32_t>(1, n.stack); ++k) bin->add(t6, data, l6, type);
+                    for (uint32_t k = 0; k < (onceStacks_ ? 1 : std::max<uint32_t>(1, n.stack)); ++k) bin->add(t6, data, l6, type);
                     continue;
                 }
                 std::string one = "[" + num(n.t) + ", " + std::to_string(data) + ", " + num(n.len);
                 if (n.type) one += ", " + jsonStr(typeNames_[n.type]);
                 one += "]";
-                for (uint32_t k = 0; k < std::max<uint32_t>(1, n.stack); ++k) {  // stacked notes stay stacked
+                for (uint32_t k = 0; k < (onceStacks_ ? 1 : std::max<uint32_t>(1, n.stack)); ++k) {  // stacked notes stay stacked
                     o += std::string(first ? "" : ", ") + one;
                     first = false;
                 }
@@ -1255,6 +1331,34 @@ private:
         return bool(out);
     }
 
+    // The chart as the game reads it with each stack as one note counting for
+    // all of its notes (notes of a lane within 1 ms are one, as the game
+    // merges them): what a count chart (.ghn) holds.
+    bool chartForCount(Chart& out, std::string& err, bool withEvents) {
+        StreamedNotes sn;
+        StreamedNotesBuilder bin(sn);
+        onceStacks_ = true;
+        const std::string skeleton = buildJson(withEvents, &bin);
+        onceStacks_ = false;
+        if (!parseChartStreamed(skeleton, sn, diff_, out, err, true)) return false;
+        std::vector<std::vector<const EdNote*>> byCol(size_t(2 * keys_));
+        for (const EdNote& n : notes_)
+            if (n.col < byCol.size()) byCol[n.col].push_back(&n);
+        std::vector<size_t> at(byCol.size(), 0);
+        for (Note& n : out.notes) {
+            const size_t col = size_t(n.side ? keys_ + n.lane : n.lane);
+            if (col >= byCol.size()) continue;
+            const std::vector<const EdNote*>& v = byCol[col];
+            size_t& i = at[col];
+            while (i < v.size() && v[i]->t < n.time - 1.0) ++i;
+            Count k;
+            for (; i < v.size() && std::fabs(v[i]->t - n.time) < 1.0; ++i) k += Count(std::max<uint32_t>(1, v[i]->stack));
+            if (!k.isZero()) out.setCount(n, k);
+        }
+        out.finalize(out.tempo.empty() ? 120 : out.tempo.front().bpm);  // the totals again
+        return true;
+    }
+
     bool save(bool playtest) {
         App& a = app();
         const std::string path = savePath();  // the JSON's place (the .ghc goes beside it)
@@ -1263,8 +1367,20 @@ private:
         fs::create_directories(p.parent_path(), ec);
         const std::string ghcPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kBinaryChartExt;
         const fs::path gp = toPath(ghcPath);
-        const bool wantJson = saveFormat_ != kSaveGhc, wantGhc = saveFormat_ != kSaveJson;
-        const bool hadJson = fs::exists(p, ec), hadGhc = fs::exists(gp, ec);
+        // The count chart: the one it was read from, or beside the JSON.
+        std::string ghnPath = path.substr(0, path.size() - pathStr(p.extension()).size()) + kCountChartExt;
+        for (size_t i = 0; i < entry_->diffs.size() && i < entry_->chartPaths.size(); ++i)
+            if (entry_->diffs[i] == diff_ && endsWithI(entry_->chartPaths[i], kCountChartExt)) ghnPath = entry_->chartPaths[i];
+        const fs::path np = toPath(ghnPath);
+        const bool wantGhn = saveFormat_ == kSaveGhn;
+        const bool wantJson = !wantGhn && saveFormat_ != kSaveGhc, wantGhc = !wantGhn && saveFormat_ != kSaveJson;
+        const bool hadJson = fs::exists(p, ec), hadGhc = fs::exists(gp, ec), hadGhn = fs::exists(np, ec);
+        uint64_t listed = 0;
+        for (const EdNote& n : notes_) listed += std::max<uint32_t>(1, n.stack);
+        if ((wantJson || wantGhc) && listed > kMaxListedNotes) {
+            flash("A JSON chart lists its " + fmtThousands((long long)listed) + " notes one by one: Save as Count .ghn (Song tab)");
+            return false;
+        }
         // Each file as it was is kept once, as .bak.
         auto backUp = [&](const fs::path& f, bool& done) {
             if (done || !fs::exists(f, ec)) return;
@@ -1294,7 +1410,18 @@ private:
         // The binary chart, straight from the notes: what reading the JSON
         // would give, without writing the JSON first.
         std::string note;
-        bool wroteGhc = false;
+        bool wroteGhc = false, wroteGhn = false;
+        GhnStats ghn;
+        if (wantGhn) {
+            backUp(np, backedUpGhn_);
+            Chart c;
+            std::string err;
+            wroteGhn = chartForCount(c, err, eventsInChart()) && writeGhn(ghnPath, c, err, &ghn);
+            if (!wroteGhn) {
+                flash("Could not save the .ghn: " + err);
+                return false;
+            }
+        }
         if (wantGhc) {
             backUp(gp, backedUpGhc_);
             StreamedNotes sn;
@@ -1308,7 +1435,7 @@ private:
             }
             if (!wroteGhc) note = "; the .ghc failed: " + err;
             else if (!wantJson && hadJson) note = "; the .json beside it was left as it was";
-        } else if (hadGhc) {
+        } else if (hadGhc && !wantGhn) {
             // Saved as Psych JSON only: the old .ghc would still be what the
             // game plays, so it steps aside (as .ghc.bak, unless the original
             // is already kept there; the JSON just written holds the chart).
@@ -1320,6 +1447,17 @@ private:
                    : keptBefore       ? "; the old .ghc was removed (its original is in .ghc.bak)"
                                       : "; the old .ghc is now .ghc.bak";
         }
+        if (hadGhn && !wantGhn) {
+            // Saved as JSON or .ghc: the old .ghn comes first for the game,
+            // so it steps aside the same way (as .ghn.bak).
+            const fs::path bak = toPath(ghnPath + ".bak");
+            const bool keptBefore = fs::exists(bak, ec);
+            if (!keptBefore) fs::rename(np, bak, ec);
+            else fs::remove(np, ec);
+            note += fs::exists(np, ec) ? "; the old .ghn beside it could not be moved, and the game still plays it"
+                    : keptBefore       ? "; the old .ghn was removed (its original is in .ghn.bak)"
+                                       : "; the old .ghn is now .ghn.bak";
+        }
         if (!eventsInChart()) {
             const fs::path ep = toPath(eventsFile_);
             if (!fs::exists(toPath(eventsFile_ + ".bak"), ec)) fs::copy_file(ep, toPath(eventsFile_ + ".bak"), ec);
@@ -1328,16 +1466,21 @@ private:
         dirty_ = false;
         long long total = 0;
         for (const EdNote& n : notes_) total += n.stack;
-        const bool hasGhc = fs::exists(gp, ec), hasJson = fs::exists(p, ec);
+        const bool hasGhc = fs::exists(gp, ec), hasJson = fs::exists(p, ec), hasGhn = fs::exists(np, ec);
         const std::string stem = pathStr(p.stem());
-        const std::string wrote = wantJson && wroteGhc ? stem + ".json and .ghc" : wroteGhc ? stem + kBinaryChartExt : pathStr(p.filename());
-        flash("Saved " + wrote + " (" + fmtThousands(total) + " notes, " + std::to_string(events_.size()) + " events)" + note);
+        const std::string wrote = wroteGhn                ? pathStr(np.filename())
+                                  : wantJson && wroteGhc ? stem + ".json and .ghc"
+                                  : wroteGhc             ? stem + kBinaryChartExt
+                                                         : pathStr(p.filename());
+        flash("Saved " + wrote + " (" + (wroteGhn ? ghn.total.grouped() : fmtThousands(total)) + " notes, " +
+              std::to_string(events_.size()) + " events)" + note);
         // New files, or a .ghc gone: rescan so Freeplay (and the playtest)
         // see the chart the game will now play.
         std::string id = songId_;
-        if (entry_->builtin || entry_->autoChart || hasGhc != hadGhc || hasJson != hadJson) {
+        if (entry_->builtin || entry_->autoChart || hasGhc != hadGhc || hasJson != hadJson || hasGhn != hadGhn) {
             auto ours = [&](const std::string& cp) {
-                return !cp.empty() && (fs::equivalent(toPath(cp), p, ec) || fs::equivalent(toPath(cp), gp, ec));
+                return !cp.empty() &&
+                       (fs::equivalent(toPath(cp), p, ec) || fs::equivalent(toPath(cp), gp, ec) || fs::equivalent(toPath(cp), np, ec));
             };
             a.library.scan(a.base);
             for (const SongEntry& s : a.library.songs())
@@ -1371,6 +1514,20 @@ private:
         const int cols = 2 * keys_;
         const float gw = lw * cols;
         const double tTop = cur_ - (ly - 40) / pp, tBot = cur_ + (gfx::H - ly) / pp;
+        // The lanes on screen [c0, c1): all of them, or a chart too wide for
+        // the screen's part shown under its scroll (clipped to it).
+        const bool wide = wideGrid();
+        const float vl = viewL(), vr = viewR();
+        const int c0 = wide ? std::clamp(int(std::floor((vl - x0) / lw)), 0, cols) : 0;
+        const int c1 = wide ? std::clamp(int(std::ceil((vr - x0) / lw)), 0, cols) : cols;
+        const Vector2 co = gfx::canvasOrigin();
+        const float cs = gfx::canvasScale();
+        auto clipLanes = [&](bool on) {
+            if (!wide) return;
+            if (on) BeginScissorMode(int(co.x + vl * cs), int(co.y + 40 * cs), int((vr - vl) * cs + 1), int((gfx::H - 40) * cs));
+            else EndScissorMode();
+        };
+        const float gridR = std::min(x0 + gw, vr);  // where the lanes end on screen
         // Section backgrounds: the camera's side is lighter, gf sections tinted.
         const int s0 = sectionAt(std::max(0.0, tTop)), s1 = sectionAt(std::max(0.0, tBot));
         for (int s = s0; s <= s1; ++s) {
@@ -1379,8 +1536,10 @@ private:
             if (yb <= ya) continue;
             const EdSection& sec = section(s);
             const Color on = sec.gf ? Color{54, 40, 52, 255} : Color{44, 34, 66, 255}, off{28, 22, 40, 255};
+            clipLanes(true);
             DrawRectangleRec({x0, ya, lw * keys_, yb - ya}, sec.mustHit ? off : on);
             DrawRectangleRec({x0 + lw * keys_, ya, lw * keys_, yb - ya}, sec.mustHit ? on : off);
+            clipLanes(false);
             DrawRectangleRec({ex, ya, lw, yb - ya}, Color{24, 18, 34, 255});
         }
         // Beat / snap lines
@@ -1389,18 +1548,20 @@ private:
             const float y = ly + float((msAtBeat(b) - cur_) * pp);
             if (y < 40 || y > gfx::H) continue;
             const bool beat = std::fabs(b - std::round(b)) < 1e-6;
-            DrawRectangleRec({ex, y - 0.5f, x0 + gw - ex, 1.0f},
+            DrawRectangleRec({ex, y - 0.5f, gridR - ex, 1.0f},
                              beat ? Color{110, 90, 150, 140} : Color{80, 66, 110, 70});
         }
         for (int s = s0; s <= s1 + 1; ++s) {  // section starts, numbered
             const float y = ly + float((sectionStart(s) - cur_) * pp);
             if (y < 40 || y > gfx::H) continue;
-            DrawRectangleRec({ex, y - 1.5f, x0 + gw - ex, 3.0f}, Color{170, 140, 220, 200});
+            DrawRectangleRec({ex, y - 1.5f, gridR - ex, 3.0f}, Color{170, 140, 220, 200});
             gfx::text(FontId::Ui, std::to_string(s), ex - 8, y - 10, 18, gfx::fade(WHITE, 0.6f), Align::Right);
         }
-        for (int c = 0; c <= cols; ++c)
+        clipLanes(true);
+        for (int c = c0; c <= c1; ++c)
             DrawRectangleRec({x0 + c * lw - (c == keys_ ? 1.5f : 0.5f), 40, c == keys_ ? 3.0f : 1.0f, gfx::H - 40.0f},
                              c == keys_ ? Color{200, 170, 255, 200} : Color{70, 58, 96, 160});
+        clipLanes(false);
         DrawRectangleRec({ex + lw, 40, 1, gfx::H - 40.0f}, Color{70, 58, 96, 160});
         // Events
         for (size_t i = 0; i < events_.size(); ++i) {
@@ -1423,11 +1584,12 @@ private:
         const double msPerPx = 1.0 / std::max(1e-9, double(pp));
         float lastY[2 * kMaxKeys];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
+        clipLanes(true);
         if (st.maxLen > 0) {
             auto it = std::lower_bound(notes_.begin(), notes_.end(), tTop - st.maxLen, byTime);
             for (; it != notes_.end() && it->t <= tBot; ++it) {
                 const EdNote& n = *it;
-                if (n.len <= 0 || n.t + n.len < tTop) continue;
+                if (n.len <= 0 || n.t + n.len < tTop || n.col < c0 || n.col >= c1) continue;
                 const int lane = n.col % keys_;
                 const int dir = gfx::laneDir(keys_, lane);
                 const float cx = x0 + (n.col + 0.5f) * lw;
@@ -1452,7 +1614,7 @@ private:
             }
             ++it;
             const float y = ly + float((n.t - cur_) * pp);
-            if (y < 30 || y > gfx::H + 30 || n.col >= 2 * kMaxKeys) continue;
+            if (y < 30 || y > gfx::H + 30 || n.col >= 2 * kMaxKeys || n.col < c0 || n.col >= c1) continue;
             // Spam charts: one note per pixel row is enough to see them.
             if (std::fabs(y - lastY[n.col]) < rowPx && !n.sel) continue;
             lastY[n.col] = y;
@@ -1487,6 +1649,7 @@ private:
             gfx::text(FontId::Ui, "x" + std::to_string(v.stack), v.cx + lw * 0.42f, v.y + 2, 14, kAccent, Align::Right, 1.0f);
         }
         vis_.clear();
+        clipLanes(false);
         // Mouse cursor cell / selection box
         int col = 0;
         double t = 0;
@@ -1497,36 +1660,140 @@ private:
             DrawRectangleLinesEx(r, 1.5f, Color{255, 255, 255, 160});
         } else if (mouseCell(col, t)) {
             const float y = ly + float((t - cur_) * pp);
+            clipLanes(true);
             DrawRectangleRec({x0 + col * lw + 2, y - lw * 0.45f, lw - 4, lw * 0.9f}, Color{255, 255, 255, 40});
+            clipLanes(false);
         } else if (mouseEventCell(t)) {
             const float y = ly + float((t - cur_) * pp);
             DrawRectangleRec({ex + 2, y - lw * 0.45f, lw - 4, lw * 0.9f}, Color{255, 255, 255, 40});
         }
         // Strum line and receptors
-        DrawRectangleRec({ex - 6, ly - 2, x0 + gw - ex + 12, 4}, Color{255, 220, 120, 220});
-        for (int c = 0; c < cols; ++c) {
+        DrawRectangleRec({ex - 6, ly - 2, gridR - ex + 12, 4}, Color{255, 220, 120, 220});
+        clipLanes(true);
+        for (int c = c0; c < c1; ++c) {
             const int dir = gfx::laneDir(keys_, c % keys_);
             gfx::drawReceptor(dir, {x0 + (c + 0.5f) * lw, ly}, lw * 0.82f, Color{200, 190, 230, 120});
         }
+        clipLanes(false);
         // Top bar
         DrawRectangleRec({0, 0, gfx::W, 40}, Color{8, 5, 14, 235});
         gfx::text(FontId::Ui, "EVENTS", ex + lw * 0.5f, 10, 16, gfx::fade(WHITE, 0.6f), Align::Center);
-        gfx::text(FontId::Ui, "OPPONENT", x0 + lw * keys_ * 0.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
-        gfx::text(FontId::Ui, "PLAYER", x0 + lw * keys_ * 1.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+        if (!wide) {
+            gfx::text(FontId::Ui, "OPPONENT", x0 + lw * keys_ * 0.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+            gfx::text(FontId::Ui, "PLAYER", x0 + lw * keys_ * 1.5f, 8, 22, gfx::fade(WHITE, 0.75f), Align::Center);
+            return;
+        }
+        // A wide chart: each side's name over its part on screen, the lane
+        // numbers (1 to the key count, each side) and the lane bar.
+        for (int side = 0; side < 2; ++side) {
+            const float a = std::max(vl, x0 + lw * keys_ * side), b = std::min(vr, x0 + lw * keys_ * (side + 1));
+            if (b - a > 70) gfx::text(FontId::Ui, side ? "PLAYER" : "OPPONENT", (a + b) * 0.5f, 1, 17, gfx::fade(WHITE, 0.75f), Align::Center);
+        }
+        const int every = lw >= 24 ? 2 : 4;
+        for (int c = c0; c < c1; ++c) {
+            const int lane = c % keys_;
+            if (lane % every != 0 && lane != keys_ - 1) continue;
+            const float cx = x0 + (c + 0.5f) * lw;
+            if (cx < vl + 4 || cx > vr - 4) continue;
+            gfx::text(FontId::Ui, std::to_string(lane + 1), cx, 18, 12, gfx::fade(WHITE, 0.55f), Align::Center);
+        }
+        const Rectangle bar = laneBar();
+        const float total = float(cols), shown = (vr - vl) / lw;
+        DrawRectangleRounded(bar, 1.0f, 4, Color{40, 32, 60, 255});
+        const float split = bar.x + bar.width * float(keys_) / total;  // where the player's lanes start
+        DrawRectangleRec({split - 1, bar.y - 1, 2, bar.height + 2}, Color{200, 170, 255, 200});
+        DrawRectangleRounded({bar.x + bar.width * colScroll_ / total, bar.y, std::max(8.0f, bar.width * shown / total), bar.height},
+                             1.0f, 4, laneDrag_ ? kAccent : Color{170, 140, 220, 255});
     }
 
-    // The chart as it will be played, in a small window under the info: the
-    // strums, and the notes coming up to them at the song's scroll speed
-    // (Charting tab: Chart preview).
-    void drawPreview() {
-        const Rectangle box{12, 478, 228, 230};
-        DrawRectangleRounded(box, 0.04f, 6, Color{8, 5, 14, 235});
-        DrawRectangleRoundedLinesEx(box, 0.04f, 6, 1.5f, Color{110, 92, 150, 200});
+    // ---------------------------------------------------------- preview --
+    // The preview window (Charting tab, issue #36), moved by its title bar
+    // and resized by its corner: either the notes coming to the strums at the
+    // song's scroll speed (quick), or the song as the game plays it - stage,
+    // characters, Lua scripts and events of the chart as it is here, at the
+    // editor's time (Psych's playtest from here, in a window).
+    enum PreviewMode { kPreviewOff = 0, kPreviewNotes = 1, kPreviewFull = 2 };
+    static constexpr float kTitleH = 20, kGrip = 16;
+
+    Rectangle previewView() const {
+        return {previewRect_.x, previewRect_.y + kTitleH, previewRect_.width, previewRect_.height - kTitleH};
+    }
+    void clampPreview() {
+        previewRect_.width = clampv(previewRect_.width, 160.0f, gfx::W);
+        previewRect_.height = clampv(previewRect_.height, 110.0f, gfx::H);
+        previewRect_.x = clampv(previewRect_.x, 0.0f, gfx::W - previewRect_.width);
+        previewRect_.y = clampv(previewRect_.y, 0.0f, gfx::H - previewRect_.height);
+    }
+    void savePreview() {
+        Settings& s = app().settings;
+        s.editorPreview = previewMode_;
+        s.editorPreviewDown = previewDown_;
+        s.editorPreviewBox[0] = previewRect_.x;
+        s.editorPreviewBox[1] = previewRect_.y;
+        s.editorPreviewBox[2] = previewRect_.width;
+        s.editorPreviewBox[3] = previewRect_.height;
+        app().saveSettings();
+    }
+
+    // Moving and resizing. True while the mouse is on the window (or holds it).
+    bool previewMouse() {
+        const Rectangle box = previewRect_;
+        const Vector2 m = ui_.mouse;
+        if (ui_.click && CheckCollisionPointRec(m, {box.x + box.width - kGrip, box.y + box.height - kGrip, kGrip, kGrip})) {
+            previewDrag_ = 2;
+            previewGrab_ = {box.x + box.width - m.x, box.y + box.height - m.y};
+        } else if (ui_.click && CheckCollisionPointRec(m, {box.x, box.y, box.width, kTitleH})) {
+            previewDrag_ = 1;
+            previewGrab_ = {m.x - box.x, m.y - box.y};
+        }
+        if (previewDrag_ == 1) {
+            previewRect_.x = m.x - previewGrab_.x;
+            previewRect_.y = m.y - previewGrab_.y;
+        } else if (previewDrag_ == 2) {
+            previewRect_.width = m.x + previewGrab_.x - box.x;
+            previewRect_.height = m.y + previewGrab_.y - box.y;
+        }
+        clampPreview();
+        const bool held = previewDrag_ != 0;
+        if (held && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            previewDrag_ = 0;
+            savePreview();
+        }
+        return held || CheckCollisionPointRec(m, box);
+    }
+
+    void drawPreviewWindow() {
+        const Rectangle box = previewRect_, view = previewView();
+        DrawRectangleRounded(box, 0.03f, 6, Color{8, 5, 14, 255});
+        if (previewMode_ == kPreviewFull) drawFullPreview(view);
+        else drawPreview(view);
+        // Title bar (drag to move) and the corner (drag to resize).
+        const bool hot = previewDrag_ == 1 || CheckCollisionPointRec(ui_.mouse, {box.x, box.y, box.width, kTitleH});
+        DrawRectangleRec({box.x, box.y, box.width, kTitleH}, hot ? Color{70, 54, 108, 255} : Color{44, 34, 70, 255});
+        std::string title = previewMode_ == kPreviewFull ? "PREVIEW  full visuals" : "PREVIEW  notes";
+        if (previewDown_) title += "  (downscroll)";
+        if (previewMode_ == kPreviewFull && editGen_ != fullGen_ && !autoRebuild()) title += "  - chart changed: Reload preview";
+        BeginScissorMode(int(gfx::canvasOrigin().x + box.x * gfx::canvasScale()), int(gfx::canvasOrigin().y + box.y * gfx::canvasScale()),
+                         int(box.width * gfx::canvasScale()), int(kTitleH * gfx::canvasScale()));
+        gfx::text(FontId::Ui, title, box.x + 8, box.y + 2, 15, gfx::fade(WHITE, 0.8f));
+        EndScissorMode();
+        const float gx = box.x + box.width, gy = box.y + box.height;
+        const Color gc = previewDrag_ == 2 ? kAccent : gfx::fade(WHITE, 0.45f);
+        for (int i = 1; i <= 3; ++i)
+            DrawLineEx({gx - 4.0f * i - 2, gy - 2}, {gx - 2, gy - 4.0f * i - 2}, 1.5f, gc);
+        DrawRectangleRoundedLinesEx(box, 0.03f, 6, 1.5f, Color{110, 92, 150, 220});
+    }
+
+    // Notes only: the strums, and the notes coming up (down, in downscroll) to them.
+    void drawPreview(const Rectangle box) {
         const int cols = 2 * keys_;
-        const float lw = std::min(26.0f, (box.width - 16) / float(cols));
-        const float x0 = box.x + (box.width - lw * cols) * 0.5f, recY = box.y + 26;
+        const float lw = std::min(26.0f * std::max(1.0f, box.width / 228.0f), (box.width - 16) / float(cols));
+        const bool down = previewDown_;
+        const float x0 = box.x + (box.width - lw * cols) * 0.5f, recY = down ? box.y + box.height - 26 : box.y + 26;
         const double pp = 0.45 * speed_ * (lw / 112.0) * 1.6;  // pixels per ms, as Psych scales it
-        const double tTop = cur_ - (recY - box.y) / pp, tBot = cur_ + (box.y + box.height - recY) / pp;
+        const float sign = down ? -1.0f : 1.0f;
+        const double ahead = (down ? recY - box.y : box.y + box.height - recY) / pp;
+        const double behind = (down ? box.y + box.height - recY : recY - box.y) / pp;
         const Vector2 o = gfx::canvasOrigin();
         const float cs = gfx::canvasScale();
         BeginScissorMode(int(o.x + box.x * cs), int(o.y + box.y * cs), int(box.width * cs), int(box.height * cs));
@@ -1535,16 +1802,17 @@ private:
         float lastY[2 * kMaxKeys];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
         const Stats& st = stats();
-        auto r = notesIn(tTop - st.maxLen, tBot);
+        auto r = notesIn(cur_ - behind - st.maxLen, cur_ + ahead);
         for (auto it = r.first; it != r.second; ++it) {
             const EdNote& n = *it;
             if (n.col >= 2 * kMaxKeys) continue;
-            const float y = recY + float((n.t - cur_) * pp);
+            const float y = recY + sign * float((n.t - cur_) * pp);
             const float cx = x0 + (n.col + 0.5f) * lw;
             const int dir = gfx::laneDir(keys_, n.col % keys_);
             if (n.len > 0) {
-                const float yEnd = recY + float((n.t + n.len - cur_) * pp);
-                if (yEnd >= box.y) gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, std::max(y, recY), yEnd, lw * 0.3f, 0.8f, true);
+                const float yEnd = recY + sign * float((n.t + n.len - cur_) * pp);
+                const float y0 = n.t < cur_ ? recY : y;
+                if (n.t + n.len > cur_) gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, y0, yEnd, lw * 0.3f, 0.8f, true);
             }
             if (n.t < cur_ - 1 || std::fabs(y - lastY[n.col]) < 2.0f) continue;  // played already / same pixel row
             lastY[n.col] = y;
@@ -1563,7 +1831,139 @@ private:
             if (v.mine) DrawCircleV({v.cx, v.y}, lw * 0.3f, Color{220, 40, 60, 255});
         vis_.clear();
         EndScissorMode();
-        gfx::text(FontId::Ui, "PREVIEW", box.x + 8, box.y + box.height - 22, 14, gfx::fade(WHITE, 0.45f));
+    }
+
+    // While the preview plays: its own downscroll, no BOTPLAY text and no
+    // sound effects (the editor's sound is the song's).
+    struct PreviewScope {
+        Settings& s;
+        const bool down, botText;
+        PreviewScope(Settings& st, bool d) : s(st), down(st.downscroll), botText(st.botplayText) {
+            s.downscroll = d;
+            s.botplayText = false;
+            sfxMute(true);
+        }
+        ~PreviewScope() {
+            s.downscroll = down;
+            s.botplayText = botText;
+            sfxMute(false);
+        }
+        PreviewScope(const PreviewScope&) = delete;
+        PreviewScope& operator=(const PreviewScope&) = delete;
+    };
+
+    void edited() {
+        ++editGen_;
+        editAt_ = app().now;
+    }
+    // Changes to the chart start the preview again by themselves, unless the
+    // chart is so large that writing it out takes a while (then the button).
+    bool autoRebuild() const { return buildMs_ < 120.0; }
+
+    // The game's own play screen, made again from the editor's chart when the
+    // chart changes, the time goes back or downscroll is switched; between
+    // those it plays on at the editor's time.
+    void updateFullPreview(double dt) {
+        App& a = app();
+        if (previewMode_ != kPreviewFull) {
+            full_.reset();
+            fullDrawn_ = false;
+            fullError_.clear();
+            return;
+        }
+        const bool idle = !IsMouseButtonDown(MOUSE_BUTTON_LEFT) && a.now - editAt_ > 0.35;
+        bool rebuild = reloadFull_ || fullDown_ != previewDown_ || (editGen_ != fullGen_ && idle && autoRebuild());
+        if (!full_ && fullError_.empty()) rebuild = true;  // just switched on
+        // Back in time: what the scripts did cannot be undone, so it starts again from there.
+        if (full_ && !full_->previewFailed() && cur_ < fullMs_ - 1.0) rebuild = true;
+        if (rebuild) buildFull();
+        if (!full_) return;
+        fullMs_ = cur_;
+        PreviewScope scope(a.settings, previewDown_);
+        full_->setPreviewTime(cur_);
+        full_->update(dt);
+    }
+
+    void buildFull() {
+        App& a = app();
+        reloadFull_ = false;
+        fullGen_ = editGen_;
+        fullDown_ = previewDown_;
+        fullMs_ = cur_;
+        fullError_.clear();
+        full_.reset();  // one at a time: the old one gives back what it took first
+        std::error_code ec;
+        fs::create_directories(toPath(a.userDir + "cache"), ec);
+        // Stacked notes (a count chart's, of any size) go to the preview as
+        // a .ghn - each stack one note counting for all of them, as the game
+        // plays it - never written out one by one.
+        bool counted = false;
+        for (const EdNote& n : notes_)
+            if (n.stack > 1) {
+                counted = true;
+                break;
+            }
+        const std::string path = a.userDir + (counted ? "cache/editor-preview.ghn" : "cache/editor-preview.json");
+        const double t0 = nowSec();
+        if (counted) {
+            Chart c;
+            std::string err;
+            if (!chartForCount(c, err, true) || !writeGhn(path, c, err)) {
+                fullError_ = err.empty() ? "cannot write " + path : err;
+                return;
+            }
+        } else if (!writeText(toPath(path), buildJson(true))) {
+            fullError_ = "cannot write " + path;
+            return;
+        }
+        buildMs_ = (nowSec() - t0) * 1000.0;
+        PlayRequest r;
+        r.songId = songId_;
+        r.diff = diff_;
+        r.preview = true;
+        r.chartFile = path;
+        r.previewFromMs = std::max(0.0, cur_);
+        full_ = std::make_unique<PlayState>(r);
+        PreviewScope scope(a.settings, previewDown_);
+        full_->setPreviewTime(r.previewFromMs);
+        full_->enter();
+    }
+
+    // The play screen drawn into a picture the size of the window, shown there.
+    void drawFullPreview(const Rectangle view) {
+        App& a = app();
+        const float cs = gfx::canvasScale();
+        const int w = std::max(16, int(view.width * cs)), h = std::max(16, int(view.height * cs));
+        if (full_ && full_->previewReady() && !gfx::frameTargetActive()) {
+            if (!fullRt_.id || fullRt_.texture.width != w || fullRt_.texture.height != h) {
+                if (fullRt_.id) UnloadRenderTexture(fullRt_);
+                fullRt_ = LoadRenderTexture(w, h);
+                SetTextureFilter(fullRt_.texture, TEXTURE_FILTER_BILINEAR);
+            }
+            gfx::endCanvas();
+            gfx::beginFrameTarget(fullRt_);
+            ClearBackground(BLACK);
+            {
+                PreviewScope scope(a.settings, previewDown_);
+                full_->draw();
+            }
+            gfx::drawLetterbox();  // what is past the game's picture, as in the game's window
+            gfx::endFrameTarget();
+            gfx::beginCanvas();
+            fullDrawn_ = true;
+        }
+        if (fullDrawn_ && fullRt_.id)
+            DrawTexturePro(fullRt_.texture, {0, 0, float(fullRt_.texture.width), -float(fullRt_.texture.height)}, view, {0, 0}, 0, WHITE);
+        std::string msg;
+        if (!fullError_.empty()) msg = fullError_;
+        else if (!full_) msg = "";
+        else if (full_->previewFailed()) msg = full_->previewError().empty() ? "the song cannot be played" : full_->previewError();
+        else if (!full_->previewReady()) msg = "Loading...";
+        if (!msg.empty()) {
+            if (fullDrawn_) DrawRectangleRec(view, gfx::fade(BLACK, 0.55f));
+            gfx::text(FontId::Ui, msg, view.x + view.width * 0.5f, view.y + view.height * 0.5f - 10, 18, gfx::fade(WHITE, 0.85f),
+                      Align::Center);
+        }
     }
 
     void drawInfo() {
@@ -1591,6 +1991,8 @@ private:
                                      "Click add/select", "SHIFT+drag select", "Ctrl+C/X/V copy, cut",
                                      "DEL delete", "M mirror", "Ctrl+Z/Y undo", "ENTER save+play"};
         for (const char* h : help) line(h, gfx::fade(WHITE, 0.55f), 15);
+        if (wideGrid() && !(previewMode_ != kPreviewOff && CheckCollisionRecs(previewRect_, {x, y, 222, 20})))
+            line("Ctrl+wheel / top bar: lanes", gfx::fade(WHITE, 0.55f), 15);
     }
 
     // The tabbed panel. Immediate mode: drawing and clicks happen together.
@@ -1624,10 +2026,10 @@ private:
                 if (ui_.stepper(row(), "BPM", bpm, 1, 10, 2000, "%.2f")) setSectionBpm(0, bpm);
                 if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) dirty_ = statsDirty_ = true;
                 double k = keys_;
-                if (ui_.stepper(row(), "Keys", k, 1, 1, 9, "%.0f")) setKeys(int(k));
+                if (ui_.stepper(row(), "Keys", k, 1, 1, kMaxKeys, "%.0f")) setKeys(int(k));  // 1 to 1024 a side
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
-                ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both"}, saveFormat_);
+                ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both", "Count .ghn"}, saveFormat_);
                 y += 6;
                 if (ui_.button(half(0), "Save (F2)")) save(false);
                 if (ui_.button(half(1), "Save and play")) {
@@ -1843,7 +2245,10 @@ private:
                 ui_.check(row(), "Hit sounds: opponent", hitOpponent_);
                 ui_.stepper(row(), "Opponent hitsound volume", hitVolOpponent_, 0.05, 0, 1, "%.2f");
                 ui_.check(row(), "Exact placement (section starts)", exactPlace_);
-                ui_.check(row(), "Chart preview (bottom left)", preview_);
+                // The preview window (move it by its title bar, resize it by its corner).
+                if (ui_.choice(row(), "Preview", {"Off", "Notes only", "Full visuals"}, previewMode_)) savePreview();
+                if (previewMode_ != kPreviewOff && ui_.check(row(), "Preview downscroll", previewDown_)) savePreview();
+                if (previewMode_ == kPreviewFull && ui_.button(row(), "Reload preview")) reloadFull_ = true;
                 ui_.check(row(), "Metronome", metronome_);
                 double snap = snapIdx_;
                 if (ui_.stepper(row(), "Snap (1/N)", snap, 1, 0, double(std::size(kSnaps) - 1), "%.0f")) snapIdx_ = int(snap);
@@ -1883,7 +2288,6 @@ private:
             }
             default: break;
         }
-        ui_.overlays();
     }
 
     // ------------------------------------------------- FL Studio (SNIFF) --
@@ -1917,7 +2321,7 @@ private:
             e.col = n.side ? keys_ + n.lane : n.lane;
             e.len = n.length;
             if (n.side == 1 && (n.flags & kFlagAlt)) e.type = typeId("Alt Animation");
-            e.stack = std::max<int>(1, n.stack);
+            e.stack = uint32_t(std::min<uint64_t>(std::max<uint64_t>(1, c.countOf(n).sat64()), UINT32_MAX));
             notes_.push_back(e);
         }
         sortNotes();
@@ -2039,9 +2443,24 @@ private:
     bool hitPlayer_ = true, hitOpponent_ = true, metronome_ = false, muteVoices_ = false;
     double hitVolPlayer_ = 0.6, hitVolOpponent_ = 0.6, schedUpTo_ = 0;  // hitsound volumes; scheduled up to (ms)
     double rangeFrom_ = 0, rangeTo_ = 0;  // Section tab: a range of sections to copy
-    bool audioOnly_ = false, reloadArmed_ = false, preview_ = true;
-    int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, or both (as the chart was found)
-    bool backedUpGhc_ = false;
+    bool audioOnly_ = false, reloadArmed_ = false;
+    // The preview window (issue #36): what it shows (PreviewMode), its
+    // downscroll, where it is (title bar included); 1 moving it, 2 resizing.
+    int previewMode_ = 1, previewDrag_ = 0;
+    bool previewDown_ = false;
+    Rectangle previewRect_{12, 478, 228, 230};
+    Vector2 previewGrab_{};
+    // Full visuals: the game itself playing the chart as it is in the editor.
+    std::unique_ptr<PlayState> full_;
+    RenderTexture2D fullRt_{};
+    bool fullDrawn_ = false, fullDown_ = false, reloadFull_ = false;
+    unsigned editGen_ = 0, fullGen_ = 0;  // chart changes made / shown in the preview
+    double editAt_ = -10, fullMs_ = 0, buildMs_ = 0;
+    std::string fullError_;
+    int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, both (as the chart was found), or a count .ghn
+    bool backedUpGhc_ = false, backedUpGhn_ = false;
+    bool onceStacks_ = false;  // buildJson writes each stack's note once (for a count chart)
+    size_t countsCut_ = 0;     // notes read counting past 4,294,967,295, kept as that many
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;
     // EZ Spam (JS Engine's Note Spamming tab)
     bool ezMode_ = false;
@@ -2050,6 +2469,8 @@ private:
     double cur_ = 0, lastT_ = 0, speed_ = 1, flashAt_ = -10, escAt_ = -10;
     double playRate_ = 1, instVol_ = 1, voiceVol_ = 1, stackAmount_ = 10, copyBack_ = 1;
     float zoom_ = 1.0f;
+    float colScroll_ = 0;    // the first lane shown, on charts wider than the screen
+    bool laneDrag_ = false;  // the lane bar is being dragged
     Vector2 boxA_{};
     Ui ui_;
     std::vector<EdNote> notes_, clipboard_;

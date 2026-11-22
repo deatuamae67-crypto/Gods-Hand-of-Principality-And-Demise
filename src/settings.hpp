@@ -59,14 +59,16 @@ struct Settings {
     // that set luaDebugMode (as in Psych), 2 never.
     int luaErrors = 0;
     int luaWarnings = 1;
-    bool psychUi = false;      // "Psych Engine" interface (needs psychFolder)
+    bool psychUi = true;       // "Psych Engine interface": songs' HUD from the Psych / JS Engine copy found (the default, issue #36)
+    bool psychMenus = true;    // its "Psych menus": the menus laid out as Psych's too
     bool hitPopups = true;     // rating pictures and combo numbers on each hit
     int timeBar = 0;           // 0 time left, 1 time elapsed, 2 song name, 3 off (as in Psych)
     float healthBarAlpha = 1.0f;
     // Psych Engine's own options (Visuals and UI, Gameplay).
     bool hideHud = false;       // health bar, icons, score line and ratings hidden
     bool watermark = true;      // "God's Hand (version)" in the bottom-left corner of songs
-    bool introVideo = true;     // the engine's intro (assets/videos/intro.mpg) before the title
+    bool introVideo = true;     // the engine's intro (assets/videos/intro.mpg) before the title ("Play intro at start")
+    bool menuBlur = false;      // the menus' background blurred
     bool visualizer = true;     // the audio visualizer in the top-right corner of songs
     bool scoreZoom = true;      // the score line grows a little on each note you hit
     bool botplayText = true;    // BOTPLAY (or REPLAY) on screen while the game plays by itself
@@ -100,6 +102,13 @@ struct Settings {
     float offsetMs = 0;        // audio/visual offset (positive = audio heard late)
     float scrollSpeed = 0;     // 0 = use chart speed
     float masterVol = 0.8f, musicVol = 1.0f, sfxVol = 0.7f, hitsoundVol = 0.0f;
+    int hitsoundMode = 0;  // Mixer::HitMode: 0 limiter, 1 unlimited, 2 one at a time (each cuts the last)
+    // The chart editor's preview window (issue #36): 0 hidden, 1 the notes,
+    // 2 the song as it plays (stage, characters, scripts, events); its
+    // downscroll; where it is and its size, title bar included (canvas pixels).
+    int editorPreview = 1;
+    bool editorPreviewDown = false;
+    float editorPreviewBox[4] = {12, 478, 228, 230};
     bool muted = false;  // the 0 key (the volume keys bring the sound back)
     // Freeplay's modifiers (TAB) and the song last picked, kept like the rest.
     float modRate = 1.0f;

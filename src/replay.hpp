@@ -13,7 +13,7 @@ namespace gh {
 
 struct ReplayEvent {
     double t = 0;  // song time (ms), offset already applied
-    uint8_t lane = 0;
+    uint16_t lane = 0;
     bool down = false;
 };
 

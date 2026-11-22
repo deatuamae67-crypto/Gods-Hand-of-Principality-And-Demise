@@ -4,6 +4,7 @@
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
 #include "state_play.hpp"
+#include "psych_menus.hpp"
 #include "psych_ui.hpp"
 
 #include <algorithm>
@@ -65,7 +66,9 @@ std::string psychFcLabel(const Session& s) {
 }
 }  // namespace
 
-PlayState::PlayState(PlayRequest r) : req_(std::move(r)) {}
+PlayState::PlayState(PlayRequest r) : req_(std::move(r)) {
+    if (req_.preview) quietMixer_ = std::make_unique<Mixer>();
+}
 
 PlayState::~PlayState() {
     stopRendering();
@@ -80,9 +83,11 @@ PlayState::~PlayState() {
 
 void PlayState::enter() {
     App& a = app();
-    a.stopMenuMusic();
-    a.mixer.clear();
-    if (a.blueballedSong != req_.songId) {
+    if (!req_.preview) {  // the editor's preview leaves the editor's sound alone
+        a.stopMenuMusic();
+        mixer().clear();
+    }
+    if (!req_.preview && a.blueballedSong != req_.songId) {
         a.blueballedSong = req_.songId;
         a.blueballed = 0;
     }
@@ -92,7 +97,7 @@ void PlayState::enter() {
         error_ = "Song not found: " + req_.songId;
         return;
     }
-    rate_ = req_.story ? 1.0 : a.mods.rate;
+    rate_ = req_.story || req_.preview ? 1.0 : a.mods.rate;
     bool mirror = !req_.story && a.mods.mirror;
     if (!req_.replayPath.empty()) {
         if (!playback_.load(req_.replayPath)) {
@@ -105,11 +110,12 @@ void PlayState::enter() {
         mirror = playback_.mirror;
     }
     const SongEntry copy = *entry_;
-    const std::string diff = req_.diff;
+    const std::string diff = req_.diff, chartFile = req_.chartFile;
     const bool extraKeys = app().settings.extraKeys;
     const bool autoChart = req_.autoChart;
-    job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart] {
-        return app().library.prepare(copy, diff, mirror, extraKeys, autoChart);
+    if (req_.preview) mirror = false;
+    job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart, chartFile] {
+        return app().library.prepare(copy, diff, mirror, extraKeys, autoChart, chartFile);
     });
     loadStart_ = a.now;
     loadStartReal_ = nowSec();
@@ -142,7 +148,7 @@ void PlayState::update(double dt) {
         return;
     }
     if (phase_ == Phase::Error) {
-        if (a.input.accept() || a.input.back()) exitToMenu();
+        if (!req_.preview && (a.input.accept() || a.input.back())) exitToMenu();
         return;
     }
     for (auto it = debug_.begin(); it != debug_.end();)
@@ -153,7 +159,7 @@ void PlayState::update(double dt) {
     if (phase_ == Phase::Dead) { updateDead(); return; }
     // Psych's Auto Pause: the song pauses when the window loses focus (Android
     // pauses on its own when the app goes to the background).
-    if (a.settings.autoPause && phase_ == Phase::Playing && !rendering_ && !a.autoRun.enabled && !platform::kAndroid &&
+    if (a.settings.autoPause && !req_.preview && phase_ == Phase::Playing && !rendering_ && !a.autoRun.enabled && !platform::kAndroid &&
         IsWindowReady() && !IsWindowFocused()) {
         if (!(scripts_ && scripts_->callStops("onPause"))) {
             pause();
@@ -178,11 +184,11 @@ void PlayState::update(double dt) {
         // While recording nobody presses OK: the popup stays two seconds.
         const bool recordedLongEnough =
             rendering_ && std::any_of(notices_.begin(), notices_.end(), [&](const Notice& n) { return n.kind == 2 && now - n.t0 > 2.0; });
-        if (a.input.accept() || a.input.back() || recordedLongEnough) {
+        if (req_.preview || a.input.accept() || a.input.back() || recordedLongEnough) {
             popupHold_ = false;
             notices_.erase(std::remove_if(notices_.begin(), notices_.end(), [](const Notice& n) { return n.kind == 2; }),
                            notices_.end());
-            a.mixer.resume();
+            mixer().resume();
         }
         return;
     }
@@ -190,23 +196,27 @@ void PlayState::update(double dt) {
         // A script stopped the countdown (cutscene, dialogue): keep scripts
         // running, start anyway if nothing resumes it.
         if (psych_) psychUpdate(dt);
+        if (req_.preview) { startPreview(); return; }
         if (a.input.back()) { exitToMenu(); return; }
         if (now - waitStart_ > 6.0 || a.input.accept()) beginCountdown();
         return;
     }
     if (phase_ == Phase::Ending) {
         if (psych_) psychUpdate(dt);
-        if (now - endWaitStart_ > 8.0 || a.input.accept()) { endRequested_ = true; finish(); }
+        if (!req_.preview && (now - endWaitStart_ > 8.0 || a.input.accept())) { endRequested_ = true; finish(); }
         return;
     }
 
-    // The audio offset is for the player's ears; a recording is in sync by itself.
-    songMs_ = a.mixer.time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
+    // The audio offset is for the player's ears; a recording is in sync by
+    // itself; the editor's preview follows the editor's clock.
+    // A jump ahead in the editor: the notes in between pass by, unjudged.
+    if (req_.preview && previewMs_ - songMs_ > 1500.0) session_.skipTo(previewMs_);
+    songMs_ = req_.preview ? previewMs_ : mixer().time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
     if (rendering_) {
-        const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(chart_.lengthMs / 1000.0);
+        const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(std::max(songEndMs(), chart_.lengthMs) / 1000.0);
         a.renderLabel = TextFormat("%d:%02d / %d:%02d", at / 60, at % 60, len / 60, len % 60);
     }
-    handleInput();
+    if (!req_.preview) handleInput();
     if (phase_ != Phase::Playing) return;
     if (!songStarted_ && songMs_ >= 0) {
         songStarted_ = true;
@@ -245,7 +255,9 @@ void PlayState::update(double dt) {
     for (int side = 0; side < 2; ++side)
         for (int l = 0; l < chart_.keys; ++l)
             if (session_.isHolding(side, l)) {
-                confirm_[side][l] = std::max(confirm_[side][l], 0.7f);
+                // Psych hits a hold's pieces one step apart, each starting the
+                // receptor's animation over.
+                if (now - confirmAt_[side][l] >= chart_.stepMs(songMs_) / 1000.0 / rate_) strumConfirm(side, l);
                 CharacterState& c = charOf(side);
                 c.singUntil = std::max(c.singUntil, now + 0.12);
             }
@@ -273,8 +285,6 @@ void PlayState::update(double dt) {
     updateVisualizer(dt);
     beatPulse_ = std::max(0.0f, beatPulse_ - float(dt) * 4.0f);
     minePulse_ = std::max(0.0f, minePulse_ - float(dt) * 3.0f);
-    for (auto& side : confirm_)
-        for (float& c : side) c = std::max(0.0f, c - float(dt) * 5.0f);
     healthShown_ = approach(healthShown_, float(session_.health), 10.0f, float(dt));
     if (speedTweenDur_ > 0) {
         speedTweenT_ = std::min(speedTweenDur_, speedTweenT_ + dt);
@@ -292,9 +302,11 @@ void PlayState::update(double dt) {
             return;
         }
     }
-    const double audioEnd = prep_.inst ? a.mixer.lengthSec() * 1000.0 : 0.0;
-    const double endAt = std::max(chart_.lengthMs + 800.0 * rate_, std::min(audioEnd, chart_.lengthMs + 8000.0 * rate_));
-    if ((songMs_ >= endAt && session_.allResolved()) || songMs_ > chart_.lengthMs + 20000.0) finish();
+    // The song ends with its audio, as in Psych (issue #36), not some time
+    // after the last note; without audio, or with notes past its end, just
+    // after the last note.
+    const double endAt = std::max(songEndMs(), chart_.lengthMs + 800.0 * rate_);
+    if ((songMs_ >= endAt && session_.allResolved()) || songMs_ > endAt + 20000.0) finish();
 }
 
 void PlayState::draw() {
@@ -328,8 +340,9 @@ void PlayState::draw() {
         gfx::beginCanvas(0.94f * camZoom_, camFocus_);
         stage_.drawBack(now);
         const bool demise = left_.id == CharId::Demise;
-        drawCharacter(left_, {330, 600}, demise ? 0.95f : 1.0f, now, false);
-        drawCharacter(right_, {950, 612}, 1.0f, now, true);
+        // As large as FNF's cast on its stages (issue #36).
+        drawCharacter(left_, {320, 640}, demise ? 1.14f : 1.2f, now, false);
+        drawCharacter(right_, {960, 652}, 1.2f, now, true);
         stage_.drawFront(now);
         gfx::endCanvas();
 
@@ -372,8 +385,8 @@ void PlayState::setup() {
     App& a = app();
     chart_ = std::move(prep_.chart);
     cfg_.ghostTapping = a.settings.ghostTapping;
-    cfg_.botplay = !req_.story && a.mods.botplay;
-    cfg_.practice = !req_.story && a.mods.practice;
+    cfg_.botplay = (!req_.story && a.mods.botplay) || req_.preview;  // the editor's preview plays itself
+    cfg_.practice = !req_.story && !req_.preview && a.mods.practice;
     cfg_.rate = rate_;
     // Psych's hit windows, Safe Frames (frames of 1/60 s) and Rating Offset.
     cfg_.windows[kDivine] = a.settings.sickWindow;
@@ -381,7 +394,7 @@ void PlayState::setup() {
     cfg_.windows[kMortal] = a.settings.badWindow;
     cfg_.windows[kSinful] = a.settings.safeFrames / 60.0 * 1000.0;
     cfg_.ratingOffset = a.settings.ratingOffset;
-    playerLeft_ = !req_.story && a.mods.mirror;
+    playerLeft_ = !req_.story && !req_.preview && a.mods.mirror;
     if (replaying_) {
         cfg_.botplay = false;
         cfg_.practice = true;  // a replay never ends early
@@ -430,12 +443,19 @@ void PlayState::setup() {
             for (int l = 0; l < chart_.keys; ++l) {
                 const auto& v = session_.lane(side, l);
                 for (size_t i = 0; i < v.size(); ++i)
-                    if (v[i].id < refs.size()) refs[v[i].id] = NoteRef{uint8_t(side), uint8_t(l), uint32_t(i)};
+                    if (v[i].id < refs.size()) refs[v[i].id] = NoteRef{uint8_t(side), uint16_t(l), uint32_t(i)};
             }
         noteOrder_ = std::move(refs);
     }
 
     findGfSections();
+    // The audio's length as Psych counts it (the instrumental's, or the
+    // longest voice track's without one), known before the scripts start.
+    audioLenMs_ = 0;
+    if (prep_.inst) audioLenMs_ = double(prep_.inst->frames()) * 1000.0 / Mixer::kRate;
+    else
+        for (const PcmPtr* t : {&prep_.voiceP, &prep_.voiceO})
+            if (*t) audioLenMs_ = std::max(audioLenMs_, double((*t)->frames()) * 1000.0 / Mixer::kRate);
     creating_ = true;  // onCreate / onCreatePost: no note has come yet
     psych_ = !entry_->builtin && setupPsych();
     creating_ = false;
@@ -444,8 +464,10 @@ void PlayState::setup() {
         leftColor_ = rgbColor(barColor_[0]);
         rightColor_ = rgbColor(barColor_[1]);
     }
-    a.mixer.setTracks(prep_.inst, prep_.voiceP, prep_.voiceO);
-    a.mixer.setRate(rate_);
+    if (!req_.preview) {
+        mixer().setTracks(prep_.inst, prep_.voiceP, prep_.voiceO);
+        mixer().setRate(rate_);
+    }
     restart();
 }
 
@@ -526,8 +548,8 @@ double PlayState::scrollSpeed() const {
     const App& a = app();
     const Settings& s = a.settings;
     double base = s.scrollSpeed > 0.001f ? s.scrollSpeed : chart_.speed;
-    if (a.mods.scrollType == 1) base *= a.mods.scrollValue;  // Freeplay modifiers
-    else if (a.mods.scrollType == 2) return a.mods.scrollValue;  // constant: scroll speed events do nothing (Psych)
+    if (!req_.preview && a.mods.scrollType == 1) base *= a.mods.scrollValue;  // Freeplay modifiers
+    else if (!req_.preview && a.mods.scrollType == 2) return a.mods.scrollValue;  // constant: scroll speed events do nothing (Psych)
     return base * speedMult_;
 }
 
@@ -537,8 +559,9 @@ void PlayState::restart() {
     sessionFresh_ = false;
     popups_.clear();
     fx_.clear();
-    for (auto& s : confirm_)
-        for (float& c : s) c = 0;
+    for (int s = 0; s < 2; ++s)
+        for (int l = 0; l < kMaxKeys; ++l) confirmAt_[s][l] = confirmUntil_[s][l] = 0;
+    for (bool& b : confirmHeld_) b = false;
     for (int& h : heldCount_) h = 0;
     for (bool& t : touchDown_) t = false;
     record_.events.clear();
@@ -549,36 +572,55 @@ void PlayState::restart() {
     lastSection_ = chart_.sections.empty() ? -100000 : 0;  // Psych: sectionHit from section 1 on
     lastFocus_ = -1;
     eventIdx_ = 0;
-    for (int t = 0; t < Mixer::kTrackCount; ++t) a.mixer.setTrackVolume(t, 1.0f);
-    a.mixer.fadeTo(1.0f, 0.0f);
+    if (!req_.preview) {
+        for (int t = 0; t < Mixer::kTrackCount; ++t) mixer().setTrackVolume(t, 1.0f);
+        mixer().fadeTo(1.0f, 0.0f);
+    }
     songMs_ = -leadMs_;
     healthShown_ = 1.0f;
     camFocus_ = {640, 370};
     camZoom_ = hudZoom_ = 1.0f;
     zoomingOn_ = false;
     npsWindow_.clear();
-    nps_ = maxNps_ = npsOpp_ = maxNpsOpp_ = 0;
+    nps_ = maxNps_ = npsOpp_ = maxNpsOpp_ = Count();
     speedMult_ = 1.0;
     speedTweenDur_ = 0;
     left_.singUntil = right_.singUntil = -10;
     left_.dead = right_.dead = false;
     finished_ = songStarted_ = countdownStarted_ = endRequested_ = false;
-    a.input.clear();
+    if (!req_.preview) a.input.clear();
     if (psych_ && scripts_ && scripts_->callStops("onStartCountdown")) {
-        a.mixer.stop();
+        if (!req_.preview) mixer().stop();
         phase_ = Phase::Waiting;
         waitStart_ = a.now;
         return;
     }
-    beginCountdown();
+    if (req_.preview) startPreview();
+    else beginCountdown();
+}
+
+// The chart editor's preview starts where the editor is, as Psych's playtest
+// from here: the notes before it pass by unjudged, and the events before it
+// fire at once on the first update (Psych fires them as it reaches them).
+void PlayState::startPreview() {
+    countdownStarted_ = true;
+    songMs_ = previewMs_ = req_.previewFromMs;
+    session_.skipTo(req_.previewFromMs);
+    const double beatF = chart_.beatAt(std::max(0.0, req_.previewFromMs));
+    lastBeat_ = int(std::floor(beatF)) - 1;
+    lastStep_ = int(std::floor(beatF * 4.0)) - 1;
+    phase_ = Phase::Playing;
+    if (scripts_) {
+        scripts_->setGlobal("startedCountdown", true);
+        scripts_->call("onCountdownStarted");
+    }
 }
 
 void PlayState::beginCountdown() {
-    App& a = app();
     if (countdownStarted_ && phase_ == Phase::Playing) return;
     countdownStarted_ = true;
     platform::log("song " + req_.songId + " " + req_.diff);
-    a.mixer.play(-leadMs_ / 1000.0);
+    mixer().play(-leadMs_ / 1000.0);
     songMs_ = -leadMs_;
     phase_ = Phase::Playing;
     if (scripts_) {
@@ -642,15 +684,36 @@ void PlayState::handleInput() {
     }
 }
 
+void PlayState::strumConfirm(int side, int lane) {
+    if (lane < 0 || lane >= kMaxKeys) return;
+    const double now = app().now;
+    confirmAt_[side][lane] = now;
+    // A note hit by the player's own key: lit while the key stays down. The
+    // opponent's, the bot's and lanes with no key: 1.25 steps of the song's
+    // tempo (Psych: Conductor.stepCrochet * 1.25 / 1000 / playbackRate).
+    if (side == 1 && heldCount_[lane] > 0 && !cfg_.botplay) confirmHeld_[lane] = true;
+    else confirmUntil_[side][lane] = now + chart_.stepMs(songMs_) * 1.25 / 1000.0 / rate_;
+}
+
+float PlayState::confirmGlow(int side, int lane, double* since) const {
+    const double now = app().now;
+    const bool lit = (side == 1 && confirmHeld_[lane] && heldCount_[lane] > 0) || now < confirmUntil_[side][lane];
+    if (!lit) return 0;
+    const double t = now - confirmAt_[side][lane];
+    if (since) *since = t;
+    return 0.65f + 0.35f * float(std::max(0.0, 1.0 - t * 6.0));  // a flash at the hit, then steady
+}
+
 void PlayState::laneDown(int lane, double t) {
     session_.press(lane, t);
-    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint8_t(lane), true});
+    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint16_t(lane), true});
     if (scripts_) scripts_->call("onKeyPress", {scene::Value(double(lane))});
 }
 
 void PlayState::laneUp(int lane, double t) {
     session_.release(lane, t);
-    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint8_t(lane), false});
+    if (lane >= 0 && lane < kMaxKeys) confirmHeld_[lane] = false;  // Psych: back to static on release
+    if (!replaying_ && !cfg_.botplay) record_.events.push_back({t, uint16_t(lane), false});
     if (scripts_) scripts_->call("onKeyRelease", {scene::Value(double(lane))});
 }
 
@@ -731,7 +794,7 @@ void PlayState::popup(const std::string& text, Color c, const std::string& timin
     // Combo stacking off (Psych's option): the new one replaces the others.
     if (!a.settings.comboStacking) popups_.clear();
     if (popups_.size() >= 16) popups_.erase(popups_.begin());
-    Popup p{text, timing, c, now, session_.combo};
+    Popup p{text, timing, c, now, session_.combo};  // the combo as it is, any size
     p.rating = rating;
     p.seed = uint32_t(GetRandomValue(1, 0x7FFFFFFF));
     const double bpm = chart_.bpmAt(std::max(0.0, songMs_));
@@ -774,10 +837,10 @@ void PlayState::handleNoteEvents() {
         if (ev.type == GameEvent::PlayerHit || ev.type == GameEvent::OpponentHit) zoomingOn_ = true;
         switch (ev.type) {
             case GameEvent::PlayerHit: {
-                confirm_[1][ev.lane] = 1.0f;
+                strumConfirm(1, ev.lane);
                 vis_.hit(int(ev.rating));
                 if (!(ev.flags & kFlagNoAnim)) charOf(1).sing(dir, now, ev.length / 1000.0 / rate_);
-                a.mixer.setTrackVolume(Mixer::kVoicePlayer, 1.0f);
+                mixer().setTrackVolume(Mixer::kVoicePlayer, 1.0f);
                 const RatingInfo& ri = ratingInfo(ev.rating);
                 if (!cfg_.botplay && (!cfg_.practice || replaying_)) scoreBopAt_ = now;  // Psych: the score text zooms
                 popup(ri.name, ratingColor(ev.rating),
@@ -788,8 +851,8 @@ void PlayState::handleNoteEvents() {
                 }
                 // Every note its own hitsound, on its sample of the song
                 // (the moment of the press; the note's own time for bots).
-                if (a.settings.hitsoundVol > 0)
-                    a.mixer.hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol);
+                if (a.settings.hitsoundVol > 0 && !req_.preview)
+                    mixer().hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol, double(ev.stack));
                 if (psych_) psychNoteHit(ev, false);
                 scoreDirty_ = true;
                 scoreDirtyMiss_ = false;
@@ -800,7 +863,7 @@ void PlayState::handleNoteEvents() {
             case GameEvent::GhostMiss:
                 charOf(1).miss(dir, now);
                 vis_.miss();
-                a.mixer.setTrackVolume(Mixer::kVoicePlayer, 0.0f);
+                mixer().setTrackVolume(Mixer::kVoicePlayer, 0.0f);
                 if (now - lastMissSfx_ > 0.05) {
                     sfxPlay(Sfx::Miss, 0.55f, gfx::randf(0.9f, 1.1f));
                     lastMissSfx_ = now;
@@ -818,7 +881,7 @@ void PlayState::handleNoteEvents() {
                 if (psych_) psychMiss(ev, false);
                 break;
             case GameEvent::OpponentHit:
-                confirm_[0][ev.lane] = 1.0f;
+                strumConfirm(0, ev.lane);
                 vis_.opponentHit();
                 if (!(ev.flags & kFlagNoAnim)) charOf(0).sing(dir, now, ev.length / 1000.0 / rate_);
                 if (psych_) psychNoteHit(ev, true);
@@ -908,6 +971,7 @@ void PlayState::onSection(int s) {
 // ------------------------------------------------------------- pause/death --
 
 void PlayState::pause() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     const long presses = std::count_if(record_.events.begin(), record_.events.end(), [](const ReplayEvent& e) { return e.down; });
     platform::log(TextFormat("paused at %.1f s: %ld presses, %lld hits, %lld misses", songMs_ / 1000.0, presses,
@@ -916,7 +980,7 @@ void PlayState::pause() {
     pauseSel_ = 0;
     pauseScroll_ = 0;
     pausedAt_ = a.now;
-    a.mixer.pause();
+    mixer().pause();
     // Psych's pause music (Options: pause screen song), from a random point, fading in.
     const PsychUi& ui = psychUi();
     if (const std::string song = ui.active() ? ui.pauseMusic(a.settings.pauseMusic) : std::string(); !song.empty()) {
@@ -955,7 +1019,7 @@ void PlayState::resume() {
     stopPauseMusic();
     freePauseShot();
     platform::log("resumed");
-    a.mixer.resume();
+    mixer().resume();
     for (auto& kv : sounds_)
         if (kv.second.started && !kv.second.paused) ResumeMusicStream(kv.second.mus);
     phase_ = Phase::Playing;
@@ -995,12 +1059,13 @@ void PlayState::updatePause() {
 }
 
 void PlayState::die() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     ++a.blueballed;
     phase_ = Phase::Dead;
     deadAt_ = a.now;
     deadSel_ = 0;
-    a.mixer.fadeTo(0.0f, 0.5f);
+    mixer().fadeTo(0.0f, 0.5f);
     sfxPlay(Sfx::Death);
     charOf(1).miss(1, a.now);
     charOf(1).dead = true;
@@ -1021,36 +1086,40 @@ void PlayState::stopRendering() {
 }
 
 void PlayState::exitToMenu() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     stopRendering();
     if (scripts_) scripts_->call("onDestroy");
-    a.mixer.stop();
-    a.mixer.clear();
+    mixer().stop();
+    mixer().clear();
     a.change(req_.story ? makeStory() : makeFreeplay());
 }
 
 void PlayState::openChartEditor() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     stopRendering();
     if (scripts_) scripts_->call("onDestroy");
-    a.mixer.stop();
-    a.mixer.clear();
+    mixer().stop();
+    mixer().clear();
     sfxPlay(Sfx::Confirm);
     a.change(makeChartEditor(req_.songId, req_.diff));
 }
 
 // Options from the pause menu: leaving them starts this song again, as in Psych.
 void PlayState::openOptions() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     stopRendering();
     if (scripts_) scripts_->call("onDestroy");
-    a.mixer.stop();
-    a.mixer.clear();
+    mixer().stop();
+    mixer().clear();
     a.optionsReturn = std::make_unique<PlayRequest>(req_);
     a.change(makeOptions());
 }
 
 void PlayState::finish() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     if (finished_) return;
     App& a = app();
     if (scripts_ && !endRequested_) {
@@ -1069,14 +1138,14 @@ void PlayState::finish() {
     r.req = req_;
     r.title = chart_.title.empty() ? entry_->title : chart_.title;
     r.diff = req_.diff;
-    r.score = session_.score;
+    r.score = session_.score;  // exact; what is saved (scores, replays) is 64-bit
     r.acc = session_.accuracy();
     r.misses = session_.misses;
     r.maxCombo = session_.maxCombo;
     r.counts = session_.counts;
-    r.totalNotes = (long long)session_.totalPlayerNotes;
+    r.totalNotes = session_.totalPlayerNotes;
     r.opponentHits = session_.opponentHits;
-    r.opponentNotes = (long long)session_.totalOpponentNotes;
+    r.opponentNotes = session_.totalOpponentNotes;
     r.rank = session_.rank();
     r.clear = session_.clearLabel();
     r.errors = session_.hitErrors;
@@ -1088,7 +1157,7 @@ void PlayState::finish() {
     r.color = entry_->color;
     const bool saveable = !cfg_.botplay && !cfg_.practice && !replaying_ && rate_ >= 1.0;
     if (saveable) {
-        ScoreEntry e{r.score, r.acc, r.misses, r.rank, r.clear};
+        ScoreEntry e{r.score.satLL(), r.acc, r.misses.satLL(), r.rank, r.clear};
         r.newBest = a.scores.submit(Scores::key(entry_->id + (playerLeft_ ? "#opponent" : "") + (req_.autoChart ? "#autochart" : ""),
                                                 req_.diff), e);
     }
@@ -1102,9 +1171,9 @@ void PlayState::finish() {
         record_.keys = chart_.keys;
         for (int k = 0; k < kRatingCount; ++k) record_.windows[k] = cfg_.windows[k];
         record_.ratingOffset = cfg_.ratingOffset;
-        record_.score = r.score;
+        record_.score = r.score.satLL();
         record_.acc = r.acc;
-        record_.misses = r.misses;
+        record_.misses = r.misses.satLL();
         const std::string dir = a.userDir + "replays/";
         const std::string last = dir + replayFileName(entry_->id, req_.diff, "last");
         if (record_.save(last)) r.replayPath = last;
@@ -1113,8 +1182,8 @@ void PlayState::finish() {
         r.replayPath = req_.replayPath;
     }
     if (req_.story) {
-        r.req.storyScore += r.score;
-        r.req.storyMisses += r.misses;
+        r.req.storyScore += r.score.satLL();
+        r.req.storyMisses += r.misses.satLL();
         r.req.storyAccSum += r.acc;
         r.req.storySongs += 1;
         if (r.req.storyQueue.empty()) {
@@ -1123,9 +1192,9 @@ void PlayState::finish() {
         }
     }
     if (a.autoRun.enabled)
-        std::printf("[auto] %s (%s): score %lld, accuracy %.2f%%, misses %lld, max combo %lld, notes %llu%s\n", r.title.c_str(),
-                    r.diff.c_str(), r.score, r.acc * 100.0, r.misses, r.maxCombo, (unsigned long long)session_.totalPlayerNotes,
-                    psych_ ? " [psych scene]" : "");
+        std::printf("[auto] %s (%s): score %s, accuracy %.2f%%, misses %s, max combo %s, notes %s%s\n", r.title.c_str(),
+                    r.diff.c_str(), r.score.str().c_str(), r.acc * 100.0, r.misses.str().c_str(), r.maxCombo.str().c_str(),
+                    session_.totalPlayerNotes.str().c_str(), psych_ ? " [psych scene]" : "");
     a.change(makeResults(r));
 }
 
@@ -1221,12 +1290,13 @@ void PlayState::drawLanes() {
             }
             if (st.visible && alphaStrum > 0.001f) {
                 keepOrder({c.x - size * 0.5f, c.y - size * 0.5f, size, size}, -1);
-                float conf = confirm_[side][lane];
+                double since = 0;
+                float conf = confirmGlow(side, lane, &since);
                 if (side == 0 && !s.opponentStrums) conf = 0;
                 const bool pressed = side == 1 && heldCount_[lane] > 0 && !cfg_.botplay;
                 const int sstate = conf > 0.01f ? 2 : pressed ? 1 : 0;
                 if (sstate) ui.beginDir(dir);  // idle receptors stay grey
-                const bool drawn = ui.strum(dir, c, size, sstate, alphaStrum, st.angle, a.now);
+                const bool drawn = ui.strum(dir, c, size, sstate, alphaStrum, st.angle, since);
                 if (sstate) ui.endDir();
                 if (drawn) {
                     // the Psych Engine interface drew it
@@ -1472,10 +1542,10 @@ void PlayState::updateHudObjects(double dt) {
 
 std::string PlayState::psychScoreLine() const {
     // Psych 0.7.3's updateScore: "Score: 1200 | Misses: 0 | Rating: Sick! (98.5%) - SFC".
-    const long long judged = session_.judged() + session_.misses;
-    std::string line = "Score: " + std::to_string(session_.score) + " | Misses: " + std::to_string(session_.misses) + " | Rating: " +
-                       (ratingNameOverride_.empty() ? psychRatingName(session_.accuracy(), judged) : ratingNameOverride_);
-    if (judged > 0) {
+    const Count judged = session_.judged() + session_.misses;
+    std::string line = "Score: " + session_.score.str() + " | Misses: " + session_.misses.str() + " | Rating: " +
+                       (ratingNameOverride_.empty() ? psychRatingName(session_.accuracy(), judged.isZero() ? 0 : 1) : ratingNameOverride_);
+    if (!judged.isZero()) {
         // CoolUtil.floorDecimal(percent, 2), written as Haxe writes a Float.
         std::string pct = TextFormat("%.2f", std::floor(session_.accuracy() * 10000.0) / 100.0);
         while (!pct.empty() && pct.back() == '0') pct.pop_back();
@@ -1684,11 +1754,11 @@ void PlayState::drawHud() {
     if (s.noteCounter > 0 && scoreShown) {
         std::string line;
         if (s.noteCounter == 2) {
-            const long long opp = session_.opponentHits, mine = session_.judged();
+            const Count opp = session_.opponentHits, mine = session_.judged();
             line = "Notes " + fmtThousands(opp) + " + " + fmtThousands(mine) + " = " + fmtThousands(opp + mine) + " / " +
-                   fmtThousands((long long)(session_.totalPlayerNotes + session_.totalOpponentNotes));
+                   fmtThousands(session_.totalPlayerNotes + session_.totalOpponentNotes);
         } else {
-            line = "Notes " + fmtThousands(session_.judged()) + " / " + fmtThousands((long long)session_.totalPlayerNotes);
+            line = "Notes " + fmtThousands(session_.judged()) + " / " + fmtThousands(session_.totalPlayerNotes);
         }
         if (s.noteCounter == 2)  // each side on its own: opponent / yours
             line += "   |   NPS " + fmtThousands(npsOpp_) + " / " + fmtThousands(nps_) + " (max " + fmtThousands(maxNpsOpp_) + " / " +
@@ -1836,16 +1906,20 @@ void PlayState::drawUnderNotes() {
                 const float ry = (gfx::H - rs.y) * 0.5f - 60.0f - off[1] + rvy * tau + 0.5f * 550.0f * tau * tau;
                 const float ra = tau < p.beat ? 1.0f : std::max(0.0f, 1.0f - (tau - p.beat) / 0.2f);
                 if (ra > 0.002f) ui.ratingAt(std::min(p.rating, 3), rx, ry, rk, ra * comboAlpha);
-                std::string digits = std::to_string(std::max(0LL, p.combo));
+                std::string digits = p.combo.str();
                 while (digits.size() < 3) digits.insert(digits.begin(), '0');
                 const float da = tau < 2.0f * p.beat ? 1.0f : std::max(0.0f, 1.0f - (tau - 2.0f * p.beat) / 0.2f);
+                // A combo too long for the screen (count charts reach 78 digits)
+                // shrinks to fit from where Psych starts it to the right edge.
+                const float room = gfx::W - 20.0f - (gfx::W * 0.35f - 90.0f + off[2]);
+                const float fit = std::clamp(room / (43.0f * float(digits.size())), 0.05f, 1.0f);
                 for (size_t i = 0; i < digits.size(); ++i) {
                     const int d = digits[i] - '0';
                     const float ay = irange(200, 300), vy = -irange(140, 160), vx = rnd() * 10.0f - 5.0f;
                     const Vector2 ns = ui.numSize(d);
                     if (ns.x <= 0 || da <= 0.002f) continue;
-                    const float nk = std::floor(ns.x * 0.5f) / ns.x;
-                    const float x = gfx::W * 0.35f + 43.0f * float(i) - 90.0f + off[2] + vx * tau;
+                    const float nk = std::floor(ns.x * 0.5f) / ns.x * fit;
+                    const float x = gfx::W * 0.35f + 43.0f * fit * float(i) - 90.0f + off[2] + vx * tau;
                     const float y = (gfx::H - ns.y) * 0.5f + 80.0f - off[3] + vy * tau + 0.5f * ay * tau * tau;
                     ui.numAt(d, x, y, nk, da * comboAlpha);
                 }
@@ -1862,8 +1936,12 @@ void PlayState::drawUnderNotes() {
                 const float al = (age < 0.4f ? 1.0f : 1.0f - (age - 0.4f) / 0.3f) * comboAlpha;
                 const float y = py - age * 26.0f;
                 gfx::text(FontId::Title, p.text, px, y, 46 * pop, fade(p.c, al), Align::Center, 2.5f);
-                if (p.combo >= 3 && p.text != "MISS")
-                    gfx::text(FontId::Ui, "x" + std::to_string(p.combo), px, y + 52, 34 * pop, fade(WHITE, al), Align::Center, 2.0f);
+                if (p.combo >= Count(3) && p.text != "MISS") {
+                    const std::string combo = "x" + p.combo.str();
+                    const float w = gfx::measure(FontId::Ui, combo, 34 * pop).x;
+                    const float size = 34 * pop * std::min(1.0f, (gfx::W - 40.0f) / std::max(1.0f, w));  // the longest fit
+                    gfx::text(FontId::Ui, combo, px, y + 52, size, fade(WHITE, al), Align::Center, 2.0f);
+                }
                 if (!p.timing.empty()) gfx::text(FontId::Ui, p.timing, px, y - 26, 22, fade(kIvory, al * 0.9f), Align::Center, 1.5f);
             }
         }
@@ -1890,7 +1968,9 @@ void PlayState::drawUnderNotes() {
 }
 
 void PlayState::drawPause() {
-    if (psychUi().active() && psychUi().font()) {
+    // Psych's pause menu whenever its look is on (issue #36: never this one
+    // instead): with the copy's letters and font, or the game's in their place.
+    if (pm::on() || (psychUi().active() && psychUi().font())) {
         drawPsychPause();
         return;
     }
@@ -1910,7 +1990,6 @@ void PlayState::drawPause() {
 // in a slanted list that glides to the selection.
 void PlayState::drawPsychPause() {
     App& a = app();
-    const PsychUi& ui = psychUi();
     const float t = float(a.now - pausedAt_);
     auto quartInOut = [](float x) { return x <= 0.5f ? 8.0f * x * x * x * x : 1.0f - 8.0f * std::pow(1.0f - x, 4.0f); };
     DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(BLACK, 0.6f * quartInOut(saturate(t / 0.4f))));
@@ -1922,17 +2001,17 @@ void PlayState::drawPsychPause() {
     const std::string info[3] = {songNameShown_.empty() ? chart_.title : songNameShown_, diff, "Blueballed: " + std::to_string(a.blueballed)};
     for (int i = 0; i < 3; ++i) {
         const float k = quartInOut(saturate((t - 0.3f - 0.2f * float(i)) / 0.4f));
-        ui.text(info[i], gfx::W - 20, 15.0f + 32.0f * float(i) + 5.0f * k, 32, fade(WHITE, k), 1, 0);
+        pm::vcr(info[i], gfx::W - 20, 15.0f + 32.0f * float(i) + 5.0f * k, 32, fade(WHITE, k), 1, 0);
     }
-    if (cfg_.practice) ui.text("PRACTICE MODE", gfx::W - 20, 15.0f + 101.0f, 32, WHITE, 1, 0);
-    if (cfg_.botplay) ui.text("BOTPLAY", gfx::W - 20, 15.0f + (cfg_.practice ? 133.0f : 101.0f), 32, WHITE, 1, 0);
+    if (cfg_.practice) pm::vcr("PRACTICE MODE", gfx::W - 20, 15.0f + 101.0f, 32, WHITE, 1, 0);
+    if (cfg_.botplay) pm::vcr("BOTPLAY", gfx::W - 20, 15.0f + (cfg_.practice ? 133.0f : 101.0f), 32, WHITE, 1, 0);
     static const char* items[kPauseItems] = {"Resume", "Restart Song", "Options", "Exit to menu"};
     for (int i = 0; i < kPauseItems; ++i) {
         const float target = float(i) - pauseScroll_;
         const float x = 90 + target * 20, y = 320 + target * 156;
         if (y < -100 || y > gfx::H + 40) continue;
         const float al = i == pauseSel_ ? 1.0f : 0.6f;
-        if (ui.alphabet(items[i], x, y, 70, al) < 0) ui.text(items[i], x, y, 64, fade(WHITE, al), -1, 2.0f);
+        pm::bold(items[i], x, y, 70, al);
     }
 }
 
@@ -1993,7 +2072,7 @@ void PlayState::drawWatermark() {
     const Settings& s = app().settings;
     if (!s.watermark || s.hideHud) return;
     // As the issue asked: "Gods Hand engine v.(version) (platform) edition".
-    static const std::string text = std::string("God's Hand Engine v." GH_VERSION " ") + platform::kName + " Slop Edition";
+    static const std::string text = std::string("God's Hand Engine v." GH_VERSION " ") + platform::kName + " Edition";
     const PsychUi& ui = psychUi();
     if (psych_ && ui.active() && ui.font()) ui.text(text, 2, gfx::H - 22, 16, fade(WHITE, 0.85f), -1, 1.0f);
     else gfx::text(FontId::Ui, text, 8, gfx::H - 26, 18, fade(kIvory, 0.75f), Align::Left, 1.2f);
@@ -2020,8 +2099,8 @@ void PlayState::drawDebugOverlay() {
     };
     rows.push_back({"CHART", chart_.title + " - " + chart_.difficulty + TextFormat("  |  %dK  |  speed %.2f  |  BPM %.1f", chart_.keys,
                                                                                     scrollSpeed(), chart_.bpmAt(std::max(0.0, songMs_)))});
-    rows.push_back({"", "notes P " + num(double(chart_.playerNotes)) + "  O " + num(double(chart_.opponentNotes)) + "  (in the file " +
-                            num(double(chart_.rawNoteCount)) + ")  sections " + num(double(chart_.sections.size()))});
+    rows.push_back({"", "notes P " + num(chart_.playerNotes.toDouble()) + "  O " + num(chart_.opponentNotes.toDouble()) + "  (in the file " +
+                            num(chart_.rawNoteCount.toDouble()) + ")  sections " + num(double(chart_.sections.size()))});
     rows.push_back({"CLOCK", TextFormat("%.3f s / %.1f s  |  beat %.2f  |  step %d  |  section %d  |  rate %.2fx", songMs_ / 1000.0,
                                         chart_.lengthMs / 1000.0, chart_.beatAt(songMs_), lastStep_, lastSection_, rate_)});
     auto track = [](const char* name, const PcmPtr& p) -> std::string {
@@ -2043,9 +2122,9 @@ void PlayState::drawDebugOverlay() {
                             (noteRaster_.cpu() ? TextFormat("  |  %d notes, %.2f Mpx, %.2f ms", noteRaster_.lastNotes(),
                                                             double(noteRaster_.lastPixels()) / 1e6, noteRaster_.lastMs())
                                                : "")});
-    rows.push_back({"", "judged " + num(double(session_.judged())) + "  combo " + num(double(session_.combo)) + "  misses " +
-                            num(double(session_.misses)) + "  opponent " + num(double(session_.opponentHits)) + "  NPS " +
-                            num(double(nps_))});
+    rows.push_back({"", "judged " + num(session_.judged().toDouble()) + "  combo " + num(session_.combo.toDouble()) + "  misses " +
+                            num(session_.misses.toDouble()) + "  opponent " + num(session_.opponentHits.toDouble()) + "  NPS " +
+                            num(nps_.toDouble())});
     rows.push_back({"FRAME", TextFormat("%d fps  |  update %.2f ms  |  draw %.2f ms  |  worst %.1f ms", int(a.fps + 0.5f), a.updateMs,
                                         a.drawMs, a.worstFrameMs)});
     if (scripts_) rows.push_back({"SCRIPTS", TextFormat("%zu loaded  |  note callbacks %s", scripts_->count(),

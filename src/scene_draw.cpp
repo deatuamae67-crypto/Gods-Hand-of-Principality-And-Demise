@@ -87,7 +87,13 @@ SceneRenderer::CompiledShader* SceneRenderer::shaderFor(const scene::Scene& sc, 
         errors.push_back("shader " + name + ": no fragment shader");
         return &cs;
     }
-    const std::string glsl = translateShader(src->second.frag, rlGetVersion() == RL_OPENGL_ES_20);
+    const int gl = rlGetVersion();
+    std::vector<UniformDefault> defaults;  // initial values GLSL ES 1.0 cannot hold
+    const std::string glsl = translateShader(src->second.frag,
+                                             gl == RL_OPENGL_ES_20 ? Glsl::Es100
+                                             : gl == RL_OPENGL_21  ? Glsl::Legacy120
+                                                                   : Glsl::Core330,
+                                             &defaults);
     std::string log;
     g_shaderLog = &log;
     SetTraceLogCallback(captureLog);
@@ -95,6 +101,19 @@ SceneRenderer::CompiledShader* SceneRenderer::shaderFor(const scene::Scene& sc, 
     SetTraceLogCallback(nullptr);
     g_shaderLog = nullptr;
     cs.ok = cs.sh.id != 0 && cs.sh.id != rlGetShaderIdDefault();
+    if (cs.ok)
+        for (const UniformDefault& d : defaults) {
+            const int l = GetShaderLocation(cs.sh, d.name.c_str());
+            const int n = int(d.values.size());
+            if (l < 0 || n < 1 || n > 4) continue;
+            if (d.isInt) {
+                int v[4] = {};
+                for (int i = 0; i < n; ++i) v[i] = int(d.values[size_t(i)]);
+                SetShaderValue(cs.sh, l, v, SHADER_UNIFORM_INT + n - 1);
+            } else {
+                SetShaderValue(cs.sh, l, d.values.data(), SHADER_UNIFORM_FLOAT + n - 1);
+            }
+        }
     if (!cs.ok) {
         // Keep the compiler's own message (first error line).
         std::string first;

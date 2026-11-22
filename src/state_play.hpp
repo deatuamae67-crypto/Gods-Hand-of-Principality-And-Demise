@@ -41,6 +41,12 @@ public:
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
     void openOptions();
+    // The chart editor's preview (PlayRequest::preview): the song's position,
+    // set before each update; ready once loaded; what failed, if it did.
+    void setPreviewTime(double ms) { previewMs_ = ms; }
+    bool previewReady() const { return phase_ == Phase::Playing || phase_ == Phase::Ending; }
+    bool previewFailed() const { return phase_ == Phase::Error; }
+    const std::string& previewError() const { return error_; }
     // Keys bound to a lane are notes, not volume keys.
     bool keyReserved(int key) const override {
         return key > 0 && key < int(keyLane_.size()) && keyLane_[size_t(key)] >= 0;
@@ -198,15 +204,27 @@ private:
     void updateJsEngine(double dt);
     void drawNotices();
     void drawBotEnergy();
-    double shownLengthMs() const { return fakeLenMs_ >= 0 ? fakeLenMs_ : chart_.lengthMs; }
-    struct NoteRef { uint8_t side, lane; uint32_t idx; };
+    // The song's length: its audio's (Psych's FlxG.sound.music.length), or
+    // the end of the last note when it has no audio.
+    double songEndMs() const {
+        return audioLenMs_ > 0 ? audioLenMs_ : chart_.lengthMs;
+    }
+    double shownLengthMs() const { return fakeLenMs_ >= 0 ? fakeLenMs_ : songEndMs(); }
+    void startPreview();
+    double previewMs_ = 0;  // the editor's clock (the preview's song position)
+    // The song's mixer. The editor's preview has one of its own that is never
+    // heard, so what its scripts do to the music (volume, pause, seek) leaves
+    // the editor's audio alone.
+    Mixer& mixer() { return quietMixer_ ? *quietMixer_ : app().mixer; }
+    std::unique_ptr<Mixer> quietMixer_;
+    struct NoteRef { uint8_t side; uint16_t lane; uint32_t idx; };
     LaneNote* noteRef(std::string_view group, int index, int* sideOut = nullptr, int* laneOut = nullptr);
 
     struct Popup {
         std::string text, timing;
         Color c;
         double t0;
-        long long combo;
+        Count combo;
         int rating = -1;     // 0 sick .. 3 shit (the Psych interface's pictures)
         uint32_t seed = 0;   // Psych's random fall for this one (popUpScore's velocities)
         float beat = 0.5f;   // a beat (s) when it popped: Psych fades the rating a beat later
@@ -260,17 +278,24 @@ private:
     void findGfSections();
     float camZoom_ = 1, hudZoom_ = 1, beatPulse_ = 0, minePulse_ = 0, healthShown_ = 1;
     Vector2 camFocus_{640, 370};
-    float confirm_[2][kMaxKeys] = {};
+    // The receptors' hit animation, as Psych's StrumNote (issue #36): it starts
+    // over at every hit (confirmAt_) and goes back to static at confirmUntil_
+    // - 1.25 steps after the opponent's and the bot's hits, so it follows the
+    // BPM - or, after the player's own press, when the key is let go.
+    double confirmAt_[2][kMaxKeys] = {}, confirmUntil_[2][kMaxKeys] = {};
+    bool confirmHeld_[kMaxKeys] = {};  // the key held now hit a note
+    void strumConfirm(int side, int lane);
+    float confirmGlow(int side, int lane, double* since = nullptr) const;  // 0: not lit
     int heldCount_[kMaxKeys] = {};
     std::vector<int> keyLane_ = std::vector<int>(Input::kMaxCodes, -1);
     std::vector<Popup> popups_;
     // Notes per second for the note counter (JS Engine / H-Slice): hits in the last second.
     struct NpsMark {
         double t;
-        long long player, opponent;  // hits so far
+        Count player, opponent;  // hits so far
     };
     std::deque<NpsMark> npsWindow_;
-    long long nps_ = 0, maxNps_ = 0, npsOpp_ = 0, maxNpsOpp_ = 0;  // yours, the opponent's
+    Count nps_, maxNps_, npsOpp_, maxNpsOpp_;  // yours, the opponent's
     // Spam charts (S2X's adaptive note budget): notes of a lane closer than
     // noteGap_ pixels are drawn once. 1 = every pixel; doubled while the frame
     // rate stays under its target with thousands of notes on screen, halved
@@ -361,6 +386,7 @@ private:
     scene::ShaderPtr invertFx_, glitchFx_, glitchHudFx_;  // Dek Engine's "Invert" and "Glitch Shader add"
     scene::ShaderPtr blockedFx_;                          // SCReboot's "Toggle Blocked Glitch Effect"
     double fakeLenMs_ = -1, fakeLenFrom_ = 0, fakeLenTo_ = 0, fakeLenT_ = 0, fakeLenDur_ = 0;
+    double audioLenMs_ = 0;  // the song's audio, 0 without audio
     std::string songNameShown_;  // "Change Song Name" ("" = the chart's title)
     int rainbowEndStep_ = -1;
     scene::ShaderPtr rainbow_;
@@ -377,7 +403,7 @@ private:
     bool prevKeys_[kMaxKeys] = {};
     bool keyNow_[kMaxKeys] = {};
     bool prevMouse_[3] = {}, mouseNow_[3] = {};
-    long long lastCombo_ = 0;
+    Count lastCombo_;
     bool backdrop_ = false;
     std::map<std::string, scene::CharacterPtr> charCache_;  // "slot:name" (Change Character)
     // Replays and touch input

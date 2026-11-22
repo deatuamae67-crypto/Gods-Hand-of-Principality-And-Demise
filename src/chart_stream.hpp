@@ -11,25 +11,35 @@
 #include <vector>
 
 #include "chart.hpp"
+#include "keys.hpp"
 
 namespace gh {
 
-// noteData values a chart may use: the lanes of both sides, up to 2 x 100
-// keys (and the values past them, which fold back), all in one byte.
-constexpr int kNoteDataValues = 256;
+// noteData values a chart may use: the lanes of both sides, up to 2 x 1024
+// keys (and the values past them, which fold back): 0 to 2047.
+constexpr int kNoteDataValues = 2 * kMaxKeys;
 
+// 16 bytes a note, as many charts hold tens of millions of them.
 struct StreamedNote {
     static constexpr uint16_t kAltBit = 0x8000;
+    static constexpr uint16_t kTypeMask = 0x0FFF;  // up to 4095 note types
+    static constexpr int kDataHiShift = 12;        // noteData's bits 8-10 in `type`
     double time = 0;
     float length = 0;
-    uint8_t data = 0;   // raw noteData (0..255, lane + side half)
+    uint8_t data = 0;   // raw noteData's low 8 bits (lane + side half); noteData() is all of it
     uint8_t stack = 1;  // notes of the file merged here (same value within 1 ms)
-    // Bits 0-14: 1-based index into StreamedNotes::types (0 = none); bit 15
+    // Bits 0-11: 1-based index into StreamedNotes::types (0 = none); bits
+    // 12-14: noteData's bits 8 to 10 (charts of more than 128 keys); bit 15
     // (kAltBit): a legacy `true` in slot 3 (an alt animation note).
     uint16_t type = 0;
-    int noteData() const { return data; }
+    int noteData() const { return data | (type >> kDataHiShift & 7) << 8; }
+    void setNoteData(int d) {
+        data = uint8_t(d);
+        type = uint16_t((type & ~(7u << kDataHiShift)) | (unsigned(d) >> 8 & 7u) << kDataHiShift);
+    }
     bool alt() const { return (type & kAltBit) != 0; }
-    uint16_t typeIdx() const { return uint16_t(type & ~kAltBit); }
+    uint16_t typeIdx() const { return uint16_t(type & kTypeMask); }
+    void setTypeIdx(uint16_t t) { type = uint16_t((type & ~kTypeMask) | (t & kTypeMask)); }
 };
 
 struct StreamedNotes {
