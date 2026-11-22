@@ -3,6 +3,9 @@
 
 // Title, main menu, story, freeplay and credits screens.
 #include <atomic>
+#include <cctype>
+#include <cstring>
+#include <map>
 #include <cmath>
 #include <mutex>
 #include <thread>
@@ -1049,6 +1052,14 @@ private:
 
 // ---------------------------------------------------------------- Credits --
 
+struct PsychCredit {
+    const char* name;
+    const char* desc;
+    unsigned color;               // 0: a section's title
+    const char* photo = nullptr;  // a person: assets/credits/<photo>.png, or their initials
+    const char* role = "";        // a person, in the scrolling credits
+};
+
 class CreditsState : public State {
 public:
     void enter() override {
@@ -1056,6 +1067,24 @@ public:
         sel_ = 1;
         anim_ = float(sel_);
         tint_ = gfx::rgb(kPsychCredits[sel_].color);
+        // The people's pictures: assets/credits/<name>.png (or .jpg); the
+        // game draws their initials where there is none.
+        for (const PsychCredit& c : kPsychCredits) {
+            if (!c.photo) continue;
+            for (const char* ext : {".png", ".jpg"}) {
+                const std::string path = app().base + "assets/credits/" + c.photo + ext;
+                if (!FileExists(path.c_str())) continue;
+                Texture2D t = LoadTexture(path.c_str());
+                if (t.id) {
+                    SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+                    photos_[c.photo] = t;
+                }
+                break;
+            }
+        }
+    }
+    ~CreditsState() override {
+        for (auto& [name, t] : photos_) UnloadTexture(t);
     }
     void update(double dt) override {
         App& a = app();
@@ -1103,13 +1132,30 @@ public:
             "@LIBRARIES",
             "raylib 5.5 by Ramon Santamaria (zlib license)",
             "Lua 5.4 (MIT license), miniz by Rich Geldreich (MIT), pl_mpeg by Dominic Szablewski (MIT)",
+            "Zstandard by Meta (BSD license)",
             "",
             "@FONTS",
             "Luckiest Guy by Astigmatic (Apache License 2.0)",
             "Rajdhani by Indian Type Foundry (SIL Open Font License)",
             "",
+            "@OWNERS",
+            "%Shashangabush",
+            "%ph3n0_typ3",
+            "%anter_guifer",
+            "%xxdet0xl1nt3rxx",
+            "%xeno_fiber d1ztr0",
+            "%That One Brudda From The Booshes",
+            "",
             "@CONTRIBUTORS",
-            "amogosgaming - ideas, testing and the Violets Tweak (older systems)",
+            "%amogosgaming",
+            "%iutkuiytkuyitkf",
+            "%melody",
+            "%auroraaastralis",
+            "%IAmCykluss",
+            "%manber468",
+            "%xentaphyll",
+            "%toazp",
+            "%TofpFL",
             "",
             "@ENGINE INSPIRED BY",
             "ShadowMario - Psych Engine",
@@ -1151,7 +1197,14 @@ public:
         for (const char* l : lines) {
             if (l[0] == '#') gfx::glowText(FontId::Title, l + 1, gfx::W / 2, y, 64, kGold, Color{255, 180, 80, 255});
             else if (l[0] == '@') gfx::text(FontId::Title, l + 1, gfx::W / 2, y + 10, 30, kGold, Align::Center, 2.0f);
-            else gfx::text(FontId::Ui, l, gfx::W / 2, y + 10, 28, kIvory, Align::Center, 1.5f);
+            else if (l[0] == '%') {
+                // A person: their picture, their name and what they did.
+                const PsychCredit* c = person(l + 1);
+                const std::string text = c ? std::string(c->name) + " - " + c->role : std::string(l + 1);
+                const float w = gfx::measure(FontId::Ui, text, 28).x;
+                if (c) drawPhoto(*c, gfx::W / 2 - w / 2 - 26, y + 26, 40);
+                gfx::text(FontId::Ui, text, gfx::W / 2 + 22, y + 10, 28, kIvory, Align::Center, 1.5f);
+            } else gfx::text(FontId::Ui, l, gfx::W / 2, y + 10, 28, kIvory, Align::Center, 1.5f);
             y += l[0] == '#' ? 80 : 46;
         }
         hints("ESC back");
@@ -1159,11 +1212,6 @@ public:
     }
 
 private:
-    struct PsychCredit {
-        const char* name;
-        const char* desc;
-        unsigned color;  // 0: a section's title
-    };
     static constexpr PsychCredit kPsychCredits[] = {
         {"God's Hand", "", 0},
         {"deatuamae67-crypto", "A project by deatuamae67-crypto: God's Hand of Principality and Demise, a rhythm duel", 0x8C6CFF},
@@ -1174,12 +1222,30 @@ private:
         {"Lua", "Lua 5.4 (MIT license): the mods' scripts", 0x2C2D72},
         {"miniz", "miniz by Rich Geldreich (MIT license): mods in .zip and the binary charts", 0x5AA0E6},
         {"pl_mpeg", "pl_mpeg by Dominic Szablewski (MIT license): the videos", 0x9A6AD8},
+        {"Zstandard", "Zstandard by Meta (BSD license): the threadripper engine's .thr charts", 0x4C8CE0},
         {"Fonts", "", 0},
         {"Luckiest Guy", "Luckiest Guy by Astigmatic (Apache License 2.0)", 0xFFC83D},
         {"Rajdhani", "Rajdhani by Indian Type Foundry (SIL Open Font License)", 0x3DD1FF},
+        {"Owners", "", 0},
+        {"Shashangabush", "One of God's Hand's owners", 0xF2B84B, "shashangabush", "owner"},
+        {"ph3n0_typ3", "One of God's Hand's owners", 0x7CE0C6, "ph3n0_typ3", "owner"},
+        {"anter_guifer", "One of God's Hand's owners", 0xE07C7C, "anter_guifer", "owner"},
+        {"xxdet0xl1nt3rxx", "One of God's Hand's owners", 0xA77CE0, "xxdet0xl1nt3rxx", "owner"},
+        {"xeno_fiber d1ztr0", "One of God's Hand's owners", 0x7CA8E0, "xeno_fiber_d1ztr0", "owner"},
+        {"That One Brudda From The Booshes", "One of God's Hand's owners", 0x9CD65C, "that_one_brudda_from_the_booshes", "owner"},
         {"Contributors", "", 0},
         {"amogosgaming", "Ideas (the Psych look everywhere, the chart editor's preview, shader layers...), testing, and the "
-                         "Violets Tweak that brought the game to older systems", 0x5CD6A0},
+                         "Violets Tweak that brought the game to older systems", 0x5CD6A0, "amogosgaming",
+         "ideas, testing and the Violets Tweak (older systems)"},
+        {"iutkuiytkuyitkf", "Contributor to God's Hand", 0xE0C04C, "iutkuiytkuyitkf", "contributor"},
+        {"melody", "Contributor to God's Hand", 0xFF8FC8, "melody", "contributor"},
+        {"auroraaastralis", "Contributor to God's Hand", 0x8FE8FF, "auroraaastralis", "contributor"},
+        {"IAmCykluss", "Contributor to God's Hand", 0xD8B04C, "iamcykluss", "contributor"},
+        {"manber468", "Contributor to God's Hand", 0x6CC0FF, "manber468", "contributor"},
+        {"xentaphyll", "Contributor to God's Hand", 0x6CE08C, "xentaphyll", "contributor"},
+        {"toazp", "Contributor to God's Hand", 0xFFA45C, "toazp", "contributor"},
+        {"TofpFL", "Contributor to God's Hand; R-Slice and Universal FNF Sprite Studio are among the engines it learned from",
+         0x4CD7E0, "tofpfl", "contributor"},
         {"Engine inspired by", "", 0},
         {"ShadowMario", "Psych Engine: the interface, the scripts and the menus God's Hand follows", 0xFF5DA0},
         {"JordanSantiagoYT", "JS Engine, SNIFF (MIDI to chart), Mods for JS Engine, and his engine forks (ZS Engine, "
@@ -1225,7 +1291,11 @@ private:
                 const float w = pm::boldWidth(c.name, 68);
                 pm::bold(c.name, (gfx::W - w) * 0.5f, y, 68);
             } else {
-                pm::plain(c.name, gfx::W * 0.5f - 70, y, 60, i == sel_ ? 1.0f : 0.6f);
+                // A long name gets smaller to fit, its picture right of it (as Psych's icons).
+                const float x = gfx::W * 0.5f - 70, room = gfx::W - 30 - x - (c.photo ? 140.0f : 0.0f);
+                const float full = pm::plainWidth(c.name, 60), h = full > room ? 60 * room / full : 60.0f;
+                const float w = pm::plain(c.name, x, y + (60 - h) * 0.5f, h, i == sel_ ? 1.0f : 0.6f);
+                if (c.photo) drawPhoto(c, x + w + 70, y + 30, 120, i == sel_ ? 1.0f : 0.6f);
             }
         }
         const std::string desc = kPsychCredits[sel_].desc;
@@ -1252,10 +1322,43 @@ private:
         gfx::endCanvas();
     }
 
+    static const PsychCredit* person(const char* name) {
+        for (const PsychCredit& c : kPsychCredits)
+            if (c.photo && !std::strcmp(c.name, name)) return &c;
+        return nullptr;
+    }
+    // A person's picture (square, framed), or their initials on their colour.
+    void drawPhoto(const PsychCredit& c, float cx, float cy, float size, float alpha = 1.0f) const {
+        const Color col = gfx::rgb(c.color);
+        const auto it = photos_.find(c.photo);
+        if (it != photos_.end()) {
+            const Texture2D& t = it->second;
+            const float side = float(std::min(t.width, t.height));
+            const Rectangle src{(t.width - side) * 0.5f, (t.height - side) * 0.5f, side, side};
+            DrawRectangleRec({cx - size / 2 - 3, cy - size / 2 - 3, size + 6, size + 6}, fade(col, alpha));
+            DrawTexturePro(t, src, {cx - size / 2, cy - size / 2, size, size}, {0, 0}, 0, fade(WHITE, alpha));
+            return;
+        }
+        std::string initials;
+        bool start = true;
+        for (const char* p = c.name; *p && initials.size() < 2; ++p) {
+            const unsigned char ch = static_cast<unsigned char>(*p);
+            if (std::isalnum(ch) && start) initials += char(std::toupper(ch));
+            start = !std::isalnum(ch);
+        }
+        if (initials.size() < 2 && std::strlen(c.name) > 1) initials = {char(std::toupper(static_cast<unsigned char>(c.name[0]))), c.name[1]};
+        DrawCircleV({cx, cy}, size / 2, fade(col, alpha));
+        DrawCircleLinesV({cx, cy}, size / 2, fade(WHITE, 0.8f * alpha));
+        const float lum = 0.299f * col.r + 0.587f * col.g + 0.114f * col.b;
+        gfx::text(FontId::Title, initials, cx, cy - size * 0.27f, size * 0.46f, fade(lum > 150 ? Color{25, 20, 35, 255} : WHITE, alpha),
+                  Align::Center);
+    }
+
     double t0_ = 0;
     int sel_ = 1;
     float anim_ = 1;
     Color tint_ = WHITE;
+    std::map<std::string, Texture2D> photos_;
 };
 
 std::unique_ptr<State> makeTitle() { return std::make_unique<TitleState>(); }
