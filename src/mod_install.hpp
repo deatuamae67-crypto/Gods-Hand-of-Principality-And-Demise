@@ -4,7 +4,9 @@
 // Installs mods dropped into mods/ as .zip files: each archive is unpacked
 // into its own folder (a single top-level folder is kept as the mod name) and
 // then moved to mods/.installed/. Entries that would escape the folder are
-// skipped.
+// skipped. What each zip put there is recorded (mod_sync.hpp): a newer copy
+// of the same zip removes the files it no longer has, and that change can be
+// removed again on the MOD PACKS screen.
 #pragma once
 
 #include <functional>

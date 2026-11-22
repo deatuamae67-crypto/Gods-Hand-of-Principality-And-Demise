@@ -164,6 +164,11 @@ public:
             {Row::Bool, "JSON merging", "JSON MERGING on the main menu: a chart split into parts (as players do to get past JS "
              "Engine's 16-million-note limit) merged back into one, with no limit on its notes. OFF: it is not on the menu.",
              &s.jsonMerging},
+            {Row::Bool, "Auto-update", "At start, the game looks on GitHub for a newer version: it downloads it, checks it and "
+             "installs it the next time the game starts (UPDATE on the main menu restarts it now; Android opens the installer). "
+             "It also looks for changes in the mod packs you installed: MOD PACKS shows them, to install or remove. Your "
+             "settings, scores and mods stay. OFF: it never looks.",
+             &s.autoUpdate},
             {Row::Bool, "Audio visualizer",
              "Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it "
              "is, how thick the notes are, your hits and misses, and your health.",

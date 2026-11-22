@@ -11,6 +11,7 @@
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -35,6 +36,10 @@ extern "C" {
 extern unsigned int GhAudioPeriodMs, GhAudioPeriods;
 }
 
+#ifndef GH_VERSION
+#define GH_VERSION "dev"  // set by CMake from project(VERSION)
+#endif
+
 namespace gh {
 
 static App* g_app = nullptr;
@@ -48,6 +53,18 @@ int App::start(int argc, char** argv) {
 
 // Android log: which screen is open (the emulator test follows the game by it).
 static void logScreen(const State& s) { platform::log(std::string("screen ") + typeid(s).name()); }
+
+static std::vector<std::string> splitCommas(const std::string& s) {
+    std::vector<std::string> v;
+    size_t p = 0;
+    for (;;) {
+        const size_t e = s.find(',', p);
+        v.push_back(s.substr(p, e == std::string::npos ? std::string::npos : e - p));
+        if (e == std::string::npos) break;
+        p = e + 1;
+    }
+    return v;
+}
 
 static std::vector<double> parseList(const char* s) {
     std::vector<double> v;
@@ -221,6 +238,7 @@ int App::run(int argc, char** argv) {
     // The command line; on Android, the options given to the intent instead.
     std::vector<std::string> argStore;
     for (int i = 0; i < argc; ++i) argStore.push_back(argv[i]);
+    commandLine = argStore;
     for (std::string& s : platform::launchArgs()) argStore.push_back(std::move(s));
     std::vector<char*> argPtrs;
     for (std::string& s : argStore) argPtrs.push_back(s.data());
@@ -236,6 +254,18 @@ int App::run(int argc, char** argv) {
         } else if (!std::strcmp(a, "--human")) autoRun.botplay = false;
         else if (!std::strcmp(a, "--state")) { autoRun.enabled = true; autoRun.state = next(); }
         else if (!std::strcmp(a, "--shots")) autoRun.shots = parseList(next());
+        else if (!std::strcmp(a, "--press")) {
+            // "seconds:key,...": enter, esc, up, down, left, right, space, or a letter / digit.
+            for (const std::string& item : splitCommas(next())) {
+                const size_t c = item.find(':');
+                if (c == std::string::npos) continue;
+                const std::string k = toLower(trim(item.substr(c + 1)));
+                int code = k == "enter" ? KEY_ENTER : k == "esc" ? KEY_ESCAPE : k == "up" ? KEY_UP : k == "down" ? KEY_DOWN
+                         : k == "left" ? KEY_LEFT : k == "right" ? KEY_RIGHT : k == "space" ? KEY_SPACE : 0;
+                if (!code && k.size() == 1 && std::isalnum(static_cast<unsigned char>(k[0]))) code = std::toupper(static_cast<unsigned char>(k[0]));
+                if (code) autoRun.presses.push_back({std::atof(item.substr(0, c).c_str()), code});
+            }
+        }
         else if (!std::strcmp(a, "--shot-prefix")) autoRun.shotPrefix = next();
         else if (!std::strcmp(a, "--quit-after")) autoRun.quitAfter = std::atof(next());
         else if (!std::strcmp(a, "--rate")) mods.rate = clampv(std::atof(next()), 0.5, 2.0);
@@ -264,6 +294,8 @@ int App::run(int argc, char** argv) {
         } else if (!std::strcmp(a, "--train-autochart")) trainCli = true;
         else if (!std::strcmp(a, "--studio-save")) autoRun.studioSave = true;
         else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
+        else if (!std::strcmp(a, "--update")) updateCli = true;  // looks for an update now, without the window
+        else if (!std::strcmp(a, "--update-from")) updateApi = next();  // another server than GitHub's API (tests)
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
         else if (!std::strcmp(a, "--render")) renderCli = true;  // record the --autoplay song to renders/
@@ -319,6 +351,25 @@ int App::run(int argc, char** argv) {
     if (!FileExists((base + "assets/fonts/Rajdhani-Bold.ttf").c_str())) {
         std::string cwd = std::string(GetWorkingDirectory()) + "/";
         if (FileExists((cwd + "assets/fonts/Rajdhani-Bold.ttf").c_str())) base = cwd;
+    }
+    if (!platform::kAndroid && !autoRun.enabled) {
+        // An update downloaded last time takes its place before anything is
+        // loaded; a new program then starts at once (updater.hpp).
+        const update::Applied ap = update::applyPending(base);
+        if (ap.done) std::printf("[update] %s\n", ap.message.c_str());
+        if (ap.done && ap.exeChanged && relaunch(base + update::exeName(), commandLine)) return 0;
+        update::removeOldFiles(base);
+        startNotice_ = update::takeAppliedNote(base);  // shown on the first screen
+    }
+    if (updateCli) {
+        // godshand --update [--base dir]: the check, download and staging at
+        // once; the next start puts the files in place.
+        SetTraceLogLevel(LOG_WARNING);
+        updater.start(base, GH_VERSION, updateApi.empty() ? std::string(update::kApi) : updateApi);
+        updater.wait();
+        const update::Status us = updater.status();
+        std::printf("[update] %s\n", us.message.c_str());
+        return us.stage == update::Stage::Failed ? 1 : 0;
     }
     userDir = base;
     if (!platform::kAndroid && !baseGiven && !FileExists((base + "portable.txt").c_str())) {
@@ -466,6 +517,13 @@ int App::run(int argc, char** argv) {
     else state_ = makeTitle();
     state_->enter();
     logScreen(*state_);
+    if (!startNotice_.empty()) notify(startNotice_, 10.0);
+    if (settings.autoUpdate && !autoRun.enabled) {
+        // A newer release, and changes in the mod packs installed (Options: Auto-update).
+        updater.start(base, GH_VERSION);
+        startPackCheck();
+        packNoticePending_ = true;
+    }
 
     double last = nowSec(), nextFrame = last, lastReal = last;
     while (!quit && !WindowShouldClose()) {
@@ -487,6 +545,7 @@ int App::run(int argc, char** argv) {
         now = nowSec() + clockShift_;
         input.poll(now);
         if (touchMode) touch.update(input, now);
+        if (autoRun.enabled) autoPress();
         const int cap = settings.vsync ? 0 : settings.fpsCap;
         if (cap > 0 && now < nextFrame) {
             const double wait = nextFrame - now;
@@ -538,6 +597,11 @@ int App::run(int argc, char** argv) {
     gfx::shutdown();
     CloseAudioDevice();
     CloseWindow();
+    if (restartAfterQuit && !platform::kAndroid) {
+        // UPDATE on the main menu: the game starts again, and that start puts the update in place.
+        const std::string exe = currentExePath();
+        relaunch(exe.empty() ? base + update::exeName() : exe, commandLine);
+    }
     return 0;
 }
 
@@ -629,6 +693,7 @@ void App::frame() {
     if (renderer.active()) drawRenderBadge();
     const std::string msg = VideoRenderer::takeMessage();
     if (!msg.empty()) notify(msg, 10.0);
+    backgroundNotices();
     if (now < noticeUntil_ && !notice_.empty()) {
         const float al = float(clampv(noticeUntil_ - now, 0.0, 1.0));
         const Vector2 sz = gfx::measure(gfx::FontId::Ui, notice_, 20);
@@ -936,6 +1001,42 @@ void App::stopRender() {
     renderLabel.clear();
     if (path.empty()) notify("Rendering mode: " + err, 10.0);
     else std::printf("[render] %s\n", path.c_str());
+}
+
+// --press: one key at a time, held for a frame.
+void App::autoPress() {
+    if (autoRun.held) {
+        input.setVirtual(autoRun.held, false, now);
+        autoRun.held = 0;
+        return;
+    }
+    if (autoRun.pressIndex < autoRun.presses.size() && now - startTime >= autoRun.presses[autoRun.pressIndex].first) {
+        autoRun.held = autoRun.presses[autoRun.pressIndex++].second;
+        input.setVirtual(autoRun.held, true, now);
+    }
+}
+
+// Said once each: an update ready to install, mod packs changed on the release.
+void App::backgroundNotices() {
+    if (now - backgroundAt_ < 0.25) return;
+    backgroundAt_ = now;
+    const update::Status us = updater.status();
+    if (us.stage != noticedStage_) {
+        noticedStage_ = us.stage;
+        if (us.stage == update::Stage::Ready) notify(us.message, 12.0);
+        if (us.stage == update::Stage::Failed || us.stage == update::Stage::UpToDate) std::printf("[update] %s\n", us.message.c_str());
+    }
+    int changed = 0;
+    {
+        // Only the check at start: MOD PACKS shows what its own checks find.
+        std::lock_guard<std::mutex> lk(packCheck->m);
+        if (!packNoticePending_ || !packCheck->done) return;
+        packNoticePending_ = false;
+        changed = packCheck->changed();
+    }
+    if (changed > 0 && !(us.stage == update::Stage::Ready && now < noticeUntil_))
+        notify(std::to_string(changed) + " mod pack(s) changed on the release since you installed them: MOD PACKS (Freeplay: M) "
+               "shows what changed, to install or remove.", 12.0);
 }
 
 void App::notify(const std::string& text, double seconds) {

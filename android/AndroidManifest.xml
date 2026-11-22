@@ -8,6 +8,8 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <!-- Mod packs are downloaded from the game's GitHub releases. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The game updates itself: the system installer is opened with the new APK. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="@string/app_name"
@@ -20,6 +22,12 @@
         <!-- A game for the system and the makers' game launchers (Samsung Game
              Launcher / Game Booster, Game Dashboard): Game Mode support. -->
         <meta-data android:name="android.game_mode_config" android:resource="@xml/game_mode_config" />
+        <!-- Lends the downloaded update (update/*.apk) to the system installer. -->
+        <provider
+            android:name=".UpdateProvider"
+            android:authorities="com.godshand.game.update"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <activity
             android:name=".GameActivity"
             android:label="@string/app_name"

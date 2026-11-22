@@ -7,6 +7,7 @@
 #include <array>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,8 @@
 #include "session.hpp"
 #include "settings.hpp"
 #include "touch_ui.hpp"
+#include "mod_sync.hpp"
+#include "updater.hpp"
 
 namespace gh {
 
@@ -88,6 +91,17 @@ struct ResultData {
     unsigned color = 0xFFFFFF;
 };
 
+// The installed mod packs compared with the mods release (mod_sync.hpp): at
+// start (Options: Auto-update) and on MOD PACKS. Its thread keeps only this.
+struct PackCheck {
+    mutable std::mutex m;
+    bool running = false, done = false, ok = false;
+    int generation = 0;  // one more each time a check ends
+    std::vector<modsync::PackStatus> packs;
+    std::string message;  // why it could not look
+    int changed() const;  // packs changed on the release, or gone from it
+};
+
 class App {
 public:
     std::string base;  // folder with assets/, songs/, mods/ (ends with '/')
@@ -105,6 +119,8 @@ public:
     std::vector<std::string> mergeParts;
     bool trainCli = false;  // --train-autochart: AutoChart learns from every charted song (no window)
     std::string makeIconDir;      // --make-icon <folder>: the icon's pictures (tools/make_icons.py)
+    bool updateCli = false;       // --update: look for a newer release, download and stage it, no window
+    std::string updateApi;        // --update-from <url>: the API's address instead of GitHub's (tests)
     bool autoChartCli = false;    // --autochart: the --autoplay song played with an AutoChart
     double frameBudget() const;   // seconds a frame may take (frame limit or the screen's refresh)
     Settings settings;
@@ -138,6 +154,10 @@ public:
         bool mergeGo = false;  // --state json-merge --merge-go: merges the parts in merge/ once they are read
         std::string studioSong;  // --autochart-studio <song id>: the AutoChart screen for it
         bool studioSave = false;  // --studio-save: it saves the first chart it makes
+        // --press "2.5:enter,3:right": keys pressed at those seconds (screenshots of what they open).
+        std::vector<std::pair<double, int>> presses;
+        size_t pressIndex = 0;
+        int held = 0;
     } autoRun;
 
     // Runs the game with a fresh App (Android can call main() again in the
@@ -174,6 +194,14 @@ public:
     std::string renderLabel;  // where the song is ("1:23 / 3:05"), shown while recording
     // A line of text at the bottom of the screen for a few seconds (any screen).
     void notify(const std::string& text, double seconds = 6.0);
+    // Auto-update (updater.hpp): a newer release, downloaded and staged at start.
+    update::Updater updater;
+    std::shared_ptr<PackCheck> packCheck = std::make_shared<PackCheck>();
+    void startPackCheck();  // state_modpacks.cpp; nothing if one is running
+    // UPDATE on the main menu: the game starts again once it has closed (the
+    // new start installs the staged files).
+    bool restartAfterQuit = false;
+    std::vector<std::string> commandLine;  // as the game was started, for that restart
     // Options opened from a song's pause menu: leaving them plays it again.
     std::unique_ptr<PlayRequest> optionsReturn;
     // Deaths on the song played last (Psych's "Blueballed" in the pause menu).
@@ -199,6 +227,12 @@ private:
     std::string notice_;
     double noticeUntil_ = 0;
     void drawRenderBadge();
+    void backgroundNotices();  // what the updater and the mod pack check found, said once
+    void autoPress();          // --press
+    bool packNoticePending_ = false;  // the check at start: what it finds is said once
+    update::Stage noticedStage_ = update::Stage::Idle;
+    double backgroundAt_ = 0;
+    std::string startNotice_;
     // The FPS counter and what Options adds under it (memory, frame times,
     // processor use, hardware), sampled twice a second.
     void drawFpsPanel();

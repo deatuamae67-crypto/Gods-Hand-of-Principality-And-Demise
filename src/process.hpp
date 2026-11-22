@@ -44,5 +44,12 @@ int runProcess(const std::string& exe, const std::vector<std::string>& args);
 bool openWithSystem(const std::string& path);
 // exe next to the game or on the PATH, "" if neither runs with `probeArg`.
 std::string findProgram(const std::string& baseDir, const std::string& name, const std::string& probeArg = "--version");
+// The game starting again (after an update): exe with args (args[0] is the
+// program's name, as in main). Linux and macOS: this process becomes it and
+// the call does not come back unless it failed. Windows: it starts, and this
+// one should end. False if it could not.
+bool relaunch(const std::string& exe, const std::vector<std::string>& args);
+// The running program's file ("" where the system does not say).
+std::string currentExePath();
 
 }  // namespace gh

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Builds the mod packs listed in modpacks/packs.txt and uploads the missing
-ones to the "mods" release (run by .github/workflows/mod-packs.yml).
+"""Builds the mod packs listed in modpacks/packs.txt and uploads them to the
+"mods" release (run by .github/workflows/mod-packs.yml): the missing ones, and
+those whose folder changed in the source repository since they were built (a
+song added or removed, an asset changed: the game's MOD PACKS screen shows
+players what changed, to install or remove). A pack whose line goes from
+packs.txt is taken off the release.
 
 Needs git, git-lfs and an authenticated gh. Run with --local <dir> to only
 pack a folder that is already on disk (used for testing).
@@ -16,6 +20,7 @@ import os, re, shlex, shutil, subprocess, sys, zipfile
 LIMIT = int(os.environ.get('GH_PACK_LIMIT', 1_900_000_000))  # GitHub allows 2 GiB per release file
 STORED = {'.png', '.jpg', '.jpeg', '.ogg', '.mp3', '.webm', '.mp4', '.zip', '.7z', '.flp', '.wav', '.ttf', '.otf'}
 TAG = 'mods'
+STATE = 'mod-packs-state.txt'  # folder -> what it was built from (the source folder's git tree, or the Drive files)
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -131,22 +136,72 @@ def main():
     else:
         run('gh', 'release', 'edit', TAG, '--notes', NOTES)  # the text follows this file
     have = set(run('gh', 'release', 'view', TAG, '--json', 'assets', '-q', '.assets[].name', capture=True).split())
-    manifest = {}
-    if 'mod-packs.txt' in have:
-        run('gh', 'release', 'download', TAG, '-p', 'mod-packs.txt', '-D', work, '--clobber')
-        for line in open(os.path.join(work, 'mod-packs.txt'), encoding='utf-8'):
-            if '\t' in line:
-                folder, names = line.rstrip('\n').split('\t', 1)
-                manifest[folder] = names.split()
-    todo = [f for f in folders if not (f in manifest and all(n in have for n in manifest[f]))]
+
+    def read_tsv(name):
+        table = {}
+        if name in have:
+            run('gh', 'release', 'download', TAG, '-p', name, '-D', work, '--clobber')
+            for line in open(os.path.join(work, name), encoding='utf-8'):
+                if '\t' in line:
+                    key, value = line.rstrip('\n').split('\t', 1)
+                    table[key] = value
+        return table
+
+    manifest = {k: v.split() for k, v in read_tsv('mod-packs.txt').items()}
+    state = read_tsv(STATE)
+
+    # What each pack is built from now: the source folder's git tree (no file
+    # content is needed for it), or its Drive files.
+    repo = os.path.join(work, 'src')
+    env = dict(os.environ, GIT_LFS_SKIP_SMUDGE='1')
+    if any(f not in drive for f in folders) and not os.path.isdir(repo):
+        run('git', 'clone', '--filter=blob:none', '--no-checkout', 'https://github.com/%s.git' % source, repo, env=env)
+        run('git', 'sparse-checkout', 'init', '--no-cone', cwd=repo, env=env)
+    current = {}
+    for f in folders:
+        if f in drive:
+            current[f] = 'drive:' + ' '.join('%s=%s' % z for z in drive[f])
+        else:
+            tree = (run('git', 'rev-parse', '%s:mods/%s' % (commit, f), capture=True, check=False, cwd=repo) or '').strip()
+            current[f] = 'git:' + tree if tree else ''
+
+    def published(f):
+        return f in manifest and all(n in have for n in manifest[f])
+
+    for f in folders:
+        if published(f) and f not in state and current[f]:
+            state[f] = current[f]  # built before the state was kept: as it is now
+    todo = [f for f in folders if not published(f) or (current[f] and state.get(f) != current[f])]
+    gone = [f for f in manifest if f not in folders]
     print('packs to build:', todo or 'none', flush=True)
+    print('packs to take off the release:', gone or 'none', flush=True)
 
     def write_manifest():
         with open(os.path.join(work, 'mod-packs.txt'), 'w', encoding='utf-8') as m:
             for f in folders:
                 if f in manifest:
                     m.write(f + '\t' + ' '.join(manifest[f]) + '\n')
-        run('gh', 'release', 'upload', TAG, os.path.join(work, 'mod-packs.txt'), '--clobber')
+        with open(os.path.join(work, STATE), 'w', encoding='utf-8') as m:
+            for f in folders:
+                if f in state and f in manifest:
+                    m.write(f + '\t' + state[f] + '\n')
+        run('gh', 'release', 'upload', TAG, os.path.join(work, 'mod-packs.txt'), os.path.join(work, STATE), '--clobber')
+
+    def drop_unused(names):
+        """Release files no pack lists any more (a pack split differently, or gone)."""
+        used = {n for f in manifest for n in manifest[f]}
+        for n in names:
+            if n not in used and n in have:
+                run('gh', 'release', 'delete-asset', TAG, n, '-y', check=False)
+                have.discard(n)
+
+    if gone:
+        old = [n for f in gone for n in manifest[f]]
+        for f in gone:
+            del manifest[f]
+            state.pop(f, None)
+        write_manifest()
+        drop_unused(old)
 
     for folder in [f for f in todo if f in drive]:
         names = []
@@ -154,17 +209,16 @@ def main():
             out = os.path.join(work, name)
             fetch_drive(file_id, out)
             run('gh', 'release', 'upload', TAG, out, '--clobber')
+            have.add(name)
             os.remove(out)
             names.append(name)
+        old = manifest.get(folder, [])
         manifest[folder] = names
+        state[folder] = current[folder]
         write_manifest()
+        drop_unused(old)
     todo = [f for f in todo if f not in drive]
     if todo:
-        repo = os.path.join(work, 'src')
-        env = dict(os.environ, GIT_LFS_SKIP_SMUDGE='1')
-        if not os.path.isdir(repo):
-            run('git', 'clone', '--filter=blob:none', '--no-checkout', 'https://github.com/%s.git' % source, repo, env=env)
-            run('git', 'sparse-checkout', 'init', '--no-cone', cwd=repo, env=env)
         for folder in todo:
             run('git', 'sparse-checkout', 'set', '--no-cone', '/mods/' + folder + '/', cwd=repo, env=env)
             run('git', 'checkout', '-q', commit, cwd=repo, env=env)
@@ -172,12 +226,18 @@ def main():
             parts = pack(os.path.join(repo, 'mods', folder), folder, work)
             for p in parts:
                 run('gh', 'release', 'upload', TAG, p, '--clobber')
+                have.add(os.path.basename(p))
                 os.remove(p)
+            old = manifest.get(folder, [])
             manifest[folder] = [os.path.basename(p) for p in parts]
+            state[folder] = current[folder]
             write_manifest()
+            drop_unused(old)
             # Free the disk before the next mod.
             shutil.rmtree(os.path.join(repo, 'mods', folder), ignore_errors=True)
             shutil.rmtree(os.path.join(repo, '.git', 'lfs', 'objects'), ignore_errors=True)
+    if not todo and not gone and STATE not in have:
+        write_manifest()  # the state, kept from now on
 
 
 if __name__ == '__main__':

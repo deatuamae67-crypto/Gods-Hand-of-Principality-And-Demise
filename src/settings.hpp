@@ -71,6 +71,7 @@ struct Settings {
     bool autoChart = false;     // AUTOCHART on the main menu (issue #36: shown only when turned on)
     bool autoChartTrained = true;  // AutoChart charts with what it learned from the mods' charts (when it was trained)
     bool jsonMerging = false;   // JSON MERGING on the main menu (the same)
+    bool autoUpdate = true;     // looks for a newer release and for mod pack changes at start (updater.hpp, mod_sync.hpp)
     bool visualizer = true;     // the audio visualizer in the top-right corner of songs
     bool scoreZoom = true;      // the score line grows a little on each note you hit
     bool botplayText = true;    // BOTPLAY (or REPLAY) on screen while the game plays by itself

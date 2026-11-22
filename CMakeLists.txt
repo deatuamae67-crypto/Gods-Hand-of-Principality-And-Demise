@@ -137,6 +137,9 @@ add_library(gh_core STATIC
   src/lua_host.cpp
   src/replay.cpp
   src/mod_install.cpp
+  src/mod_sync.cpp
+  src/sha256.cpp
+  src/updater.cpp
   src/autochart.cpp
   src/note_raster.cpp
   src/frame_pacer.cpp
@@ -171,7 +174,8 @@ else()
 endif()
 
 if(GH_BUILD_TESTS)
-  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/raster_tests.cpp tests/pacer_tests.cpp)
+  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/update_tests.cpp tests/raster_tests.cpp
+                 tests/pacer_tests.cpp)
   target_link_libraries(gh_tests PRIVATE gh_core)
   enable_testing()
   add_test(NAME core COMMAND gh_tests)
@@ -323,6 +327,8 @@ if(GH_BUILD_GAME)
     src/state_autochart.cpp
     src/autochart_train.cpp
     src/process.cpp
+    src/net.cpp
+    src/updater_job.cpp
     src/render_mode.cpp
     src/platform.cpp
     src/folder_picker.cpp
@@ -395,7 +401,7 @@ if(GH_BUILD_GAME)
     target_link_libraries(godshand PRIVATE ${CMAKE_DL_LIBS})  # the FPS counter asks NVIDIA's library, when there is one
   endif()
   if(WIN32)
-    target_link_libraries(godshand PRIVATE shell32 ole32 comdlg32 opengl32 advapi32)  # the folder and file dialogs; the processor's name (psapi and pdh are looked up)
+    target_link_libraries(godshand PRIVATE shell32 ole32 comdlg32 opengl32 advapi32 urlmon wininet)  # the folder and file dialogs; the processor's name (psapi and pdh are looked up); downloads without curl
   endif()
 
   # Runtime layout next to the executable: assets/, songs/, mods/
@@ -405,20 +411,23 @@ if(GH_BUILD_GAME)
       COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/songs $<TARGET_FILE_DIR:godshand>/songs
       COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:godshand>/mods)
 
-    install(TARGETS godshand RUNTIME DESTINATION .)
-    install(DIRECTORY assets songs DESTINATION .)
-    install(FILES README.md LICENSE DESTINATION .)
-    install(DIRECTORY licenses DESTINATION .)  # third-party license texts (Apache 2.0)
+    # The game's own files (the release packages: cmake --install --component game);
+    # raylib's library and headers for programmers stay out.
+    install(TARGETS godshand RUNTIME DESTINATION . COMPONENT game)
+    install(DIRECTORY assets songs DESTINATION . COMPONENT game)
+    install(FILES README.md LICENSE DESTINATION . COMPONENT game)
+    install(DIRECTORY licenses DESTINATION . COMPONENT game)  # third-party license texts (Apache 2.0)
   endif()
 endif()
 
 # Streamed song audio is tested with raylib's decoders when raylib is built.
 if(GH_BUILD_TESTS AND TARGET raylib)
   target_sources(gh_tests PRIVATE tests/audio_tests.cpp src/audio.cpp src/audio_decode.cpp src/platform.cpp src/folder_picker.cpp
-                 src/render_mode.cpp src/process.cpp src/sysinfo.cpp src/settings.cpp src/autochart_train.cpp)
+                 src/render_mode.cpp src/process.cpp src/net.cpp src/updater_job.cpp src/sysinfo.cpp src/settings.cpp
+                 src/autochart_train.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   if(WIN32)
-    target_link_libraries(gh_tests PRIVATE shell32 ole32 comdlg32 advapi32)  # platform.cpp's folder and file dialogs; sysinfo.cpp's registry reads
+    target_link_libraries(gh_tests PRIVATE shell32 ole32 comdlg32 advapi32 urlmon wininet)  # platform.cpp's folder and file dialogs; sysinfo.cpp's registry reads; net.cpp
   endif()
   if(APPLE)
     target_link_libraries(gh_tests PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreFoundation")  # sysinfo.cpp

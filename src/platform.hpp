@@ -92,8 +92,14 @@ void rememberVolume(float v);   // master volume to restore after the background
 // Path shown to the player for a folder inside base (e.g. "Android/data/.../mods").
 std::string displayPath(const std::string& path);
 
-// HTTPS download to a file. Android only (through java.net); desktop uses curl.
-bool download(const std::string& url, const std::string& dest, std::string& err);
+// HTTPS download to a file. Android only (through java.net); desktop uses curl
+// (net.hpp). range: "first-last" or "-n" bytes ("" = the whole file).
+bool download(const std::string& url, const std::string& dest, std::string& err, const std::string& range = "");
+
+// Android: the system installer opens with this APK (the game updating
+// itself). 1: it opened; 2: Android's "install unknown apps" page opened
+// first (allow it, then try again); 0: neither. Desktop: 0.
+int installApk(const std::string& path);
 
 // Android: the system file picker copies the chosen mod zips into mods/.
 enum class Import { Idle, Picking, Copying, Done, Nothing };

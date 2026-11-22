@@ -28,6 +28,7 @@ using namespace gh;
 int g_fail = 0, g_pass = 0;
 void runPsychTests();
 void runScanTests();
+void runUpdateTests();
 #ifdef GH_AUDIO_TESTS
 void runAudioTests();
 #endif
@@ -912,6 +913,7 @@ int main(int argc, char** argv) {
     testSession();
     runPsychTests();
     runScanTests();
+    runUpdateTests();
 #ifdef GH_AUDIO_TESTS
     runAudioTests();
 #endif

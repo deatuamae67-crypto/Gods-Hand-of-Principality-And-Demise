@@ -131,6 +131,33 @@ public class GameActivity extends NativeActivity {
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
     }
 
+    /**
+     * The game updating itself: the system installer opens with the APK it
+     * downloaded into update/ (UpdateProvider lends it). The first time,
+     * Android 8+ asks the player to allow installing from the game: its
+     * settings page opens, and UPDATE is chosen again afterwards.
+     * Returns 1 when the installer opened, 2 when the settings page did, 0 if
+     * neither could. Called from the game thread.
+     */
+    public int installApk(String path) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                Intent s = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(s);
+                return 2;
+            }
+            Uri uri = Uri.parse("content://" + getPackageName() + ".update/" + Uri.encode(new File(path).getName()));
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            return 1;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     /** Called from the game thread: a box with the on-screen keyboard (Freeplay's search). */
     public void askText(final String title, final String initial) {
         textResult = "";

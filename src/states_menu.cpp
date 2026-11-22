@@ -232,8 +232,10 @@ private:
 
 // RENDER MODE and AUTOCHART open the song list for recording a video or
 // for playing a chart made from the song's audio. AUTOCHART and JSON MERGING
-// are there only when they are turned on in Options.
-enum class MainItem { Story, Freeplay, Render, AutoChart, JsonMerge, Options, Credits, Quit };
+// are there only when they are turned on in Options. UPDATE appears when a
+// newer version is downloaded (Options: Auto-update), MOD PACKS when packs
+// you installed changed on the release.
+enum class MainItem { Story, Freeplay, Render, AutoChart, JsonMerge, ModPacks, Update, Options, Credits, Quit };
 struct MainEntry {
     MainItem id;
     const char* label;
@@ -246,6 +248,13 @@ std::vector<MainEntry> mainItems() {
                                 {MainItem::Render, "RENDER MODE", ""}};
     if (s.autoChart) v.push_back({MainItem::AutoChart, "AUTOCHART", ""});
     if (s.jsonMerging) v.push_back({MainItem::JsonMerge, "JSON MERGING", ""});
+    bool packsChanged;
+    {
+        std::lock_guard<std::mutex> lk(app().packCheck->m);
+        packsChanged = app().packCheck->changed() > 0;
+    }
+    if (packsChanged) v.push_back({MainItem::ModPacks, "MOD PACKS", ""});
+    if (app().updater.status().stage == update::Stage::Ready) v.push_back({MainItem::Update, "UPDATE", ""});
     v.push_back({MainItem::Options, "OPTIONS", "options"});
     v.push_back({MainItem::Credits, "CREDITS", "credits"});
     v.push_back({MainItem::Quit, "QUIT", ""});
@@ -263,6 +272,19 @@ public:
     void update(double dt) override {
         App& a = app();
         int& sel = a.mainSel;
+        if (chosen_ < 0 && a.now - itemsAt_ > 0.5) {
+            // UPDATE and MOD PACKS come when the checks at start find something.
+            itemsAt_ = a.now;
+            std::vector<MainEntry> fresh = mainItems();
+            if (fresh.size() != items_.size()) {
+                const MainItem was = items_[size_t(clampv(sel, 0, n_ - 1))].id;
+                items_ = std::move(fresh);
+                n_ = int(items_.size());
+                sel = 0;
+                for (int i = 0; i < n_; ++i)
+                    if (items_[size_t(i)].id == was) sel = i;
+            }
+        }
         anim_ = approach(anim_, float(sel), 14.0f, float(dt));
         // Psych's camera follows the chosen item (JS Engine: lerp 7.5 a second).
         camY_ = camY_ < -1e8f ? psychCamTarget(sel) : approach(camY_, psychCamTarget(sel), 7.5f, float(dt));
@@ -281,6 +303,21 @@ public:
                         a.change(makeFreeplay());
                         break;
                     case MainItem::JsonMerge: a.change(makeJsonMerge()); break;
+                    case MainItem::ModPacks: a.change(makeModPacks()); break;
+                    case MainItem::Update:
+                        if (platform::kAndroid) {
+                            // The system installer, with the APK the updater downloaded.
+                            const int r = platform::installApk(a.updater.status().file);
+                            a.notify(r == 1   ? "The installer is open: confirm the update there."
+                                     : r == 2 ? "Allow installing apps from God's Hand, then choose UPDATE again."
+                                              : "The installer could not be opened.",
+                                     10.0);
+                            chosen_ = -1;
+                        } else {
+                            a.restartAfterQuit = true;  // the game starts again and the update takes its place
+                            a.quit = true;
+                        }
+                        break;
                     case MainItem::Options: a.change(makeOptions()); break;
                     case MainItem::Credits: a.change(makeCredits()); break;
                     default: a.quit = true; break;
@@ -338,6 +375,7 @@ public:
         }
         hints("UP/DOWN select   ENTER confirm   7 editors   ESC back   F11 fullscreen");
         gfx::text(FontId::Ui, a.library.report(), 16, gfx::H - 70, 20, fade(kIvory, 0.6f));
+        drawUpdateLine();
         gfx::endCanvas();
     }
 
@@ -380,7 +418,17 @@ private:
         }
         pm::vcr("God's Hand Engine v" GH_VERSION, 12, gfx::H - 44, 16);
         pm::vcr("Friday Night Funkin' v0.2.8", 12, gfx::H - 24, 16);
+        drawUpdateLine();
         gfx::endCanvas();
+    }
+    // Bottom right: the update being downloaded, or ready.
+    void drawUpdateLine() {
+        const update::Status us = app().updater.status();
+        std::string t;
+        if (us.stage == update::Stage::Downloading) t = "Downloading " + us.version + ": " + std::to_string(int(us.progress * 100)) + "%";
+        else if (us.stage == update::Stage::Verifying) t = "Checking " + us.version + "...";
+        else if (us.stage == update::Stage::Ready) t = us.version + " ready: UPDATE";
+        if (!t.empty()) gfx::text(FontId::Ui, t, gfx::W - 14, gfx::H - 30, 18, fade(WHITE, 0.75f), Align::Right);
     }
 
     std::vector<MainEntry> items_ = mainItems();
@@ -389,6 +437,7 @@ private:
     float camY_ = -1e9f;
     int chosen_ = -1;
     double chosenAt_ = 0;
+    double itemsAt_ = 0;
 };
 
 // ------------------------------------------------------------------ Story --
