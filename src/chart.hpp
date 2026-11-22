@@ -26,7 +26,7 @@ enum NoteFlag : uint8_t {
 struct Note {
     double time = 0;          // ms
     double length = 0;        // ms of sustain (0 = tap)
-    uint16_t lane = 0;        // 0..keys-1 (up to 511)
+    uint16_t lane = 0;        // 0..keys-1 (up to 1023)
     uint8_t side : 1 = 0;     // 0 = opponent, 1 = player
     uint8_t kind : 7 = kNormal;
     uint8_t flags = 0;
@@ -54,7 +54,7 @@ struct Chart {
     std::string gf, stage;     // Psych scene fields (empty if absent)
     std::vector<std::string> noteTypes{""};
     std::vector<psych::ChartEvent> events;  // sorted by time
-    int keys = 4;  // 1 to 512 a side (the larger side's when they differ)
+    int keys = 4;  // 1 to 1024 a side (the larger side's when they differ)
     // Leather Engine charts give each side its own key count ("keyCount" the
     // opponent's, "playerKeyCount" the player's): side 0 the opponent, side 1
     // the player; 0 = keys.

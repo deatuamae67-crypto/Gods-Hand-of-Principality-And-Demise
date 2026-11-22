@@ -1,16 +1,16 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
-// Extra keys: charts of 1 to 512 keys a side. Up to 18 as Psych Engine Extra
+// Extra keys: charts of 1 to 1024 keys a side. Up to 18 as Psych Engine Extra
 // Keys (mania 0-17) and the extra keys scripts of JS Engine mods play them;
-// past that, charts of the engines that go further (up to 512 keys, issue #36).
+// past that, charts of the engines that go further (up to 1024 keys, issue #36).
 #pragma once
 
 #include <algorithm>
 
 namespace gh {
 
-constexpr int kMaxKeys = 512;
+constexpr int kMaxKeys = 1024;
 
 namespace ek {
 

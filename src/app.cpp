@@ -676,6 +676,36 @@ void App::drawFpsPanel() {
         }
         statsAt_ = now;
     }
+    // The panel is drawn into a picture of its own ten times a second and the
+    // picture put on the screen every frame (issue #36): its text, outlines
+    // and graph cost nothing per frame, however many lines it shows.
+    const float cs = gfx::canvasScale();
+    const int flags = int(s.showFps) | int(s.fpsMemory) << 1 | int(s.fpsFrameTimes) << 2 | int(s.fpsUsage) << 3 | int(s.fpsHardware) << 4;
+    if (now - fpsPanelAt_ >= 0.1 || now < fpsPanelAt_ || cs != fpsPanelScale_ || flags != fpsPanelFlags_) {
+        fpsPanelAt_ = now;
+        fpsPanelScale_ = cs;
+        fpsPanelFlags_ = flags;
+        refreshFpsPanel();
+    }
+    if (!fpsPanelRt_.id || fpsPanelW_ <= 0) return;
+    // Always the top left corner, below the touch buttons when they sit in
+    // that corner.
+    float px = 2, py = 2;
+    if (touchMode) {
+        std::vector<Rectangle> keys;
+        touch.buttonRects(keys);
+        for (const Rectangle& r : keys) {
+            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
+            if (a.x < px + fpsPanelW_ && b.x > px && a.y < py + fpsPanelH_ && b.y > py) py = std::max(py, b.y + 4);
+        }
+    }
+    const Texture2D& t = fpsPanelRt_.texture;
+    DrawTexturePro(t, {0, 0, fpsPanelW_ * cs, -fpsPanelH_ * cs}, {px, py, fpsPanelW_, fpsPanelH_}, {0, 0}, 0, WHITE);
+}
+
+// The panel's picture: its lines (wrapped to the screen), sized to fit them.
+void App::refreshFpsPanel() {
+    const Settings& s = settings;
     std::vector<std::pair<std::string, Color>> lines;
     const Color dim{205, 205, 215, 255};
     if (s.showFps) {
@@ -752,34 +782,35 @@ void App::drawFpsPanel() {
     const float graphW = 200, graphH = s.fpsFrameTimes ? 36.0f : 0.0f;
     if (graphH > 0) w = std::max(w, graphW);
     const bool panel = lines.size() > 1 || graphH > 0;
-    // It grows at once and shrinks smoothly, so that numbers whose width
-    // changes at every update do not make it flicker.
+    // It grows at once and shrinks only by more than a few pixels, so that
+    // numbers whose width changes do not make it twitch.
     const float wantW = w + 12, wantH = textH + graphH + 6;
-    const float k = 1.0f - std::exp(-float(std::max(0.0, dt)) * 10.0f);
-    fpsPanelW_ = wantW >= fpsPanelW_ ? wantW : fpsPanelW_ + (wantW - fpsPanelW_) * k;
-    fpsPanelH_ = wantH >= fpsPanelH_ ? wantH : fpsPanelH_ + (wantH - fpsPanelH_) * k;
-    const float pw = fpsPanelW_, ph = fpsPanelH_;
-    // Always the top left corner, below the touch buttons when they sit in
-    // that corner.
-    float px = 2, py = 2;
-    if (touchMode) {
-        std::vector<Rectangle> keys;
-        touch.buttonRects(keys);
-        for (const Rectangle& r : keys) {
-            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
-            if (a.x < px + pw && b.x > px && a.y < py + ph && b.y > py) py = std::max(py, b.y + 4);
-        }
+    if (wantW > fpsPanelW_ || fpsPanelW_ - wantW > 24) fpsPanelW_ = wantW;
+    fpsPanelH_ = wantH;
+    const float cs = fpsPanelScale_;
+    const int rw = std::max(1, int(std::ceil(fpsPanelW_ * cs))), rh = std::max(1, int(std::ceil(fpsPanelH_ * cs)));
+    if (!fpsPanelRt_.id || fpsPanelRt_.texture.width < rw || fpsPanelRt_.texture.height < rh) {
+        if (fpsPanelRt_.id) UnloadRenderTexture(fpsPanelRt_);
+        fpsPanelRt_ = LoadRenderTexture(std::max(rw, 256), std::max(rh, 64));
+        SetTextureFilter(fpsPanelRt_.texture, TEXTURE_FILTER_BILINEAR);
     }
-    if (panel) DrawRectangleRec({px, py, pw, ph}, gfx::fade(BLACK, 0.55f));
-    float y = py + 3;
+    if (!fpsPanelRt_.id) return;
+    EndMode2D();  // out of the canvas, into the picture, at the window's scale
+    gfx::beginTexture(fpsPanelRt_);
+    ClearBackground(BLANK);
+    Camera2D cam{};
+    cam.zoom = cs;
+    BeginMode2D(cam);
+    if (panel) DrawRectangleRec({0, 0, fpsPanelW_, fpsPanelH_}, gfx::fade(BLACK, 0.55f));
+    float y = 3;
     for (size_t i = 0; i < lines.size(); ++i) {
-        gfx::text(gfx::FontId::Ui, lines[i].first, px + 6, y, big[i] ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
+        gfx::text(gfx::FontId::Ui, lines[i].first, 6, y, big[i] ? firstSize : size, lines[i].second, gfx::Align::Left, 1.5f);
         y += big[i] ? firstH : lineH;
     }
     if (graphH > 0) {
         // One bar per frame (the newest on the right), 0 to 50 ms high; green
         // under 17 ms (60 FPS), yellow under 34, red above.
-        const float gx = px + 6, gy = y + 2, gh = graphH - 6;
+        const float gx = 6, gy = y + 2, gh = graphH - 6;
         DrawRectangleRec({gx, gy, graphW, gh}, gfx::fade(BLACK, 0.4f));
         DrawLineEx({gx, gy + gh - gh * 16.7f / 50.0f}, {gx + graphW, gy + gh - gh * 16.7f / 50.0f}, 1, gfx::fade(WHITE, 0.25f));
         const size_t n = frameHist_.size();
@@ -792,6 +823,9 @@ void App::drawFpsPanel() {
             DrawRectangleRec({gx + float(i - skip), gy + gh - hgt, 1, hgt}, c);
         }
     }
+    EndMode2D();
+    gfx::endTexture();
+    BeginMode2D(gfx::screenCamera());  // back to the canvas
 }
 
 // -------------------------------------------------------- rendering mode --

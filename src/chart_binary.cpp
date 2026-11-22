@@ -5,7 +5,7 @@
 //
 //   "GHCB" u32 version
 //   u64 notes, u64 rawCount, i32 maxData, u32 blockNotes, u32 blocks, u32 types
-//   version 3: u32 values, u64 dataCount[values] (up to 1024: 512 keys a side);
+//   version 3: u32 values, u64 dataCount[values] (up to 2048: 1024 keys a side);
 //   version 2: u64 dataCount[256]; version 1: [64]
 //   types: u32 length + bytes, each
 //   u64 skeleton bytes, u64 packed, packed bytes           (deflate)
@@ -14,7 +14,7 @@
 //
 // A block holds five columns, their lengths first (u32 each): times (the
 // change of the gap from the note before, in ns, zigzag varints), lengths
-// (us, zigzag varints), noteData (version 3: varints, 0..1023; before: bytes),
+// (us, zigzag varints), noteData (version 3: varints, 0..2047; before: bytes),
 // stack bytes, types (varints; bit 15 the alt flag). Version 1 kept the alt
 // flag in bit 7 of noteData (values 0..63 only). Versions 1 and 2 are still
 // read.

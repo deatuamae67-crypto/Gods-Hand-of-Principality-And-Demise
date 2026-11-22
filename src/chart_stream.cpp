@@ -1007,7 +1007,7 @@ std::string StreamedNotesBuilder::beginArray() {
 }
 
 // The reader's addStreamed, step for step (a note the reader would not take
-// as a note, with a noteData outside 0..1023, is left out).
+// as a note, with a noteData outside 0..2047, is left out).
 void StreamedNotesBuilder::add(double time, int noteData, double length, const std::string& type) {
     if (!std::isfinite(time) || noteData < 0 || noteData >= kNoteDataValues || out_.rangeStart.empty()) return;
     StreamedNote n;
@@ -1091,7 +1091,7 @@ namespace fs = std::filesystem;
 std::mutex g_cacheMtx;
 std::string g_cacheDir;
 constexpr uint32_t kCacheMagic = 0x43434847u;  // "GHCC"
-constexpr uint32_t kCacheVersion = 2;  // 2: noteData up to 1023 (512 keys), 1024 counts
+constexpr uint32_t kCacheVersion = 3;  // 3: noteData up to 2047 (1024 keys), 2048 counts
 constexpr uint64_t kCacheLimit = 4ull << 30;
 
 struct CacheHeader {

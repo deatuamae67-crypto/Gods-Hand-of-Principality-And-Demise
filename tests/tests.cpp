@@ -390,7 +390,7 @@ static void testExtraKeys18() {
         CHECK(ek::kLaneWidth[k] * float(k) <= 640.0f);  // a side fits on half the screen
     }
     // Past 18 keys: directions 0-4, a centre arrow in the middle of odd counts,
-    // and a side still fits on half the screen at 512 keys.
+    // and a side still fits on half the screen at 1024 keys.
     for (int k = ek::kTableKeys + 1; k <= kMaxKeys; ++k) {
         bool dirs = true;
         for (int a = 0; a < k; ++a) dirs = dirs && ek::manyDir(k, a) >= 0 && ek::manyDir(k, a) <= 4;
@@ -408,33 +408,33 @@ static void testExtraKeys18() {
     CHECK(parseChart(ekChart(R"("mania": 99)", 200), "Insane", c, err) && c.keys == 100);
     CHECK(c.notes.size() == 1200 && c.playerNotes == 600 && c.opponentNotes == 600);
     CHECK(parseChart(ekChart(R"("keyCount": 50)", 100), "Insane", c, err) && c.keys == 50 && c.notes.size() == 600);
-    // Up to 512 keys a side (issue #36): "mania" 511 or "keyCount" 512, values up to 1023.
-    CHECK(parseChart(ekChart(R"("mania": 511)", 1024), "Insane", c, err) && c.keys == 512);
-    CHECK(c.notes.size() == 6144 && c.playerNotes == 3072 && c.opponentNotes == 3072);
+    // Up to 1024 keys a side (issue #36): "mania" 1023 or "keyCount" 1024, values up to 2047.
+    CHECK(parseChart(ekChart(R"("mania": 1023)", 2048), "Insane", c, err) && c.keys == 1024);
+    CHECK(c.notes.size() == 12288 && c.playerNotes == 6144 && c.opponentNotes == 6144);
     {
-        static bool lanes[2][512];
+        static bool lanes[2][1024];
         for (auto& side : lanes) std::fill(std::begin(side), std::end(side), false);
         for (const Note& n : c.notes) lanes[n.side][n.lane] = true;
         int used = 0;
         for (auto& side : lanes)
             for (bool b : side) used += b;
-        CHECK(used == 1024);  // every lane of both sides
+        CHECK(used == 2048);  // every lane of both sides
     }
-    CHECK(parseChart(ekChart(R"("keyCount": 512)", 1024), "Insane", c, err) && c.keys == 512 && c.notes.size() == 6144);
-    CHECK(parseChart(ekChart(R"("keyCount": 101)", 8), "Insane", c, err) && c.keys == 101);
-    CHECK(parseChart(ekChart(R"("keyCount": 513)", 8), "Insane", c, err) && c.keys == 4);  // past 512: ignored
-    // 512 keys through the streaming reader and a binary chart (version 3:
+    CHECK(parseChart(ekChart(R"("keyCount": 1024)", 2048), "Insane", c, err) && c.keys == 1024 && c.notes.size() == 12288);
+    CHECK(parseChart(ekChart(R"("keyCount": 513)", 8), "Insane", c, err) && c.keys == 513);
+    CHECK(parseChart(ekChart(R"("keyCount": 1025)", 8), "Insane", c, err) && c.keys == 4);  // past 1024: ignored
+    // 1024 keys through the streaming reader and a binary chart (version 3:
     // values past 255 as varints, beside the alt flag and the note types).
     {
-        std::string j = ekChart(R"("mania": 511)", 1024);
+        std::string j = ekChart(R"("mania": 1023)", 2048);
         const size_t at = j.find("[7000,700,0]");
         CHECK(at != std::string::npos);
         if (at != std::string::npos) j.replace(at, 12, "[7000,700,0,true]");  // an alt note on value 700
-        const size_t at2 = j.find("[10000,1000,0]");
+        const size_t at2 = j.find("[19000,1900,0]");
         CHECK(at2 != std::string::npos);
-        if (at2 != std::string::npos) j.replace(at2, 14, R"([10000,1000,0,"Hurt Note"])");  // a typed note on 1000
+        if (at2 != std::string::npos) j.replace(at2, 14, R"([19000,1900,0,"Hurt Note"])");  // a typed note on 1900
         const std::string dir = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
-        const std::string jpath = dir + "/gh_512k.json", bpath = dir + "/gh_512k.ghc";
+        const std::string jpath = dir + "/gh_1024k.json", bpath = dir + "/gh_1024k.ghc";
         if (FILE* f = std::fopen(jpath.c_str(), "wb")) {
             std::fwrite(j.data(), 1, j.size(), f);
             std::fclose(f);
@@ -442,15 +442,15 @@ static void testExtraKeys18() {
         std::string skel, err2;
         StreamedNotes sn;
         CHECK(streamChartSkeleton(jpath, skel, sn, err2, 0));
-        CHECK(sn.maxData == 1023 && sn.dataCount[700] == 6 && sn.dataCount[1023] == 6);
+        CHECK(sn.maxData == 2047 && sn.dataCount[700] == 6 && sn.dataCount[2047] == 6);
         int alts = 0, hurts = 0;
         for (const StreamedNote& n : sn.notes) {
             alts += n.alt() && n.noteData() == 700;
-            hurts += n.typeIdx() != 0 && n.noteData() == 1000 && sn.types[n.typeIdx() - 1] == "Hurt Note";
+            hurts += n.typeIdx() != 0 && n.noteData() == 1900 && sn.types[n.typeIdx() - 1] == "Hurt Note";
         }
         CHECK(alts == 1 && hurts == 1);
         Chart a;
-        CHECK(parseChartStreamed(skel, sn, "Insane", a, err2) && a.keys == 512 && a.notes.size() == 6144);
+        CHECK(parseChartStreamed(skel, sn, "Insane", a, err2) && a.keys == 1024 && a.notes.size() == 12288);
         CHECK(writeBinaryChart(bpath, skel, sn, 3, err2));
         std::string skel2;
         StreamedNotes back;
@@ -461,7 +461,7 @@ static void testExtraKeys18() {
                    back.notes[i].stack == sn.notes[i].stack;
         CHECK(same);
         Chart b;
-        CHECK(parseChartStreamed(skel2, back, "Insane", b, err2) && b.keys == 512 && b.notes.size() == 6144);
+        CHECK(parseChartStreamed(skel2, back, "Insane", b, err2) && b.keys == 1024 && b.notes.size() == 12288);
         std::remove(jpath.c_str());
         std::remove(bpath.c_str());
     }

@@ -943,7 +943,7 @@ private:
     // ------------------------------------------------------------- layout --
     // The event lane and both sides share the space between the panels
     // (x 250 to 860). Lanes are never narrower than 12 pixels: a chart with
-    // more of them than fit (from 25 keys a side, up to 512) scrolls sideways
+    // more of them than fit (from 25 keys a side, up to 1024) scrolls sideways
     // under a fixed event lane (Ctrl + wheel, or the bar at the top).
     static constexpr float kGridL = 250, kGridW = 610, kMinLaneW = 12;
     float laneW() const { return std::max(kMinLaneW, std::min(48.0f, (kGridW - 20) / float(2 * keys_ + 1))); }
@@ -1709,7 +1709,7 @@ private:
                 if (ui_.stepper(row(), "BPM", bpm, 1, 10, 2000, "%.2f")) setSectionBpm(0, bpm);
                 if (ui_.stepper(row(), "Scroll speed", speed_, 0.1, 0.1, 10, "%.1f")) dirty_ = statsDirty_ = true;
                 double k = keys_;
-                if (ui_.stepper(row(), "Keys", k, 1, 1, kMaxKeys, "%.0f")) setKeys(int(k));  // 1 to 512 a side
+                if (ui_.stepper(row(), "Keys", k, 1, 1, kMaxKeys, "%.0f")) setKeys(int(k));  // 1 to 1024 a side
                 if (ui_.check(row(), "Needs voices", needsVoices_)) dirty_ = statsDirty_ = true;
                 if (!eventsFile_.empty() && ui_.check(row(), "Events in events.json", eventsSeparate_)) dirty_ = statsDirty_ = true;
                 ui_.choice(row(), "Save as", {"Psych JSON", "Binary .ghc", "Both"}, saveFormat_);
