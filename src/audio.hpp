@@ -171,6 +171,9 @@ enum class Sfx { Scroll, Confirm, Cancel, Hit, Miss, Mine, Count3, Count2, Count
 void sfxInit();
 void sfxShutdown();
 void sfxPlay(Sfx s, float volume = 1.0f, float pitch = 1.0f);
+// While on, sfxPlay is silent (the chart editor's full preview runs a song
+// that must not be heard over the editor).
+void sfxMute(bool on);
 void sfxSetVolume(float v);
 // The samples of a sound effect (the mod's when it overrides it), mono,
 // 44.1 kHz; sfxVersion() changes whenever the overrides do.

@@ -66,7 +66,9 @@ std::string psychFcLabel(const Session& s) {
 }
 }  // namespace
 
-PlayState::PlayState(PlayRequest r) : req_(std::move(r)) {}
+PlayState::PlayState(PlayRequest r) : req_(std::move(r)) {
+    if (req_.preview) quietMixer_ = std::make_unique<Mixer>();
+}
 
 PlayState::~PlayState() {
     stopRendering();
@@ -81,9 +83,11 @@ PlayState::~PlayState() {
 
 void PlayState::enter() {
     App& a = app();
-    a.stopMenuMusic();
-    a.mixer.clear();
-    if (a.blueballedSong != req_.songId) {
+    if (!req_.preview) {  // the editor's preview leaves the editor's sound alone
+        a.stopMenuMusic();
+        mixer().clear();
+    }
+    if (!req_.preview && a.blueballedSong != req_.songId) {
         a.blueballedSong = req_.songId;
         a.blueballed = 0;
     }
@@ -93,7 +97,7 @@ void PlayState::enter() {
         error_ = "Song not found: " + req_.songId;
         return;
     }
-    rate_ = req_.story ? 1.0 : a.mods.rate;
+    rate_ = req_.story || req_.preview ? 1.0 : a.mods.rate;
     bool mirror = !req_.story && a.mods.mirror;
     if (!req_.replayPath.empty()) {
         if (!playback_.load(req_.replayPath)) {
@@ -106,11 +110,12 @@ void PlayState::enter() {
         mirror = playback_.mirror;
     }
     const SongEntry copy = *entry_;
-    const std::string diff = req_.diff;
+    const std::string diff = req_.diff, chartFile = req_.chartFile;
     const bool extraKeys = app().settings.extraKeys;
     const bool autoChart = req_.autoChart;
-    job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart] {
-        return app().library.prepare(copy, diff, mirror, extraKeys, autoChart);
+    if (req_.preview) mirror = false;
+    job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart, chartFile] {
+        return app().library.prepare(copy, diff, mirror, extraKeys, autoChart, chartFile);
     });
     loadStart_ = a.now;
     loadStartReal_ = nowSec();
@@ -143,7 +148,7 @@ void PlayState::update(double dt) {
         return;
     }
     if (phase_ == Phase::Error) {
-        if (a.input.accept() || a.input.back()) exitToMenu();
+        if (!req_.preview && (a.input.accept() || a.input.back())) exitToMenu();
         return;
     }
     for (auto it = debug_.begin(); it != debug_.end();)
@@ -154,7 +159,7 @@ void PlayState::update(double dt) {
     if (phase_ == Phase::Dead) { updateDead(); return; }
     // Psych's Auto Pause: the song pauses when the window loses focus (Android
     // pauses on its own when the app goes to the background).
-    if (a.settings.autoPause && phase_ == Phase::Playing && !rendering_ && !a.autoRun.enabled && !platform::kAndroid &&
+    if (a.settings.autoPause && !req_.preview && phase_ == Phase::Playing && !rendering_ && !a.autoRun.enabled && !platform::kAndroid &&
         IsWindowReady() && !IsWindowFocused()) {
         if (!(scripts_ && scripts_->callStops("onPause"))) {
             pause();
@@ -179,11 +184,11 @@ void PlayState::update(double dt) {
         // While recording nobody presses OK: the popup stays two seconds.
         const bool recordedLongEnough =
             rendering_ && std::any_of(notices_.begin(), notices_.end(), [&](const Notice& n) { return n.kind == 2 && now - n.t0 > 2.0; });
-        if (a.input.accept() || a.input.back() || recordedLongEnough) {
+        if (req_.preview || a.input.accept() || a.input.back() || recordedLongEnough) {
             popupHold_ = false;
             notices_.erase(std::remove_if(notices_.begin(), notices_.end(), [](const Notice& n) { return n.kind == 2; }),
                            notices_.end());
-            a.mixer.resume();
+            mixer().resume();
         }
         return;
     }
@@ -191,23 +196,27 @@ void PlayState::update(double dt) {
         // A script stopped the countdown (cutscene, dialogue): keep scripts
         // running, start anyway if nothing resumes it.
         if (psych_) psychUpdate(dt);
+        if (req_.preview) { startPreview(); return; }
         if (a.input.back()) { exitToMenu(); return; }
         if (now - waitStart_ > 6.0 || a.input.accept()) beginCountdown();
         return;
     }
     if (phase_ == Phase::Ending) {
         if (psych_) psychUpdate(dt);
-        if (now - endWaitStart_ > 8.0 || a.input.accept()) { endRequested_ = true; finish(); }
+        if (!req_.preview && (now - endWaitStart_ > 8.0 || a.input.accept())) { endRequested_ = true; finish(); }
         return;
     }
 
-    // The audio offset is for the player's ears; a recording is in sync by itself.
-    songMs_ = a.mixer.time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
+    // The audio offset is for the player's ears; a recording is in sync by
+    // itself; the editor's preview follows the editor's clock.
+    // A jump ahead in the editor: the notes in between pass by, unjudged.
+    if (req_.preview && previewMs_ - songMs_ > 1500.0) session_.skipTo(previewMs_);
+    songMs_ = req_.preview ? previewMs_ : mixer().time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
     if (rendering_) {
         const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(std::max(songEndMs(), chart_.lengthMs) / 1000.0);
         a.renderLabel = TextFormat("%d:%02d / %d:%02d", at / 60, at % 60, len / 60, len % 60);
     }
-    handleInput();
+    if (!req_.preview) handleInput();
     if (phase_ != Phase::Playing) return;
     if (!songStarted_ && songMs_ >= 0) {
         songStarted_ = true;
@@ -376,8 +385,8 @@ void PlayState::setup() {
     App& a = app();
     chart_ = std::move(prep_.chart);
     cfg_.ghostTapping = a.settings.ghostTapping;
-    cfg_.botplay = !req_.story && a.mods.botplay;
-    cfg_.practice = !req_.story && a.mods.practice;
+    cfg_.botplay = (!req_.story && a.mods.botplay) || req_.preview;  // the editor's preview plays itself
+    cfg_.practice = !req_.story && !req_.preview && a.mods.practice;
     cfg_.rate = rate_;
     // Psych's hit windows, Safe Frames (frames of 1/60 s) and Rating Offset.
     cfg_.windows[kDivine] = a.settings.sickWindow;
@@ -385,7 +394,7 @@ void PlayState::setup() {
     cfg_.windows[kMortal] = a.settings.badWindow;
     cfg_.windows[kSinful] = a.settings.safeFrames / 60.0 * 1000.0;
     cfg_.ratingOffset = a.settings.ratingOffset;
-    playerLeft_ = !req_.story && a.mods.mirror;
+    playerLeft_ = !req_.story && !req_.preview && a.mods.mirror;
     if (replaying_) {
         cfg_.botplay = false;
         cfg_.practice = true;  // a replay never ends early
@@ -455,8 +464,10 @@ void PlayState::setup() {
         leftColor_ = rgbColor(barColor_[0]);
         rightColor_ = rgbColor(barColor_[1]);
     }
-    a.mixer.setTracks(prep_.inst, prep_.voiceP, prep_.voiceO);
-    a.mixer.setRate(rate_);
+    if (!req_.preview) {
+        mixer().setTracks(prep_.inst, prep_.voiceP, prep_.voiceO);
+        mixer().setRate(rate_);
+    }
     restart();
 }
 
@@ -537,8 +548,8 @@ double PlayState::scrollSpeed() const {
     const App& a = app();
     const Settings& s = a.settings;
     double base = s.scrollSpeed > 0.001f ? s.scrollSpeed : chart_.speed;
-    if (a.mods.scrollType == 1) base *= a.mods.scrollValue;  // Freeplay modifiers
-    else if (a.mods.scrollType == 2) return a.mods.scrollValue;  // constant: scroll speed events do nothing (Psych)
+    if (!req_.preview && a.mods.scrollType == 1) base *= a.mods.scrollValue;  // Freeplay modifiers
+    else if (!req_.preview && a.mods.scrollType == 2) return a.mods.scrollValue;  // constant: scroll speed events do nothing (Psych)
     return base * speedMult_;
 }
 
@@ -561,8 +572,10 @@ void PlayState::restart() {
     lastSection_ = chart_.sections.empty() ? -100000 : 0;  // Psych: sectionHit from section 1 on
     lastFocus_ = -1;
     eventIdx_ = 0;
-    for (int t = 0; t < Mixer::kTrackCount; ++t) a.mixer.setTrackVolume(t, 1.0f);
-    a.mixer.fadeTo(1.0f, 0.0f);
+    if (!req_.preview) {
+        for (int t = 0; t < Mixer::kTrackCount; ++t) mixer().setTrackVolume(t, 1.0f);
+        mixer().fadeTo(1.0f, 0.0f);
+    }
     songMs_ = -leadMs_;
     healthShown_ = 1.0f;
     camFocus_ = {640, 370};
@@ -575,22 +588,39 @@ void PlayState::restart() {
     left_.singUntil = right_.singUntil = -10;
     left_.dead = right_.dead = false;
     finished_ = songStarted_ = countdownStarted_ = endRequested_ = false;
-    a.input.clear();
+    if (!req_.preview) a.input.clear();
     if (psych_ && scripts_ && scripts_->callStops("onStartCountdown")) {
-        a.mixer.stop();
+        if (!req_.preview) mixer().stop();
         phase_ = Phase::Waiting;
         waitStart_ = a.now;
         return;
     }
-    beginCountdown();
+    if (req_.preview) startPreview();
+    else beginCountdown();
+}
+
+// The chart editor's preview starts where the editor is, as Psych's playtest
+// from here: the notes before it pass by unjudged, and the events before it
+// fire at once on the first update (Psych fires them as it reaches them).
+void PlayState::startPreview() {
+    countdownStarted_ = true;
+    songMs_ = previewMs_ = req_.previewFromMs;
+    session_.skipTo(req_.previewFromMs);
+    const double beatF = chart_.beatAt(std::max(0.0, req_.previewFromMs));
+    lastBeat_ = int(std::floor(beatF)) - 1;
+    lastStep_ = int(std::floor(beatF * 4.0)) - 1;
+    phase_ = Phase::Playing;
+    if (scripts_) {
+        scripts_->setGlobal("startedCountdown", true);
+        scripts_->call("onCountdownStarted");
+    }
 }
 
 void PlayState::beginCountdown() {
-    App& a = app();
     if (countdownStarted_ && phase_ == Phase::Playing) return;
     countdownStarted_ = true;
     platform::log("song " + req_.songId + " " + req_.diff);
-    a.mixer.play(-leadMs_ / 1000.0);
+    mixer().play(-leadMs_ / 1000.0);
     songMs_ = -leadMs_;
     phase_ = Phase::Playing;
     if (scripts_) {
@@ -810,7 +840,7 @@ void PlayState::handleNoteEvents() {
                 strumConfirm(1, ev.lane);
                 vis_.hit(int(ev.rating));
                 if (!(ev.flags & kFlagNoAnim)) charOf(1).sing(dir, now, ev.length / 1000.0 / rate_);
-                a.mixer.setTrackVolume(Mixer::kVoicePlayer, 1.0f);
+                mixer().setTrackVolume(Mixer::kVoicePlayer, 1.0f);
                 const RatingInfo& ri = ratingInfo(ev.rating);
                 if (!cfg_.botplay && (!cfg_.practice || replaying_)) scoreBopAt_ = now;  // Psych: the score text zooms
                 popup(ri.name, ratingColor(ev.rating),
@@ -821,8 +851,8 @@ void PlayState::handleNoteEvents() {
                 }
                 // Every note its own hitsound, on its sample of the song
                 // (the moment of the press; the note's own time for bots).
-                if (a.settings.hitsoundVol > 0)
-                    a.mixer.hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol, double(ev.stack));
+                if (a.settings.hitsoundVol > 0 && !req_.preview)
+                    mixer().hitAt((ev.time + ev.errMs * rate_) / 1000.0, 0, a.settings.hitsoundVol, double(ev.stack));
                 if (psych_) psychNoteHit(ev, false);
                 scoreDirty_ = true;
                 scoreDirtyMiss_ = false;
@@ -833,7 +863,7 @@ void PlayState::handleNoteEvents() {
             case GameEvent::GhostMiss:
                 charOf(1).miss(dir, now);
                 vis_.miss();
-                a.mixer.setTrackVolume(Mixer::kVoicePlayer, 0.0f);
+                mixer().setTrackVolume(Mixer::kVoicePlayer, 0.0f);
                 if (now - lastMissSfx_ > 0.05) {
                     sfxPlay(Sfx::Miss, 0.55f, gfx::randf(0.9f, 1.1f));
                     lastMissSfx_ = now;
@@ -941,6 +971,7 @@ void PlayState::onSection(int s) {
 // ------------------------------------------------------------- pause/death --
 
 void PlayState::pause() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     const long presses = std::count_if(record_.events.begin(), record_.events.end(), [](const ReplayEvent& e) { return e.down; });
     platform::log(TextFormat("paused at %.1f s: %ld presses, %lld hits, %lld misses", songMs_ / 1000.0, presses,
@@ -949,7 +980,7 @@ void PlayState::pause() {
     pauseSel_ = 0;
     pauseScroll_ = 0;
     pausedAt_ = a.now;
-    a.mixer.pause();
+    mixer().pause();
     // Psych's pause music (Options: pause screen song), from a random point, fading in.
     const PsychUi& ui = psychUi();
     if (const std::string song = ui.active() ? ui.pauseMusic(a.settings.pauseMusic) : std::string(); !song.empty()) {
@@ -988,7 +1019,7 @@ void PlayState::resume() {
     stopPauseMusic();
     freePauseShot();
     platform::log("resumed");
-    a.mixer.resume();
+    mixer().resume();
     for (auto& kv : sounds_)
         if (kv.second.started && !kv.second.paused) ResumeMusicStream(kv.second.mus);
     phase_ = Phase::Playing;
@@ -1028,12 +1059,13 @@ void PlayState::updatePause() {
 }
 
 void PlayState::die() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     ++a.blueballed;
     phase_ = Phase::Dead;
     deadAt_ = a.now;
     deadSel_ = 0;
-    a.mixer.fadeTo(0.0f, 0.5f);
+    mixer().fadeTo(0.0f, 0.5f);
     sfxPlay(Sfx::Death);
     charOf(1).miss(1, a.now);
     charOf(1).dead = true;
@@ -1054,36 +1086,40 @@ void PlayState::stopRendering() {
 }
 
 void PlayState::exitToMenu() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     stopRendering();
     if (scripts_) scripts_->call("onDestroy");
-    a.mixer.stop();
-    a.mixer.clear();
+    mixer().stop();
+    mixer().clear();
     a.change(req_.story ? makeStory() : makeFreeplay());
 }
 
 void PlayState::openChartEditor() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     stopRendering();
     if (scripts_) scripts_->call("onDestroy");
-    a.mixer.stop();
-    a.mixer.clear();
+    mixer().stop();
+    mixer().clear();
     sfxPlay(Sfx::Confirm);
     a.change(makeChartEditor(req_.songId, req_.diff));
 }
 
 // Options from the pause menu: leaving them starts this song again, as in Psych.
 void PlayState::openOptions() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     App& a = app();
     stopRendering();
     if (scripts_) scripts_->call("onDestroy");
-    a.mixer.stop();
-    a.mixer.clear();
+    mixer().stop();
+    mixer().clear();
     a.optionsReturn = std::make_unique<PlayRequest>(req_);
     a.change(makeOptions());
 }
 
 void PlayState::finish() {
+    if (req_.preview) return;  // the editor's preview never leaves or stops
     if (finished_) return;
     App& a = app();
     if (scripts_ && !endRequested_) {

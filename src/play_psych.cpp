@@ -786,7 +786,7 @@ void PlayState::psychNoteHit(const GameEvent& ev, bool opponent) {
     // ease back (Psych / JS Engine: camZooming; Tutorial keeps its own zoom).
     if (toLower(entry_->songKey) != "tutorial") sc.camZooming = true;
     if (opponent) {
-        app().mixer.setTrackVolume(Mixer::kVoiceOpponent, 1.0f);
+        mixer().setTrackVolume(Mixer::kVoiceOpponent, 1.0f);
         if (noteCallbacksFor(ev.noteType))
             scripts_->call("opponentNoteHit", {Value(double(ev.id)), Value(double(ev.lane)), Value(type), Value(false)});
     } else {
@@ -1430,7 +1430,7 @@ bool PlayState::handleJsEngineEvent(const psych::ChartEvent& e) {
         notices_.push_back({e.v1, e.v2, a.now, 2});
         if (n == "Popup" && !popupHold_) {
             popupHold_ = true;
-            a.mixer.pause();
+            mixer().pause();
         }
         return true;
     }
@@ -1788,7 +1788,7 @@ void PlayState::releaseAudio() {
 }
 
 void PlayState::playSound(const std::string& file, double volume, const std::string& tag, bool loop) {
-    if (!psych_ || file.empty()) return;
+    if (!psych_ || file.empty() || req_.preview) return;
     const bool music = tag == "__music";
     std::string path;
     for (const char* ext : {".ogg", ".mp3", ".wav"}) {
@@ -1891,6 +1891,7 @@ bool PlayState::openVideo(VideoSlot& v) {
 }
 
 bool PlayState::startVideo(const std::string& name, bool canSkip) {
+    if (req_.preview) return false;  // no cutscenes in the editor's preview
     if (!psych_) return false;
     auto slot = std::make_unique<VideoSlot>();
     slot->name = name;
@@ -2095,7 +2096,7 @@ bool PlayState::getGameProp(std::string_view path, Value& out) {
         if (c.rfind(prefix, 0) == 0) return flag(keyboardState(c.substr(prefix.size()), mode));
     }
     if (c == "FlxG.sound.music.pitch") return num(rate_);
-    if (c == "FlxG.sound.music.length") return num(prep_.inst ? a.mixer.lengthSec() * 1000.0 : chart_.lengthMs);
+    if (c == "FlxG.sound.music.length") return num(prep_.inst ? double(prep_.inst->frames()) / Mixer::kRate * 1000.0 : chart_.lengthMs);
     if (c == "FlxG.sound.music.playing") return flag(phase_ == Phase::Playing && songMs_ >= 0);
     if (c == "FlxG.mouse.visible") return flag(false);
     if (c == "FlxG.timeScale" || c == "FlxG.game.timeScale") return num(1);
@@ -2208,7 +2209,7 @@ bool PlayState::setGameProp(std::string_view path, const Value& v) {
     if (path == "inCutscene") { inCutscene_ = scene::toBool(v); return true; }
     if (path.rfind("class:", 0) != 0) return false;
     const std::string_view c = path.substr(6);
-    if (c == "FlxG.sound.music.volume") { app().mixer.setTrackVolume(Mixer::kInst, float(d)); return true; }
+    if (c == "FlxG.sound.music.volume") { mixer().setTrackVolume(Mixer::kInst, float(d)); return true; }
     if (c == "FlxG.width" || c == "Lib.current.stage.stageWidth" || c == "Lib.application.window.width" ||
         c == "Application.current.window.width") {
         // Only the game's width matters here; the window keeps its size.
@@ -2280,8 +2281,9 @@ void PlayState::endSong() {
 
 void PlayState::restartSong() {
     App& a = app();
+    if (req_.preview) return;
     if (psych_) {
-        a.mixer.stop();
+        mixer().stop();
         a.change(makePlay(req_));  // fresh scene and scripts, like Psych's resetState
         return;
     }
@@ -2541,9 +2543,8 @@ std::string PlayState::modsDir() { return app().base + "mods/"; }
 
 // JS Engine loopTheSong: back to `ms`, the notes from there on can be played again.
 void PlayState::loopSong(double ms) {
-    App& a = app();
     ms = clampv(ms, 0.0, std::max(0.0, chart_.lengthMs));
-    a.mixer.play(ms / 1000.0);
+    mixer().play(ms / 1000.0);
     songMs_ = ms;
     session_.rewindTo(ms);
     eventIdx_ = size_t(std::lower_bound(chart_.events.begin(), chart_.events.end(), ms,
@@ -2571,7 +2572,7 @@ void PlayState::openCustomSubstate(const std::string& name, bool pauseGame) {
     substate_.active = true;
     substate_.pausesGame = pauseGame;
     if (pauseGame) {
-        app().mixer.pause();
+        mixer().pause();
         for (auto& kv : sounds_)
             if (kv.second.started && !kv.second.paused) PauseMusicStream(kv.second.mus);
     }
@@ -2588,7 +2589,7 @@ void PlayState::closeCustomSubstate() {
     for (const std::string& tag : st.members)
         if (auto it = scene_->objects.find(tag); it != scene_->objects.end()) scene_->remove(it->second);
     if (st.pausesGame && phase_ == Phase::Playing) {
-        app().mixer.resume();
+        mixer().resume();
         for (auto& kv : sounds_)
             if (kv.second.started && !kv.second.paused) ResumeMusicStream(kv.second.mus);
     }
@@ -2605,6 +2606,7 @@ void PlayState::insertToCustomSubstate(const std::string& tag) {
 }
 
 bool PlayState::loadSong(const std::string& name, int difficulty) {
+    if (req_.preview) return false;
     // Another song of the same mod (Psych's loadSong).
     App& a = app();
     const std::string want = songPathName(name.empty() ? entry_->songKey : name);
@@ -2614,7 +2616,7 @@ bool PlayState::loadSong(const std::string& name, int difficulty) {
         r.songId = e.id;
         if (difficulty >= 0 && difficulty < int(e.diffs.size())) r.diff = e.diffs[size_t(difficulty)];
         else if (std::find(e.diffs.begin(), e.diffs.end(), r.diff) == e.diffs.end() && !e.diffs.empty()) r.diff = e.diffs[0];
-        a.mixer.stop();
+        mixer().stop();
         a.change(makePlay(r));
         return true;
     }

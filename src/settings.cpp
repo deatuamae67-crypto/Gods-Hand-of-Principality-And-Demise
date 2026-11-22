@@ -124,6 +124,10 @@ bool Settings::load(const std::string& path) {
         else if (k == "sfxVol") sfxVol = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hitsoundVol") hitsoundVol = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hitsoundMode") hitsoundMode = clampv(int(d), 0, 2);
+        else if (k == "editorPreview") editorPreview = clampv(int(d), 0, 2);
+        else if (k == "editorPreviewDown") editorPreviewDown = b;
+        else if (k == "editorPreviewBox")
+            std::sscanf(v.c_str(), "%f,%f,%f,%f", &editorPreviewBox[0], &editorPreviewBox[1], &editorPreviewBox[2], &editorPreviewBox[3]);
         else if (k == "muted") muted = b;
         else if (k == "modRate") modRate = clampv(float(d), 0.5f, 2.0f);
         else if (k == "modBotplay") modBotplay = b;
@@ -181,7 +185,8 @@ bool Settings::save(const std::string& path) const {
       << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums << "\ntouchControls=" << touchControls
       << "\nfpsCap=" << fpsCap << "\noffsetMs=" << offsetMs << "\nscrollSpeed=" << scrollSpeed
       << "\nmasterVol=" << masterVol << "\nmusicVol=" << musicVol << "\nsfxVol=" << sfxVol
-      << "\nhitsoundVol=" << hitsoundVol << "\nhitsoundMode=" << hitsoundMode << "\nmuted=" << muted << "\nmodRate=" << modRate << "\nmodBotplay=" << modBotplay << "\nmodPractice=" << modPractice
+      << "\nhitsoundVol=" << hitsoundVol << "\nhitsoundMode=" << hitsoundMode << "\neditorPreview=" << editorPreview << "\neditorPreviewDown=" << editorPreviewDown
+      << "\neditorPreviewBox=" << editorPreviewBox[0] << "," << editorPreviewBox[1] << "," << editorPreviewBox[2] << "," << editorPreviewBox[3] << "\nmuted=" << muted << "\nmodRate=" << modRate << "\nmodBotplay=" << modBotplay << "\nmodPractice=" << modPractice
       << "\nmodMirror=" << modMirror << "\nmodScrollType=" << modScrollType << "\nmodScrollValue=" << modScrollValue
       << "\nfreeplaySong=" << freeplaySong << "\nfreeplayDiff=" << freeplayDiff << "\npsychUi=" << psychUi << "\npsychMenus=" << psychMenus << "\npsychFolder=" << psychFolder << "\n";
     return bool(f);

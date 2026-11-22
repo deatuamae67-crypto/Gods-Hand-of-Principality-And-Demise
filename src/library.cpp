@@ -111,7 +111,8 @@ static PcmPtr streamOrNull(const std::string& path, double startFraction = 0.0) 
     return loadSongAudio(path, startFraction);
 }
 
-Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys, bool forceAutoChart) {
+Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirror, bool extraKeys, bool forceAutoChart,
+                          const std::string& chartFile) {
     Prepared p;
     if (e.builtin && e.def && !forceAutoChart) {
         BuiltinAudio a = builtinAudio(*e.def);
@@ -160,15 +161,18 @@ Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirr
         size_t idx = 0;
         for (size_t i = 0; i < e.diffs.size(); ++i)
             if (e.diffs[i] == diff) idx = i;
-        if (idx >= e.chartPaths.size()) { p.error = "no chart for difficulty " + diff; return p; }
+        if (idx >= e.chartPaths.size() && chartFile.empty()) { p.error = "no chart for difficulty " + diff; return p; }
         std::string meta;
-        if (!e.metaPath.empty()) readTextFile(e.metaPath, meta);
+        if (!e.metaPath.empty() && chartFile.empty()) readTextFile(e.metaPath, meta);
         std::string err;
-        if (!loadChartFile(e.chartPaths[idx], diff, p.chart, err, meta, 0, extraKeys)) { p.error = err; return p; }
+        if (!loadChartFile(chartFile.empty() ? e.chartPaths[idx] : chartFile, diff, p.chart, err, meta, 0, extraKeys)) {
+            p.error = err;
+            return p;
+        }
         if (p.chart.title.empty()) p.chart.title = e.title;
         p.chart.difficulty = diff;
         // Psych keeps events in a separate events.json next to the charts.
-        for (const fs::path& f : listDir(toPath(e.dataDir), false)) {
+        for (const fs::path& f : chartFile.empty() ? listDir(toPath(e.dataDir), false) : std::vector<fs::path>{}) {
             if (!equalsI(pathStr(f.filename()), "events.json")) continue;
             std::string evText;
             if (readTextFile(pathStr(f), evText)) {

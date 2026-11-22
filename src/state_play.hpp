@@ -41,6 +41,12 @@ public:
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
     void openOptions();
+    // The chart editor's preview (PlayRequest::preview): the song's position,
+    // set before each update; ready once loaded; what failed, if it did.
+    void setPreviewTime(double ms) { previewMs_ = ms; }
+    bool previewReady() const { return phase_ == Phase::Playing || phase_ == Phase::Ending; }
+    bool previewFailed() const { return phase_ == Phase::Error; }
+    const std::string& previewError() const { return error_; }
     // Keys bound to a lane are notes, not volume keys.
     bool keyReserved(int key) const override {
         return key > 0 && key < int(keyLane_.size()) && keyLane_[size_t(key)] >= 0;
@@ -204,6 +210,13 @@ private:
         return audioLenMs_ > 0 ? audioLenMs_ : chart_.lengthMs;
     }
     double shownLengthMs() const { return fakeLenMs_ >= 0 ? fakeLenMs_ : songEndMs(); }
+    void startPreview();
+    double previewMs_ = 0;  // the editor's clock (the preview's song position)
+    // The song's mixer. The editor's preview has one of its own that is never
+    // heard, so what its scripts do to the music (volume, pause, seek) leaves
+    // the editor's audio alone.
+    Mixer& mixer() { return quietMixer_ ? *quietMixer_ : app().mixer; }
+    std::unique_ptr<Mixer> quietMixer_;
     struct NoteRef { uint8_t side; uint16_t lane; uint32_t idx; };
     LaneNote* noteRef(std::string_view group, int index, int* sideOut = nullptr, int* laneOut = nullptr);
 

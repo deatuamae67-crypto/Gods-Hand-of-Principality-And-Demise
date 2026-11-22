@@ -103,6 +103,12 @@ struct Settings {
     float scrollSpeed = 0;     // 0 = use chart speed
     float masterVol = 0.8f, musicVol = 1.0f, sfxVol = 0.7f, hitsoundVol = 0.0f;
     int hitsoundMode = 0;  // Mixer::HitMode: 0 limiter, 1 unlimited, 2 one at a time (each cuts the last)
+    // The chart editor's preview window (issue #36): 0 hidden, 1 the notes,
+    // 2 the song as it plays (stage, characters, scripts, events); its
+    // downscroll; where it is and its size, title bar included (canvas pixels).
+    int editorPreview = 1;
+    bool editorPreviewDown = false;
+    float editorPreviewBox[4] = {12, 478, 228, 230};
     bool muted = false;  // the 0 key (the volume keys bring the sound back)
     // Freeplay's modifiers (TAB) and the song last picked, kept like the rest.
     float modRate = 1.0f;

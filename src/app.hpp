@@ -57,6 +57,12 @@ struct PlayRequest {
     bool render = false;     // Render Mode (main menu): the song plays by itself and is recorded to a video
     bool autoChart = false;  // AutoChart (main menu): a chart made from the song's audio, whatever charts it has
     std::string replayPath;  // watch this replay instead of playing
+    // The chart editor's full preview (issue #36): the song plays itself in a
+    // window of the editor, from previewFromMs on, with the editor's chart
+    // (chartFile) and its clock; no sound, no input, no other screen.
+    bool preview = false;
+    std::string chartFile;
+    double previewFromMs = 0;
     std::vector<std::string> storyQueue;  // songs still to play after this one
     long long storyScore = 0;
     long long storyMisses = 0;

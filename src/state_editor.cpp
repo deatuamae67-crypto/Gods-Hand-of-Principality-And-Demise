@@ -15,6 +15,7 @@
 #include <fstream>
 #include <future>
 #include <map>
+#include <memory>
 #include <random>
 
 #include "app.hpp"
@@ -28,6 +29,7 @@
 #include "gfx.hpp"
 #include "raylib.h"
 #include "scene.hpp"
+#include "state_play.hpp"
 
 namespace gh {
 
@@ -117,7 +119,17 @@ bool writeWav(const std::string& path, const Pcm& p) { return writeWavFile(path,
 
 class ChartEditorState : public State {
 public:
-    ChartEditorState(std::string songId, std::string diff) : songId_(std::move(songId)), diff_(std::move(diff)) {}
+    ChartEditorState(std::string songId, std::string diff) : songId_(std::move(songId)), diff_(std::move(diff)) {
+        const Settings& s = app().settings;
+        previewMode_ = s.editorPreview;
+        previewDown_ = s.editorPreviewDown;
+        previewRect_ = {s.editorPreviewBox[0], s.editorPreviewBox[1], s.editorPreviewBox[2], s.editorPreviewBox[3]};
+        clampPreview();
+    }
+    ~ChartEditorState() override {
+        full_.reset();
+        if (fullRt_.id && IsWindowReady()) UnloadRenderTexture(fullRt_);
+    }
 
     void enter() override {
         App& a = app();
@@ -178,7 +190,6 @@ public:
             a.quit = true;
             return;
         }
-        (void)dt;
         // SNIFF in the editor: an FL Studio project or score dropped on the window.
         if (IsFileDropped()) {
             FilePathList dropped = LoadDroppedFiles();
@@ -206,6 +217,7 @@ public:
             cur_ = t;
             if (a.mixer.ended() || cur_ > songLength() + 2000) stopPlay();
         }
+        updateFullPreview(dt);
         if (typing_) {
             if (in.pressed(KEY_ESCAPE)) ui_.focus.clear();
             return;  // keys go to the text field (the panel still runs in draw)
@@ -325,9 +337,22 @@ public:
         }
         drawGrid();
         drawInfo();
-        if (preview_) drawPreview();
+        // The preview window takes the clicks on it (moving, resizing) from
+        // the panel and the grid under it, and is drawn over them.
+        const bool onPreview = previewMode_ != kPreviewOff && previewMouse();
+        const bool click = ui_.click, rclick = ui_.rclick;
+        const float wheel = ui_.wheel;
+        if (onPreview) {
+            ui_.click = ui_.rclick = false;
+            ui_.wheel = 0;
+        }
         drawPanel();  // also handles the panel's clicks (immediate mode)
-        if (!ui_.used && !typing_) handleGridMouse();
+        if (previewMode_ != kPreviewOff) drawPreviewWindow();
+        ui_.overlays();  // the panel's open lists, over everything
+        if (!ui_.used && !typing_ && !onPreview) handleGridMouse();
+        ui_.click = click;
+        ui_.rclick = rclick;
+        ui_.wheel = wheel;
         if (a.now - flashAt_ < 3.0)
             gfx::text(FontId::Ui, flash_, kGridCenter, gfx::H - 40, 24,
                       gfx::fade(gfx::rgb(0xFFE08A), float(std::min(1.0, 3.0 - (a.now - flashAt_)))), Align::Center, 1.5f);
@@ -601,6 +626,7 @@ private:
     // on a chart of millions of notes those are what keeps editing quick.
     void snapshot() { snapshotRange(-1e300, 1e300); }
     void snapshotRange(double a, double b) {
+        edited();
         UndoStep st;
         st.sections = sections_;
         st.events = events_;
@@ -628,6 +654,7 @@ private:
     }
     void restore(std::vector<UndoStep>& from, std::vector<UndoStep>& to, const char* what) {
         if (from.empty()) return;
+        edited();
         UndoStep& st = from.back();
         UndoStep back;
         back.sections = sections_;
@@ -1599,18 +1626,94 @@ private:
                              1.0f, 4, laneDrag_ ? kAccent : Color{170, 140, 220, 255});
     }
 
-    // The chart as it will be played, in a small window under the info: the
-    // strums, and the notes coming up to them at the song's scroll speed
-    // (Charting tab: Chart preview).
-    void drawPreview() {
-        const Rectangle box{12, 478, 228, 230};
-        DrawRectangleRounded(box, 0.04f, 6, Color{8, 5, 14, 235});
-        DrawRectangleRoundedLinesEx(box, 0.04f, 6, 1.5f, Color{110, 92, 150, 200});
+    // ---------------------------------------------------------- preview --
+    // The preview window (Charting tab, issue #36), moved by its title bar
+    // and resized by its corner: either the notes coming to the strums at the
+    // song's scroll speed (quick), or the song as the game plays it - stage,
+    // characters, Lua scripts and events of the chart as it is here, at the
+    // editor's time (Psych's playtest from here, in a window).
+    enum PreviewMode { kPreviewOff = 0, kPreviewNotes = 1, kPreviewFull = 2 };
+    static constexpr float kTitleH = 20, kGrip = 16;
+
+    Rectangle previewView() const {
+        return {previewRect_.x, previewRect_.y + kTitleH, previewRect_.width, previewRect_.height - kTitleH};
+    }
+    void clampPreview() {
+        previewRect_.width = clampv(previewRect_.width, 160.0f, gfx::W);
+        previewRect_.height = clampv(previewRect_.height, 110.0f, gfx::H);
+        previewRect_.x = clampv(previewRect_.x, 0.0f, gfx::W - previewRect_.width);
+        previewRect_.y = clampv(previewRect_.y, 0.0f, gfx::H - previewRect_.height);
+    }
+    void savePreview() {
+        Settings& s = app().settings;
+        s.editorPreview = previewMode_;
+        s.editorPreviewDown = previewDown_;
+        s.editorPreviewBox[0] = previewRect_.x;
+        s.editorPreviewBox[1] = previewRect_.y;
+        s.editorPreviewBox[2] = previewRect_.width;
+        s.editorPreviewBox[3] = previewRect_.height;
+        app().saveSettings();
+    }
+
+    // Moving and resizing. True while the mouse is on the window (or holds it).
+    bool previewMouse() {
+        const Rectangle box = previewRect_;
+        const Vector2 m = ui_.mouse;
+        if (ui_.click && CheckCollisionPointRec(m, {box.x + box.width - kGrip, box.y + box.height - kGrip, kGrip, kGrip})) {
+            previewDrag_ = 2;
+            previewGrab_ = {box.x + box.width - m.x, box.y + box.height - m.y};
+        } else if (ui_.click && CheckCollisionPointRec(m, {box.x, box.y, box.width, kTitleH})) {
+            previewDrag_ = 1;
+            previewGrab_ = {m.x - box.x, m.y - box.y};
+        }
+        if (previewDrag_ == 1) {
+            previewRect_.x = m.x - previewGrab_.x;
+            previewRect_.y = m.y - previewGrab_.y;
+        } else if (previewDrag_ == 2) {
+            previewRect_.width = m.x + previewGrab_.x - box.x;
+            previewRect_.height = m.y + previewGrab_.y - box.y;
+        }
+        clampPreview();
+        const bool held = previewDrag_ != 0;
+        if (held && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            previewDrag_ = 0;
+            savePreview();
+        }
+        return held || CheckCollisionPointRec(m, box);
+    }
+
+    void drawPreviewWindow() {
+        const Rectangle box = previewRect_, view = previewView();
+        DrawRectangleRounded(box, 0.03f, 6, Color{8, 5, 14, 255});
+        if (previewMode_ == kPreviewFull) drawFullPreview(view);
+        else drawPreview(view);
+        // Title bar (drag to move) and the corner (drag to resize).
+        const bool hot = previewDrag_ == 1 || CheckCollisionPointRec(ui_.mouse, {box.x, box.y, box.width, kTitleH});
+        DrawRectangleRec({box.x, box.y, box.width, kTitleH}, hot ? Color{70, 54, 108, 255} : Color{44, 34, 70, 255});
+        std::string title = previewMode_ == kPreviewFull ? "PREVIEW  full visuals" : "PREVIEW  notes";
+        if (previewDown_) title += "  (downscroll)";
+        if (previewMode_ == kPreviewFull && editGen_ != fullGen_ && !autoRebuild()) title += "  - chart changed: Reload preview";
+        BeginScissorMode(int(gfx::canvasOrigin().x + box.x * gfx::canvasScale()), int(gfx::canvasOrigin().y + box.y * gfx::canvasScale()),
+                         int(box.width * gfx::canvasScale()), int(kTitleH * gfx::canvasScale()));
+        gfx::text(FontId::Ui, title, box.x + 8, box.y + 2, 15, gfx::fade(WHITE, 0.8f));
+        EndScissorMode();
+        const float gx = box.x + box.width, gy = box.y + box.height;
+        const Color gc = previewDrag_ == 2 ? kAccent : gfx::fade(WHITE, 0.45f);
+        for (int i = 1; i <= 3; ++i)
+            DrawLineEx({gx - 4.0f * i - 2, gy - 2}, {gx - 2, gy - 4.0f * i - 2}, 1.5f, gc);
+        DrawRectangleRoundedLinesEx(box, 0.03f, 6, 1.5f, Color{110, 92, 150, 220});
+    }
+
+    // Notes only: the strums, and the notes coming up (down, in downscroll) to them.
+    void drawPreview(const Rectangle box) {
         const int cols = 2 * keys_;
-        const float lw = std::min(26.0f, (box.width - 16) / float(cols));
-        const float x0 = box.x + (box.width - lw * cols) * 0.5f, recY = box.y + 26;
+        const float lw = std::min(26.0f * std::max(1.0f, box.width / 228.0f), (box.width - 16) / float(cols));
+        const bool down = previewDown_;
+        const float x0 = box.x + (box.width - lw * cols) * 0.5f, recY = down ? box.y + box.height - 26 : box.y + 26;
         const double pp = 0.45 * speed_ * (lw / 112.0) * 1.6;  // pixels per ms, as Psych scales it
-        const double tTop = cur_ - (recY - box.y) / pp, tBot = cur_ + (box.y + box.height - recY) / pp;
+        const float sign = down ? -1.0f : 1.0f;
+        const double ahead = (down ? recY - box.y : box.y + box.height - recY) / pp;
+        const double behind = (down ? box.y + box.height - recY : recY - box.y) / pp;
         const Vector2 o = gfx::canvasOrigin();
         const float cs = gfx::canvasScale();
         BeginScissorMode(int(o.x + box.x * cs), int(o.y + box.y * cs), int(box.width * cs), int(box.height * cs));
@@ -1619,16 +1722,17 @@ private:
         float lastY[2 * kMaxKeys];
         std::fill(std::begin(lastY), std::end(lastY), -1e9f);
         const Stats& st = stats();
-        auto r = notesIn(tTop - st.maxLen, tBot);
+        auto r = notesIn(cur_ - behind - st.maxLen, cur_ + ahead);
         for (auto it = r.first; it != r.second; ++it) {
             const EdNote& n = *it;
             if (n.col >= 2 * kMaxKeys) continue;
-            const float y = recY + float((n.t - cur_) * pp);
+            const float y = recY + sign * float((n.t - cur_) * pp);
             const float cx = x0 + (n.col + 0.5f) * lw;
             const int dir = gfx::laneDir(keys_, n.col % keys_);
             if (n.len > 0) {
-                const float yEnd = recY + float((n.t + n.len - cur_) * pp);
-                if (yEnd >= box.y) gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, std::max(y, recY), yEnd, lw * 0.3f, 0.8f, true);
+                const float yEnd = recY + sign * float((n.t + n.len - cur_) * pp);
+                const float y0 = n.t < cur_ ? recY : y;
+                if (n.t + n.len > cur_) gfx::drawSustain(dir == gfx::kCenter ? gfx::kUp : dir, cx, y0, yEnd, lw * 0.3f, 0.8f, true);
             }
             if (n.t < cur_ - 1 || std::fabs(y - lastY[n.col]) < 2.0f) continue;  // played already / same pixel row
             lastY[n.col] = y;
@@ -1647,7 +1751,123 @@ private:
             if (v.mine) DrawCircleV({v.cx, v.y}, lw * 0.3f, Color{220, 40, 60, 255});
         vis_.clear();
         EndScissorMode();
-        gfx::text(FontId::Ui, "PREVIEW", box.x + 8, box.y + box.height - 22, 14, gfx::fade(WHITE, 0.45f));
+    }
+
+    // While the preview plays: its own downscroll, no BOTPLAY text and no
+    // sound effects (the editor's sound is the song's).
+    struct PreviewScope {
+        Settings& s;
+        const bool down, botText;
+        PreviewScope(Settings& st, bool d) : s(st), down(st.downscroll), botText(st.botplayText) {
+            s.downscroll = d;
+            s.botplayText = false;
+            sfxMute(true);
+        }
+        ~PreviewScope() {
+            s.downscroll = down;
+            s.botplayText = botText;
+            sfxMute(false);
+        }
+        PreviewScope(const PreviewScope&) = delete;
+        PreviewScope& operator=(const PreviewScope&) = delete;
+    };
+
+    void edited() {
+        ++editGen_;
+        editAt_ = app().now;
+    }
+    // Changes to the chart start the preview again by themselves, unless the
+    // chart is so large that writing it out takes a while (then the button).
+    bool autoRebuild() const { return buildMs_ < 120.0; }
+
+    // The game's own play screen, made again from the editor's chart when the
+    // chart changes, the time goes back or downscroll is switched; between
+    // those it plays on at the editor's time.
+    void updateFullPreview(double dt) {
+        App& a = app();
+        if (previewMode_ != kPreviewFull) {
+            full_.reset();
+            fullDrawn_ = false;
+            fullError_.clear();
+            return;
+        }
+        const bool idle = !IsMouseButtonDown(MOUSE_BUTTON_LEFT) && a.now - editAt_ > 0.35;
+        bool rebuild = reloadFull_ || fullDown_ != previewDown_ || (editGen_ != fullGen_ && idle && autoRebuild());
+        if (!full_ && fullError_.empty()) rebuild = true;  // just switched on
+        // Back in time: what the scripts did cannot be undone, so it starts again from there.
+        if (full_ && !full_->previewFailed() && cur_ < fullMs_ - 1.0) rebuild = true;
+        if (rebuild) buildFull();
+        if (!full_) return;
+        fullMs_ = cur_;
+        PreviewScope scope(a.settings, previewDown_);
+        full_->setPreviewTime(cur_);
+        full_->update(dt);
+    }
+
+    void buildFull() {
+        App& a = app();
+        reloadFull_ = false;
+        fullGen_ = editGen_;
+        fullDown_ = previewDown_;
+        fullMs_ = cur_;
+        fullError_.clear();
+        full_.reset();  // one at a time: the old one gives back what it took first
+        std::error_code ec;
+        fs::create_directories(toPath(a.userDir + "cache"), ec);
+        const std::string path = a.userDir + "cache/editor-preview.json";
+        const double t0 = nowSec();
+        if (!writeText(toPath(path), buildJson(true))) {
+            fullError_ = "cannot write " + path;
+            return;
+        }
+        buildMs_ = (nowSec() - t0) * 1000.0;
+        PlayRequest r;
+        r.songId = songId_;
+        r.diff = diff_;
+        r.preview = true;
+        r.chartFile = path;
+        r.previewFromMs = std::max(0.0, cur_);
+        full_ = std::make_unique<PlayState>(r);
+        PreviewScope scope(a.settings, previewDown_);
+        full_->setPreviewTime(r.previewFromMs);
+        full_->enter();
+    }
+
+    // The play screen drawn into a picture the size of the window, shown there.
+    void drawFullPreview(const Rectangle view) {
+        App& a = app();
+        const float cs = gfx::canvasScale();
+        const int w = std::max(16, int(view.width * cs)), h = std::max(16, int(view.height * cs));
+        if (full_ && full_->previewReady() && !gfx::frameTargetActive()) {
+            if (!fullRt_.id || fullRt_.texture.width != w || fullRt_.texture.height != h) {
+                if (fullRt_.id) UnloadRenderTexture(fullRt_);
+                fullRt_ = LoadRenderTexture(w, h);
+                SetTextureFilter(fullRt_.texture, TEXTURE_FILTER_BILINEAR);
+            }
+            gfx::endCanvas();
+            gfx::beginFrameTarget(fullRt_);
+            ClearBackground(BLACK);
+            {
+                PreviewScope scope(a.settings, previewDown_);
+                full_->draw();
+            }
+            gfx::drawLetterbox();  // what is past the game's picture, as in the game's window
+            gfx::endFrameTarget();
+            gfx::beginCanvas();
+            fullDrawn_ = true;
+        }
+        if (fullDrawn_ && fullRt_.id)
+            DrawTexturePro(fullRt_.texture, {0, 0, float(fullRt_.texture.width), -float(fullRt_.texture.height)}, view, {0, 0}, 0, WHITE);
+        std::string msg;
+        if (!fullError_.empty()) msg = fullError_;
+        else if (!full_) msg = "";
+        else if (full_->previewFailed()) msg = full_->previewError().empty() ? "the song cannot be played" : full_->previewError();
+        else if (!full_->previewReady()) msg = "Loading...";
+        if (!msg.empty()) {
+            if (fullDrawn_) DrawRectangleRec(view, gfx::fade(BLACK, 0.55f));
+            gfx::text(FontId::Ui, msg, view.x + view.width * 0.5f, view.y + view.height * 0.5f - 10, 18, gfx::fade(WHITE, 0.85f),
+                      Align::Center);
+        }
     }
 
     void drawInfo() {
@@ -1675,7 +1895,8 @@ private:
                                      "Click add/select", "SHIFT+drag select", "Ctrl+C/X/V copy, cut",
                                      "DEL delete", "M mirror", "Ctrl+Z/Y undo", "ENTER save+play"};
         for (const char* h : help) line(h, gfx::fade(WHITE, 0.55f), 15);
-        if (wideGrid() && !preview_) line("Ctrl+wheel / top bar: lanes", gfx::fade(WHITE, 0.55f), 15);
+        if (wideGrid() && !(previewMode_ != kPreviewOff && CheckCollisionRecs(previewRect_, {x, y, 222, 20})))
+            line("Ctrl+wheel / top bar: lanes", gfx::fade(WHITE, 0.55f), 15);
     }
 
     // The tabbed panel. Immediate mode: drawing and clicks happen together.
@@ -1928,7 +2149,10 @@ private:
                 ui_.check(row(), "Hit sounds: opponent", hitOpponent_);
                 ui_.stepper(row(), "Opponent hitsound volume", hitVolOpponent_, 0.05, 0, 1, "%.2f");
                 ui_.check(row(), "Exact placement (section starts)", exactPlace_);
-                ui_.check(row(), "Chart preview (bottom left)", preview_);
+                // The preview window (move it by its title bar, resize it by its corner).
+                if (ui_.choice(row(), "Preview", {"Off", "Notes only", "Full visuals"}, previewMode_)) savePreview();
+                if (previewMode_ != kPreviewOff && ui_.check(row(), "Preview downscroll", previewDown_)) savePreview();
+                if (previewMode_ == kPreviewFull && ui_.button(row(), "Reload preview")) reloadFull_ = true;
                 ui_.check(row(), "Metronome", metronome_);
                 double snap = snapIdx_;
                 if (ui_.stepper(row(), "Snap (1/N)", snap, 1, 0, double(std::size(kSnaps) - 1), "%.0f")) snapIdx_ = int(snap);
@@ -1968,7 +2192,6 @@ private:
             }
             default: break;
         }
-        ui_.overlays();
     }
 
     // ------------------------------------------------- FL Studio (SNIFF) --
@@ -2124,7 +2347,20 @@ private:
     bool hitPlayer_ = true, hitOpponent_ = true, metronome_ = false, muteVoices_ = false;
     double hitVolPlayer_ = 0.6, hitVolOpponent_ = 0.6, schedUpTo_ = 0;  // hitsound volumes; scheduled up to (ms)
     double rangeFrom_ = 0, rangeTo_ = 0;  // Section tab: a range of sections to copy
-    bool audioOnly_ = false, reloadArmed_ = false, preview_ = true;
+    bool audioOnly_ = false, reloadArmed_ = false;
+    // The preview window (issue #36): what it shows (PreviewMode), its
+    // downscroll, where it is (title bar included); 1 moving it, 2 resizing.
+    int previewMode_ = 1, previewDrag_ = 0;
+    bool previewDown_ = false;
+    Rectangle previewRect_{12, 478, 228, 230};
+    Vector2 previewGrab_{};
+    // Full visuals: the game itself playing the chart as it is in the editor.
+    std::unique_ptr<PlayState> full_;
+    RenderTexture2D fullRt_{};
+    bool fullDrawn_ = false, fullDown_ = false, reloadFull_ = false;
+    unsigned editGen_ = 0, fullGen_ = 0;  // chart changes made / shown in the preview
+    double editAt_ = -10, fullMs_ = 0, buildMs_ = 0;
+    std::string fullError_;
     int saveFormat_ = kSaveJson;  // Song tab: Psych JSON, a binary .ghc, or both (as the chart was found)
     bool backedUpGhc_ = false;
     int keys_ = 4, snapIdx_ = 3, typeIdx_ = 0, tab_ = 2, eventIdx_ = 0, fillPattern_ = 1, fillSide_ = 1, fillLane_ = 0;

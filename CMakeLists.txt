@@ -364,7 +364,7 @@ endif()
 # Streamed song audio is tested with raylib's decoders when raylib is built.
 if(GH_BUILD_TESTS AND TARGET raylib)
   target_sources(gh_tests PRIVATE tests/audio_tests.cpp src/audio.cpp src/audio_decode.cpp src/platform.cpp src/folder_picker.cpp
-                 src/render_mode.cpp src/process.cpp src/sysinfo.cpp)
+                 src/render_mode.cpp src/process.cpp src/sysinfo.cpp src/settings.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   if(WIN32)
     target_link_libraries(gh_tests PRIVATE shell32 ole32 pdh)  # platform.cpp's folder dialog; sysinfo.cpp's GPU counters

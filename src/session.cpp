@@ -301,6 +301,19 @@ void Session::rewindTo(double songMs) {
     lastMs_ = -1e18;
 }
 
+void Session::skipTo(double songMs) {
+    for (int s = 0; s < 2; ++s)
+        for (int l = 0; l < keys_; ++l) {
+            std::vector<LaneNote>& v = lanes_[s][l];
+            const size_t first = size_t(std::lower_bound(v.begin(), v.end(), songMs,
+                                                         [](const LaneNote& n, double t) { return n.t < t; }) - v.begin());
+            for (size_t i = 0; i < first; ++i) v[i].state = kMinePassed;  // passed by, no judgement
+            cursor_[s][l] = first;
+            activeHold_[s][l] = -1;
+        }
+    lastMs_ = songMs;
+}
+
 long long Session::judged() const {
     long long n = 0;
     for (long long c : counts) n += c;

@@ -80,6 +80,9 @@ public:
     void update(double songMs);
     // Notes from `songMs` on can be played again (JS Engine loopTheSong); stats stay.
     void rewindTo(double songMs);
+    // Starting from `songMs` (the chart editor's preview, Psych's playtest
+    // from here): the notes before it are passed by, unjudged.
+    void skipTo(double songMs);
 
     // Accessors used for rendering.
     int keys() const { return keys_; }

@@ -664,6 +664,15 @@ static void testSession() {
     CHECK(s.counts[kDivine] + s.counts[kGrace] + s.counts[kMortal] + s.counts[kSinful] == 0);
     s.update(1100);
     CHECK(s.misses == 1);
+
+    // The chart editor's preview starting part-way (issue #36): the notes
+    // before that point pass by, neither hit nor missed, and botplay plays on.
+    s.init(c, bot);
+    s.skipTo(1800);
+    for (double t = 1800; t <= 8000; t += 16.6) s.update(t);
+    CHECK(s.misses == 0);
+    CHECK(s.counts[kDivine] == 3);  // the player's notes at 1000 and 1500 were before it
+    CHECK(s.allResolved());
 }
 
 static void testComposer(bool audio, const char* wavDir) {

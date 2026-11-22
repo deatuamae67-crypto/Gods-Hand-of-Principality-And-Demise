@@ -794,7 +794,11 @@ void sfxShutdown() {
 
 void sfxSetVolume(float v) { g_sfxVol = v; }
 
+static bool g_sfxMuted = false;
+void sfxMute(bool on) { g_sfxMuted = on; }
+
 void sfxPlay(Sfx id, float volume, float pitch) {
+    if (g_sfxMuted) return;
     SfxSlot& s = g_sfx[int(id)];
     if (!s.ok && !s.hasOver) return;
     Sound& snd = s.hasOver ? s.overAlias[s.next] : s.alias[s.next];

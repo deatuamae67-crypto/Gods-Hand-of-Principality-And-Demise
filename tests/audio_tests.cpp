@@ -20,6 +20,7 @@
 #include "audio_decode.hpp"
 #include "process.hpp"
 #include "render_mode.hpp"
+#include "settings.hpp"
 
 using namespace gh;
 namespace fs = std::filesystem;
@@ -373,6 +374,25 @@ void testHitsounds() {
                 loudest({{0.1, 10}}, 0.4f));
 }
 
+// The chart editor's preview window is kept between sessions (issue #36).
+void testEditorPreviewSettings(const std::string& dir) {
+    const std::string path = dir + "/settings.cfg";
+    Settings a;
+    a.editorPreview = 2;
+    a.editorPreviewDown = true;
+    a.editorPreviewBox[0] = 312;
+    a.editorPreviewBox[1] = 190;
+    a.editorPreviewBox[2] = 555;
+    a.editorPreviewBox[3] = 456;
+    ACHECK(a.save(path));
+    Settings b;
+    ACHECK(b.load(path));
+    ACHECK(b.editorPreview == 2 && b.editorPreviewDown);
+    ACHECK(b.editorPreviewBox[0] == 312 && b.editorPreviewBox[1] == 190 && b.editorPreviewBox[2] == 555 && b.editorPreviewBox[3] == 456);
+    const Settings fresh;
+    ACHECK(fresh.editorPreview == 1 && !fresh.editorPreviewDown);  // the notes, as before
+}
+
 void runAudioTests() {
     const fs::path dir = fs::temp_directory_path() / "gh_audio_tests";
     std::error_code ec;
@@ -387,6 +407,7 @@ void runAudioTests() {
     testNotAudio(d);
     testRenderMode(d);
     testHitsounds();
+    testEditorPreviewSettings(d);
     stopAudioDecoders();
     ACHECK(liveAudioDecoders() == 0);
     fs::remove_all(dir, ec);
