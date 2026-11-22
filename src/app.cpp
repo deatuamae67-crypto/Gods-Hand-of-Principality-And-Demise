@@ -330,6 +330,15 @@ int App::run(int argc, char** argv) {
             userDir = u;
         }
     }
+    {
+        // The engine's intro was removed (issue #36): its video, left by an
+        // older version in the game's folder (or copied out of the APK), goes.
+        std::error_code ec;
+        const std::string v = base + "assets/videos/intro.mpg";
+        std::filesystem::remove(std::filesystem::path(std::u8string(v.begin(), v.end())), ec);
+        const std::string d = base + "assets/videos";
+        std::filesystem::remove(std::filesystem::path(std::u8string(d.begin(), d.end())), ec);  // only when empty
+    }
     settings.load(userDir + "settings.cfg");
     scores.load(userDir + "scores.cfg");
     if (!autoRun.enabled) {  // Freeplay's modifiers and the song last picked, as they were left
@@ -433,7 +442,6 @@ int App::run(int argc, char** argv) {
     } else if (!autoRun.editorSong.empty()) state_ = makeChartEditor(autoRun.editorSong, autoRun.diff);
     else if (!autoRun.studioSong.empty()) state_ = makeAutoChartStudio(autoRun.studioSong, 2);  // --autochart-studio <song>
     else if (autoRun.state == "menu") state_ = makeMainMenu();
-    else if (autoRun.state == "intro") state_ = makeIntro();  // the engine's intro, then the title
     else if (autoRun.state == "freeplay") state_ = makeFreeplay();
     else if (autoRun.state == "render-list" || autoRun.state == "autochart-list") {
         songListMode = autoRun.state == "render-list" ? SongListMode::Render : SongListMode::AutoChart;
@@ -455,7 +463,7 @@ int App::run(int argc, char** argv) {
     else if (autoRun.state == "character-editor") state_ = makeCharacterEditor();
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
     else if (autoRun.state == "event-editor") state_ = makeEventEditor();
-    else state_ = introWanted() ? makeIntro() : makeTitle();
+    else state_ = makeTitle();
     state_->enter();
     logScreen(*state_);
 
@@ -617,7 +625,6 @@ void App::frame() {
     }
     gfx::beginCanvas();
     if (fade_ > 0) DrawRectangleRec({-10, -10, gfx::W + 20, gfx::H + 20}, gfx::fade(BLACK, fade_));
-    drawFpsPanel();
     drawVolumeTray();
     if (renderer.active()) drawRenderBadge();
     const std::string msg = VideoRenderer::takeMessage();
@@ -630,6 +637,7 @@ void App::frame() {
     }
     gfx::endCanvas();
     gfx::drawLetterbox();
+    drawFpsPanel();  // the window's own top left corner, over everything (issue #36)
     if (touchMode) touch.draw();
     EndDrawing();
 
@@ -732,19 +740,22 @@ void App::drawFpsPanel() {
         refreshFpsPanel();
     }
     if (!fpsPanelRt_.id || fpsPanelW_ <= 0) return;
-    // Always the top left corner, below the touch buttons when they sit in
-    // that corner.
+    // Always the window's top left corner (not the game picture's, which
+    // sits between black bars on screens of other shapes), in window pixels,
+    // below the touch buttons when they sit in that corner.
+    const float pw = fpsPanelW_ * cs, ph = fpsPanelH_ * cs;
     float px = 2, py = 2;
     if (touchMode) {
         std::vector<Rectangle> keys;
         touch.buttonRects(keys);
-        for (const Rectangle& r : keys) {
-            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
-            if (a.x < px + fpsPanelW_ && b.x > px && a.y < py + fpsPanelH_ && b.y > py) py = std::max(py, b.y + 4);
-        }
+        for (const Rectangle& r : keys)
+            if (r.x < px + pw && r.x + r.width > px && r.y < py + ph && r.y + r.height > py) py = std::max(py, r.y + r.height + 4);
     }
+    // A render texture holds its picture upside down, at its top: what was
+    // drawn at its top is its last rows. The panel is read from there,
+    // whatever size the texture was made at.
     const Texture2D& t = fpsPanelRt_.texture;
-    DrawTexturePro(t, {0, 0, fpsPanelW_ * cs, -fpsPanelH_ * cs}, {px, py, fpsPanelW_, fpsPanelH_}, {0, 0}, 0, WHITE);
+    DrawTexturePro(t, {0, float(t.height) - ph, pw, -ph}, {px, py, pw, ph}, {0, 0}, 0, WHITE);
 }
 
 // The panel's picture: its lines (wrapped to the screen), sized to fit them.
@@ -839,8 +850,7 @@ void App::refreshFpsPanel() {
         SetTextureFilter(fpsPanelRt_.texture, TEXTURE_FILTER_BILINEAR);
     }
     if (!fpsPanelRt_.id) return;
-    EndMode2D();  // out of the canvas, into the picture, at the window's scale
-    gfx::beginTexture(fpsPanelRt_);
+    gfx::beginTexture(fpsPanelRt_);  // into the picture, at the window's scale
     ClearBackground(BLANK);
     Camera2D cam{};
     cam.zoom = cs;
@@ -869,7 +879,6 @@ void App::refreshFpsPanel() {
     }
     EndMode2D();
     gfx::endTexture();
-    BeginMode2D(gfx::screenCamera());  // back to the canvas
 }
 
 // -------------------------------------------------------- rendering mode --

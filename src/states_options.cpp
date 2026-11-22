@@ -155,8 +155,6 @@ public:
             {Row::Bool, "Hide HUD", "Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD.", &s.hideHud},
             {Row::Bool, "Watermark", "\"God's Hand Engine v.(version) (system) Edition\" in the bottom-left corner of songs, as JS Engine shows its own.",
              &s.watermark},
-            {Row::Bool, "Play intro at start", "The engine's intro video before the title screen. ENTER skips it (the SKIP button on a touchscreen).",
-             &s.introVideo},
             {Row::Bool, "Menu background blur", "Blurs the background of the main menu, Freeplay and the other menus.", &s.menuBlur},
             {Row::Bool, "AutoChart", "AUTOCHART on the main menu: songs played with a chart the game makes from their audio. "
              "Its charts carry a shame watermark and play only in God's Hand. OFF: it is not on the menu.", &s.autoChart},

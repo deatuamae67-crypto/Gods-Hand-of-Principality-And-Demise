@@ -86,7 +86,6 @@ bool Settings::load(const std::string& path) {
         else if (k == "healthBarAlpha") healthBarAlpha = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hideHud") hideHud = b;
         else if (k == "watermark") watermark = b;
-        else if (k == "introVideo") introVideo = b;
         else if (k == "menuBlur") menuBlur = b;
         else if (k == "autoChart") autoChart = b;
         else if (k == "autoChartTrained") autoChartTrained = b;
@@ -179,7 +178,7 @@ bool Settings::save(const std::string& path) const {
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
-      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nintroVideo=" << introVideo << "\nmenuBlur=" << menuBlur << "\nautoChart=" << autoChart << "\nautoChartTrained=" << autoChartTrained << "\njsonMerging=" << jsonMerging << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
+      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark  << "\nmenuBlur=" << menuBlur << "\nautoChart=" << autoChart << "\nautoChartTrained=" << autoChartTrained << "\njsonMerging=" << jsonMerging << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
       << "\nbotplayText=" << botplayText << "\ncomboStacking=" << comboStacking << "\nopponentNotes=" << opponentNotes
       << "\npauseMusic=" << pauseMusic << "\nsickWindow=" << sickWindow << "\ngoodWindow=" << goodWindow << "\nbadWindow=" << badWindow
       << "\nsafeFrames=" << safeFrames << "\nratingOffset=" << ratingOffset << "\nautoPause=" << autoPause << "\nnoReset=" << noReset

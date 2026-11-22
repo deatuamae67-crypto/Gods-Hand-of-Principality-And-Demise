@@ -67,7 +67,6 @@ struct Settings {
     // Psych Engine's own options (Visuals and UI, Gameplay).
     bool hideHud = false;       // health bar, icons, score line and ratings hidden
     bool watermark = true;      // "God's Hand (version)" in the bottom-left corner of songs
-    bool introVideo = true;     // the engine's intro (assets/videos/intro.mpg) before the title ("Play intro at start")
     bool menuBlur = false;      // the menus' background blurred
     bool autoChart = false;     // AUTOCHART on the main menu (issue #36: shown only when turned on)
     bool autoChartTrained = true;  // AutoChart charts with what it learned from the mods' charts (when it was trained)

@@ -67,32 +67,23 @@ down_x=$cx; down_y=$(( cy + s + g ))
 ok=$(( 124 * u / 1000 ))
 ok_x=$(( W - m - ok / 2 )); ok_y=$(( H - m - 36 * u / 1000 - ok / 2 ))
 pause_x=$(( m + 50 * u / 1000 )); pause_y=$(( m + 29 * u / 1000 ))
-# The intro's SKIP button: a labelled button in the top right corner.
-skip_x=$(( W - m - 50 * u / 1000 )); skip_y=$(( m + 29 * u / 1000 ))
-echo "screen ${W}x${H}: down ($down_x,$down_y) ok ($ok_x,$ok_y) pause ($pause_x,$pause_y) skip ($skip_x,$skip_y)"
+echo "screen ${W}x${H}: down ($down_x,$down_y) ok ($ok_x,$ok_y) pause ($pause_x,$pause_y)"
 
-# The game starts with the engine's intro when the build has one: its SKIP
-# button must take the game on to the title.
-skip_intro() {
+# The game's first screen: the title.
+wait_title() {
   local end=$((SECONDS + 40))
   while [ $SECONDS -lt $end ]; do
     [ "$(seen 'screen .*TitleState')" -ge 1 ] && return 0
-    if [ "$(seen 'screen .*IntroState')" -ge 1 ]; then
-      sleep 2
-      tap_wait $skip_x $skip_y "screen .*TitleState" 20
-      wait_log "intro skipped at" 5
-      return 0
-    fi
     sleep 1
   done
-  fail "the game did not log its first screen"
+  fail "the game did not show its title screen"
 }
 
 adb install -r "$apk" || fail "install"
 # The first launch creates the game's folder (Android does not let adb create it).
 adb logcat -c
 adb shell am start -W -n "$pkg/.GameActivity" || fail "start"
-skip_intro
+wait_title
 # A song made of a plain audio file (AutoChart) checks that audio files load.
 python3 - "$out/tone.wav" <<'PY'
 import math, struct, sys, wave
@@ -108,7 +99,7 @@ if adb push "$out/tone.wav" "/sdcard/Android/data/$pkg/files/songs/Test Tone.wav
   adb shell am force-stop "$pkg"; sleep 1
   adb logcat -c
   adb shell am start -W -n "$pkg/.GameActivity" || fail "restart"
-  skip_intro
+  wait_title
 else
   echo "note: cannot copy files into the game's folder here, skipping the audio file check"
 fi
