@@ -1793,8 +1793,11 @@ void PlayState::drawHud() {
         if (hudShown("botplayTxt", &botAlpha) && (s.botplayText || !engineText) && !bo->text.text.empty()) {
             const Vector2 c{bo->x + bo->width * 0.5f, bo->y};
             turned({c.x, c.y + 16}, bo->angle, bo->scaleX, bo->scaleY, [&] {
+                // The game's own look: where its BOTPLAY goes (150, or 560 in
+                // downscroll: above the time bar, not on it), moved as the object is.
                 if (!(psychText && ui.text(bo->text.text, c.x, c.y, 32, fade(WHITE, botAlpha), 0, 1.25f)))
-                    gfx::text(FontId::Title, bo->text.text, c.x, c.y + 66, 40, fade(kGold, botAlpha), Align::Center, 2.0f);
+                    gfx::text(FontId::Title, bo->text.text, c.x, c.y + (s.downscroll ? 560.0f : 150.0f) - L.botY, 40,
+                              fade(kGold, botAlpha), Align::Center, 2.0f);
             });
         }
     } else if ((cfg_.botplay || replaying_) && s.botplayText) {
