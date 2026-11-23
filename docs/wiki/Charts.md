@@ -12,7 +12,10 @@ See also: [Editors](Editors.md), [Mods](Mods.md).
 | PulseForge | an exported `chart.json`, editor projects (`.pfchart.json`) and their autosaves |
 | FL Studio (SNIFF) | `.flp` and `.fsc` projects in a mod: one difficulty per pattern; or dropped on the chart editor |
 | God's Hand binary | `.ghc` (below) |
+| God's Hand bigits | `.ghb`, the smallest (below) |
 | Count charts | God's Hand's `.ghn`, R-Slice's `.raid` and the iutk engine's `Chart.bin` (FNC1) (below) |
+| Threadripper engine | `.thr`, as the strand engine reads it (below) |
+| AutoChart | `.ghac`, saved by the AUTOCHART screen; God's Hand only, with a shame watermark (below) |
 | Audio only | a folder with a song and no chart: AutoChart makes one for every track of 30 s or more |
 
 Charts can have 1 to 1024 keys a side (the chart editor makes them too): `keyCount` (up to 100), or `mania` (Dave & Bambi, Kade, Andromeda, Psych Extra Keys up to `mania` 17 for 18 keys, Shaggy), or Denpa Engine's `options.mania`. The notes decide which numbering a chart uses; a chart without either has 4 keys, as in Psych. Options → GAMEPLAY → Extra keys OFF plays everything with 4 keys.
@@ -44,6 +47,31 @@ A `.ghc` file holds a Psych chart in a fraction of its JSON size and loads faste
 
 The file layout is described at the top of `src/chart_binary.cpp`.
 
+## Bigit charts (.ghb)
+
+The smallest of the game's formats, made for issue #36's "try bigits". A *bigit* is a digit of a number too big for any machine integer, as bignum libraries call them: the whole chart's notes become one such number. An arithmetic coder narrows an interval note by note, each note taking a share as large as the chance the model gave it, and the file keeps the digits of a number inside the final interval. A note the model expected costs a fraction of a bit; a surprise costs more.
+
+- **The models**, learnt as the notes go by (nothing is stored but the bigits): charts repeat themselves, so after the same six notes as before the note that followed them then is expected again; otherwise the gap to the note before (the same again, a chord, one of the last four gaps, or a new one), the lane from the lanes before it, the sustain, the stack and the note type. A second model mixes predictions over the `.ghc` columns (orders 0 to 3 and a match model, PAQ style). Each block of 524,288 notes keeps whichever made it smaller; blocks are decoded on every core.
+- **Nothing is lost**: the game reads a `.ghb` as the chart it was made from, exactly as its `.ghc`.
+- **Sizes** (`.ghc` → `.ghb`): Taimuresu Overkill 54.6 KB → **35.0 KB** (15.9 MB as JSON); the spam chart of 3.42 million notes 2.41 MB → **2.08 MB** (201.1 MB as JSON).
+- **What it trades**: a model predicts slower than deflate unpacks, so the biggest charts load 0.4 to 0.8 s slower as `.ghb` than as `.ghc`.
+- **Making one**: `godshand --convert <chart> <out.ghb>` (any chart the game reads). When a song has both, the `.ghc` plays; a `.ghb` wins over a JSON of the same name.
+
+The file layout is described at the top of `src/bigit_chart.hpp`.
+
+## Threadripper charts (.thr)
+
+The threadripper engine's charts, as buatedz's strand engine reads them:
+
+- a zip archive (zip64 too) with `<song>-metadata.json` and `notes/<prefix>sections.bin`, `notes-00000.bin`...;
+- entries stored, deflated or packed with Zstandard (LZMA-packed ones are refused, saying so);
+- 16-byte note records, with their byte planes and time differences undone ("filtered");
+- `noteData` on the section's mustHit side, or the player's for `psych_v1`; note types through the same names as JSON charts (Hurt Note: a mine).
+
+Song folders list `.thr` charts, and `--convert` reads them into any other format and writes them (deflated and filtered, each counted note listed, up to 2^31).
+
+KREMK, also asked for in issue #36, could not be found anywhere; a sample file would let the game read it.
+
 ## Count charts (.ghn, .raid, iutk)
 
 Some engines store a chart as **cells**: a time, a lane and how many notes are stacked there. God's Hand plays these as its own charts: each cell is one note that counts as all of its notes (one press hits the stack, and score, combo, misses and every total count each note). Counts are exact at any size the game plays: **256-bit numbers**, up to 2^256 − 1 (about 1.16 × 10^77); a note holds up to 4,294,967,295 itself, more go to a table of the chart. A song folder with any of these files lists it as a difficulty (a `.ghn` wins over a `.json` or `.ghc` of the same name).
@@ -66,6 +94,27 @@ Made to go past both: iutk's counts stop at 2^64, `.raid` stacks at 65,535, and 
 - **Making one**: `godshand --convert <chart> <out.ghn>` (any chart the game reads; `.ghc` and iutk's `.bin` too, by the output's extension), or the chart editor's Song tab, **Save as: Count .ghn** (each stack is one note with its count; a chart that would list more than 2^31 notes one by one in JSON is saved this way).
 
 The layouts of all three are described at the top of `src/count_charts.hpp`.
+
+## AutoChart (.ghac)
+
+Options → INTERFACE → **AutoChart** puts **AUTOCHART** on the main menu. Its song list opens a screen laid out as FL Studio:
+
+- the **channel rack**: each of the song's sounds (Inst, Voices, the other stems, or an FL Studio project's channels) with its role (player, opponent, both in turns, off), its lanes (by pitch, drums, in turn, or SNIFF's keys), its amount and a mute;
+- the **playlist** with the waveforms and the FL channels' notes, and a **tempo lane**: BPM changes are found in the audio or given, added, changed with the wheel and removed;
+- **GENERATE**, **PLAY CHART**, **SAVE** (a `.ghac` beside the song), **TRAIN**, **+ AUDIO** and **+ FLP** (an FL Studio project's channels, where its playlist places them).
+
+**Training** (optional; Options → **AutoChart training** uses it): a model learns from every charted song of the installed mods when a note comes, whose it is, its lane and how many notes a second a song this loud gets, from the instrumental and both voices split into bands and from the beat. Each song is learned once, it is saved as it goes and taken up again, and spam charts are skipped (`godshand --train-autochart` does the same).
+
+AutoChart's charts are saved only as **`.ghac`** (a `.ghn` with its own magic), which no other engine reads: `--convert` refuses to make one from a real chart, and the editors keep them as `.ghac`. Saved AutoCharts are listed as "AutoChart <difficulty>" of their song. Every AutoChart chart plays with **AUTOCHARTED** across the middle of the screen, semi-transparent, for the whole song, whatever the options.
+
+## JSON merging
+
+Options → INTERFACE → **JSON merging** puts **JSON MERGING** on the main menu: a chart split into parts (as players do to get past JS Engine's 16-million-note limit) merged back into one, with no limit on its notes.
+
+- **Picking the parts**: the system's file manager opens to pick them all at once (Windows' dialog, osascript on macOS, zenity or kdialog on Linux, the document picker on Android). The screen lists each part's notes, sections and time span, in name order (`song-1`, `song-2`, ..., `song-10`); SHIFT+UP/DOWN, the buttons or dragging reorder them.
+- **Two shapes of split chart**, found by themselves or chosen: **overlay** (each part is the whole song with some of its notes) and **append** (each part goes on after the one before; parts whose notes start again from 0 are moved after the others, with a BPM change where a part's tempo differs).
+- **MERGE JSON** shows its progress and can be stopped. The chart is written as it is made, a big part's notes waiting in a temporary file, so any number of notes merges in the memory of one part. Events are kept once, Psych 1.0 charts stay Psych 1.0, and an existing file is never written over.
+- From the command line: `godshand --merge <out.json> <part> ... [--merge-mode auto|overlay|append]`.
 
 ## Events
 

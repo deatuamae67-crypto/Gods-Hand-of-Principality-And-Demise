@@ -57,6 +57,7 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Camera zoom on beat | Only the beat bops: zoom events from charts and scripts always work. | on / off |
 | Shaders | Mod shaders and screen effects. OFF is faster on weak devices. | on / off |
 | Anti-aliasing | Smooth scaling of mod pictures. OFF: sharp pixels and a little faster (Psych's Anti-Aliasing). | on / off |
+| Motion blur | Songs: each frame keeps a little of the ones before, so fast notes leave a trail and high scroll speeds look smoother (the same at any frame rate). Rendering mode: real motion blur, each video frame the average of 2, 4 or 8 drawn between it and the next (that many times slower to record). | Off, Light, Medium, Strong |
 | Note detail | Spam charts: Adaptive draws notes stacked a few pixels apart once while the frame rate is under 60 (every note is still played). Full: every pixel. | Adaptive, Full |
 | Note renderer | What draws the notes. Auto: the graphics card, or the processor's assembly when OpenGL itself runs on the processor (llvmpipe, SwiftShader...), where that is faster. GPU: the graphics card. CPU (ASM): the processor, with assembly (SSE2 on x86-64, NEON on ARM64 phones and Macs; other processors use C++). CPU (C++): the processor, in C++. Turned notes and mines stay on the GPU. F3 in a song shows the time it takes. | 3, 0, 1, 2 |
 
@@ -72,8 +73,11 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Health bar opacity | The health bar and the icons. | 0 to 1 |
 | Hide HUD | Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD. | on / off |
 | Watermark | "God's Hand Engine v.(version) (system) Edition" in the bottom-left corner of songs, as JS Engine shows its own. | on / off |
-| Play intro at start | The engine's intro video before the title screen. ENTER skips it (the SKIP button on a touchscreen). | on / off |
 | Menu background blur | Blurs the background of the main menu, Freeplay and the other menus. | on / off |
+| AutoChart | AUTOCHART on the main menu: songs played with a chart the game makes from their audio. Its charts carry a shame watermark and play only in God's Hand. OFF: it is not on the menu. | on / off |
+| AutoChart training | AutoChart places notes where the charts of your mods put them for sounds like those (train it on the AUTOCHART screen: TRAIN). OFF, or before it is trained: it follows the beat and the loudest sounds. | on / off |
+| JSON merging | JSON MERGING on the main menu: a chart split into parts (as players do to get past JS Engine's 16-million-note limit) merged back into one, with no limit on its notes. OFF: it is not on the menu. | on / off |
+| Auto-update | At start, the game looks on GitHub for a newer version: it downloads it, checks it and installs it the next time the game starts (UPDATE on the main menu restarts it now; Android opens the installer). It also looks for changes in the mod packs you installed: MOD PACKS shows them, to install or remove. Your settings, scores and mods stay. OFF: it never looks. | on / off |
 | Audio visualizer | Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it is, how thick the notes are, your hits and misses, and your health. | on / off |
 | Score text zoom on hit | The score line grows a little on each note you hit, as in Psych. | on / off |
 | Botplay text | BOTPLAY (or REPLAY) on screen while the game plays by itself. | on / off |
