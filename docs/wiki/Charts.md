@@ -10,7 +10,7 @@ See also: [Editors](Editors.md), [Mods](Mods.md).
 | Psych Engine 1.0 | the same, with `"format": "psych_v1"` |
 | V-Slice (FNF 0.3+) | `<song>-chart.json` with `<song>-metadata.json` |
 | PulseForge | an exported `chart.json`, editor projects (`.pfchart.json`) and their autosaves |
-| FL Studio (SNIFF) | `.flp` and `.fsc` projects in a mod: one difficulty per pattern; or dropped on the chart editor |
+| FL Studio (SNIFF) | `.flp` and `.fsc` projects in a mod: one difficulty per pattern; or dropped on the chart editor. A whole project, every note through its playlist: `song.flp#playlist` (below) |
 | God's Hand binary | `.ghc` (below) |
 | God's Hand bigits | `.ghb`, the smallest (below) |
 | Count charts | God's Hand's `.ghn`, R-Slice's `.raid` and the iutk engine's `Chart.bin` (FNC1) (below) |
@@ -38,7 +38,7 @@ Charts of millions of notes load in seconds:
 A `.ghc` file holds a Psych chart in a fraction of its JSON size and loads faster. Nothing is lost: the game reads it as the chart it was made from.
 
 - **How it is built**: the song data, sections and events stay as compressed JSON. The notes become columns: times, hold lengths, lanes, stacks and note types. Each time is stored as how much the gap from the note before changed, in nanoseconds; hold lengths are stored in microseconds. Small numbers like these pack very well. The columns are compressed with deflate in blocks of 262,144 notes, and the blocks are unpacked on every core at once. Deflate and not a stronger packer: past this point a smaller file costs more time to unpack than it saves to read.
-- **Versions**: version 2 (God's Hand 1.11.0) keeps note values up to 255, for charts of up to 100 keys a side; version 1 files still open.
+- **Versions**: version 2 (God's Hand 1.11.0) keeps note values up to 255, for charts of up to 100 keys a side; version 3 values up to 2047 (1024 keys a side); version 4 (2.3.0) adds a table of **counts of any size** for count charts' cells (a note counting more than a stack's 255 notes), so a `.ghc` holds any count chart whole — 2^256 − 1 notes included. A chart that needs no such count is still written as version 3, which older versions of the game read; versions 1 to 3 still open.
 - **How much smaller**: a spam chart of 3.42 million notes went from 201.1 MB of JSON to 2.4 MB (84.6× smaller, converted in 0.31 s) and loads in 150 ms instead of 240 ms. A small chart of 1,400 notes went from 34.5 KB to 2.6 KB (13.4× smaller).
 - **Making one**:
   - main menu `7` → **Chart Converter**: pick a mod, then convert one chart or all of them. Each line shows how much smaller its file got.
@@ -55,6 +55,7 @@ The smallest of the game's formats, made for issue #36's "try bigits". A *bigit*
 - **Nothing is lost**: the game reads a `.ghb` as the chart it was made from, exactly as its `.ghc`.
 - **Sizes** (`.ghc` → `.ghb`): Taimuresu Overkill 54.6 KB → **35.0 KB** (15.9 MB as JSON); the spam chart of 3.42 million notes 2.41 MB → **2.08 MB** (201.1 MB as JSON).
 - **What it trades**: a model predicts slower than deflate unpacks, so the biggest charts load 0.4 to 0.8 s slower as `.ghb` than as `.ghc`.
+- **Counts of any size**: version 2 (2.3.0) keeps a count chart's cells with their counts, as `.ghc` 4 does (a chart that needs none is still written as version 1). The max-notes charts below take **8.7 KB** as `.ghb` for 2^256 − 1 notes.
 - **Making one**: `godshand --convert <chart> <out.ghb>` (any chart the game reads). When a song has both, the `.ghc` plays; a `.ghb` wins over a JSON of the same name.
 
 The file layout is described at the top of `src/bigit_chart.hpp`.
@@ -68,7 +69,7 @@ The threadripper engine's charts, as buatedz's [strand](https://github.com/buate
 - 16-byte note records, with their byte planes and time differences undone ("filtered");
 - `noteData` on the section's mustHit side, or the player's for `psych_v1`; note types through the same names as JSON charts (Hurt Note: a mine).
 
-Song folders list `.thr` charts, and `--convert` reads them into any other format and writes them (deflated and filtered, each counted note listed, up to 2^31).
+Song folders list `.thr` charts, and `--convert` reads them into any other format and writes them (deflated and filtered, each counted note listed, up to 2^31: a `.thr` has no counts, so a chart of more notes stays `.ghn`, `.ghc` or `.ghb`, and `--convert` says so).
 
 KREMK, also asked for in issue #36, could not be found anywhere; a sample file would let the game read it.
 
@@ -94,6 +95,30 @@ Made to go past both: iutk's counts stop at 2^64, `.raid` stacks at 65,535, and 
 - **Making one**: `godshand --convert <chart> <out.ghn>` (any chart the game reads; `.ghc` and iutk's `.bin` too, by the output's extension), or the chart editor's Song tab, **Save as: Count .ghn** (each stack is one note with its count; a chart that would list more than 2^31 notes one by one in JSON is saved this way).
 
 The layouts of all three are described at the top of `src/count_charts.hpp`.
+
+## A whole FL Studio project (song.flp#playlist)
+
+SNIFF reads one pattern of a project charted for it (its keys C3–D#3 and C4–D#4); converting the whole song from its playlist is on SNIFF's own to-do list. God's Hand does it (issue #36): `song.flp#playlist` is the whole project as one chart, every note of every channel, through every clip of the playlist.
+
+- **Lanes**: SNIFF's keys C, C#, D and D# are left, down, up and right; the same keys of every octave give the same lanes (the pitch modulo 4), so no note is left out.
+- **Sides**: a channel and its "(Alt)" twin are one instrument; the first instrument with notes in the channel rack plays the player's side, the next the opponent's.
+- **Holds**, as SNIFF makes them: a note played softly (velocity under 64) or a beat long or more holds for its length less a step. **Alt Animation**: the notes of "(Alt)" channels, and portamento notes (as SNIFF's Rust version marks them).
+- **The playlist**: each pattern clip plays its window of the pattern (FL Studio 20 and later keep it in whole ticks), at its place in the song. A project without a playlist plays its patterns one after another, a bar each at least. Bars of four beats; the camera on the side with more notes in each.
+- **Every note counted**: the project is read a piece at a time (it can be gigabytes); each pattern keeps its distinct notes with how many times each is there, and each clip adds its notes' counts to the chart's cells. Nothing is multiplied: each count is how many notes of the project are there. Notes on the same lane less than 1 ms apart are one note that counts as all of them, as in every chart the game plays.
+- **FL Studio 20 to 26**: playlist clips of 32, 60 and 88 bytes, and FL Studio 25's event 0xAC (a dword, then text a byte long).
+- **Issue #36's song** (FL Studio 26.1.3.5570, 4.08 GB): 57 patterns, 168,623,461 note records, 50,056 clips — **3,560,023,825,730 notes** (1,780,028,092,421 the player's, 1,779,995,733,309 the opponent's) in 1,559,568 notes of the chart, read in about 6 s. As `.ghn` 404 KB, `.ghc` 444 KB, `.ghb` 346 KB, iutk FNC1 20.3 MB (1.4 MB zipped); it is in the "charts made in sniff" mod pack.
+- **Making one**: `godshand --convert "song.flp#playlist" <out.ghn|.ghc|.ghb|.bin>`; the chart loader reads `song.flp#playlist` too.
+
+## Max-notes charts (--max-notes)
+
+`godshand --max-notes <out> <from ms> <to ms> [bpm] [title]` makes a chart of **2^256 − 1 notes** (115,792,089,237,316,195,423,570,985,008,687,907,853,269,984,665,640,564,039,457,584,007,913,129,639,935), the most the game counts, all of them the player's, 4 keys: a note every millisecond on each lane from `from` to `to`, each counting an equal share of the total (some one more than the others, so that they add up exactly). Only `.ghn`, `.ghc` and `.ghb` hold counts this large (FNC1 keeps 64-bit counts, and a `.thr` lists every note). The "charts made in sniff" mod pack has two, made for issue #36:
+
+| Song | Part | Notes in the file | `.ghn` | `.ghc` | `.ghb` |
+|---|---|---|---|---|---|
+| Andromeda Galaxy (the omniverse) | 0:36 to 2:05 | 356,004 | 18.3 KB | 40.1 KB | 8.7 KB |
+| Hopeless (Pixelified) (vs. redacted fantrack) | 2:22 to 3:40 | 312,004 | 28.0 KB | 35.4 KB | 7.8 KB |
+
+The pack's charts come without audio: put the song in `songs/<song>/Inst.ogg`, or install a mod with the same song (the game uses its audio when the folders' names match). Without audio, a song ends just after its last note.
 
 ## AutoChart (.ghac)
 

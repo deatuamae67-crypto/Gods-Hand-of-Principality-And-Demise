@@ -9,6 +9,9 @@
 //   u8 how the JSON part is kept (0 deflate, 1 order-1 bigits, 2 mixed bigits), u64 its bytes, u64 kept bytes, kept bytes
 //   u64 values, u64 ranges, u64 kept bytes, kept bytes: the counts of each noteData value, then
 //       the sections' note ranges (bigits)
+//   version 2: u64 big, u64 bytes, u64 kept bytes, kept bytes (mixed bigits): the notes whose stack
+//       is 0 - a count chart's cells - each as the varint gap from the last one's index, then its
+//       count as a varint of any length (version 1 is written when no note needs it)
 //   blocks: u64 kept bytes, u8 how (0 the notes' model, 1 the columns' mixed models), u64 the columns' bytes
 //       (1 only), each; then the blocks (bigits)
 //
@@ -178,7 +181,7 @@ using bigit::Encoder;
 using bigit::kHalf;
 
 constexpr uint32_t kMagic = 0x47424847u;  // "GHBG"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;  // 1 is still read (and written when no count needs 2)
 constexpr uint32_t kBlockNotes = 1u << 19;  // with its model: about 14 MB a block at work
 
 uint64_t zig(int64_t v) { return (uint64_t(v) << 1) ^ uint64_t(v >> 63); }
@@ -856,6 +859,7 @@ int laneBitsFor(const StreamedNotes& sn) {
 }
 
 struct Head {
+    uint32_t version = 1;
     uint64_t notes = 0, rawCount = 0;
     int32_t maxData = -1;
     uint32_t laneBits = 1, blockNotes = 0, blocks = 0, types = 0;
@@ -871,6 +875,7 @@ bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::s
         err = "a bigit chart of a newer God's Hand";
         return false;
     }
+    h.version = version;
     if (!readU64(f, h.notes) || !readU64(f, h.rawCount) || !readU32(f, maxData) || !readU32(f, h.laneBits) ||
         !readU32(f, h.blockNotes) || !readU32(f, h.blocks) || !readU32(f, h.types) || h.blockNotes == 0 || h.laneBits < 1 ||
         h.laneBits > 11 || uint64_t(h.blocks) != (h.notes + h.blockNotes - 1) / h.blockNotes) {
@@ -924,6 +929,33 @@ bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::s
         err = "damaged bigit chart";
         return false;
     }
+    if (h.version >= 2) {  // the counts of the notes whose stack is 0
+        uint64_t bigN = 0, bigRaw = 0;
+        std::string raw;
+        if (!readU64(f, bigN) || !readU64(f, bigRaw) || bigN > h.notes || bigRaw > (uint64_t(1) << 34) || !readU64(f, kept) ||
+            !readBytes(f, buf, kept) || !cm::decode(buf, size_t(bigRaw), raw)) {
+            err = "damaged bigit chart";
+            return false;
+        }
+        const unsigned char* q = reinterpret_cast<const unsigned char*>(raw.data());
+        const unsigned char* qe = q + raw.size();
+        sn->big.resize(size_t(bigN));
+        uint64_t idx = 0;
+        for (auto& [i, count] : sn->big) {
+            uint64_t gap = 0;
+            int sh = 0;
+            for (;;) {
+                if (q >= qe || sh > 63) { err = "damaged bigit chart"; return false; }
+                const unsigned char b = *q++;
+                gap |= uint64_t(b & 0x7F) << sh;
+                sh += 7;
+                if (!(b & 0x80)) break;
+            }
+            idx += gap;
+            i = idx;
+            if (Count::readVarint(q, qe, count) == Count::Read::Truncated) { err = "damaged bigit chart"; return false; }
+        }
+    }
     return true;
 }
 
@@ -968,7 +1000,7 @@ bool writeBigitChart(const std::string& path, const std::string& skeleton, const
     }
     std::string head;
     putU32(head, kMagic);
-    putU32(head, kVersion);
+    putU32(head, sn.big.empty() ? 1u : kVersion);  // 1: what older versions of the game read
     putU64(head, n);
     putU64(head, sn.rawCount);
     putU32(head, uint32_t(int32_t(sn.maxData)));
@@ -1015,6 +1047,25 @@ bool writeBigitChart(const std::string& path, const std::string& skeleton, const
     putU64(head, sn.rangeStart.size());
     putU64(head, tables.size());
     head += tables;
+    if (!sn.big.empty()) {  // version 2: the counts no stack byte holds
+        std::string big;
+        uint64_t last = 0;
+        for (const auto& [idx, count] : sn.big) {
+            uint64_t gap = idx - last;
+            last = idx;
+            while (gap >= 0x80) {
+                big += char(uint8_t(gap) | 0x80);
+                gap >>= 7;
+            }
+            big += char(uint8_t(gap));
+            count.appendVarint(big);
+        }
+        const std::string kept2 = cm::encode(big);
+        putU64(head, sn.big.size());
+        putU64(head, big.size());
+        putU64(head, kept2.size());
+        head += kept2;
+    }
     for (uint32_t b = 0; b < blocks; ++b) {
         putU64(head, coded[b].size());
         head += char(codec[b]);

@@ -39,6 +39,7 @@
 #include "count_charts.hpp"
 #include "common.hpp"
 #include "flp_import.hpp"
+#include "flp_song.hpp"
 
 namespace gh {
 
@@ -1025,7 +1026,8 @@ void StreamedNotesBuilder::add(double time, int noteData, double length, const s
     if (std::fabs(n.time - last) < 1.0 && !out_.notes.empty()) {
         for (size_t i = out_.notes.size(); i-- > out_.rangeStart.back();) {
             StreamedNote& k = out_.notes[i];
-            if (k.noteData() == data && std::fabs(k.time - n.time) < 1.0 && k.stack < 255) {
+            // (A stack of 0 is a count chart's cell, counted in `big`: never stacked on.)
+            if (k.noteData() == data && std::fabs(k.time - n.time) < 1.0 && k.stack != 0 && k.stack < 255) {
                 k.length = std::max(k.length, n.length);
                 if (n.typeIdx() && !k.typeIdx()) k.setTypeIdx(n.typeIdx());
                 ++k.stack;
@@ -1038,7 +1040,38 @@ void StreamedNotesBuilder::add(double time, int noteData, double length, const s
     out_.notes.push_back(n);
 }
 
+void StreamedNotesBuilder::addCount(double time, int noteData, double length, const std::string& type, const Count& count) {
+    if (!std::isfinite(time) || noteData < 0 || noteData >= kNoteDataValues || out_.rangeStart.empty() || count.isZero()) return;
+    StreamedNote n;
+    n.time = time;
+    n.length = std::isfinite(length) && length > 0 ? float(length) : 0.0f;
+    if (!type.empty()) n.setTypeIdx(out_.typeIndex(type));
+    n.setNoteData(noteData);
+    out_.maxData = std::max(out_.maxData, noteData);
+    // The totals saturate (a file of more than 2^64 notes says so in its counts).
+    const uint64_t c = count.sat64();
+    uint64_t& d = out_.dataCount[size_t(noteData)];
+    d = UINT64_MAX - d < c ? UINT64_MAX : d + c;
+    out_.rawCount = UINT64_MAX - out_.rawCount < c ? UINT64_MAX : out_.rawCount + c;
+    if (count.fits64() && count.w[0] <= 255) {
+        n.stack = uint8_t(count.w[0]);
+    } else {
+        n.stack = 0;
+        out_.big.push_back({uint64_t(out_.notes.size()), count});
+    }
+    lastT_[size_t(noteData)] = -1e300;  // the next note of this value is not stacked on it
+    out_.notes.push_back(n);
+}
+
 void StreamedNotesBuilder::finish() { out_.rangeStart.push_back(uint32_t(out_.notes.size())); }
+
+Count StreamedNotes::countAt(size_t i) const {
+    if (i >= notes.size()) return Count(0);
+    if (notes[i].stack) return Count(notes[i].stack);
+    const auto it = std::lower_bound(big.begin(), big.end(), uint64_t(i),
+                                     [](const std::pair<uint64_t, Count>& b, uint64_t k) { return b.first < k; });
+    return it != big.end() && it->first == i ? it->second : Count(1);
+}
 
 uint16_t StreamedNotes::typeIndex(const std::string& name) {
     for (size_t i = 0; i < types.size(); ++i)
@@ -1249,6 +1282,11 @@ bool loadChartFile(const std::string& path, const std::string& difficulty, Chart
     std::string flpFile;
     int pattern = -1;
     if (flpChartPath(path, flpFile, pattern)) {  // an FL Studio project, read as SNIFF does
+        if (pattern == kFlpWholeSong) {  // song.flp#playlist: the whole song, every note
+            if (!flpSongToChart(flpFile, out, err)) return false;
+            out.difficulty = difficulty;
+            return true;
+        }
         FlpProject p;
         if (!readFlpFile(flpFile, p, err) || !flpToChart(p, pattern, out, err)) return false;
         out.difficulty = difficulty;

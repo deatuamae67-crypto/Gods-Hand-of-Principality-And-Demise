@@ -9,12 +9,14 @@ packs.txt is taken off the release.
 Needs git, git-lfs and an authenticated gh. Run with --local <dir> to only
 pack a folder that is already on disk (used for testing).
 
-Two kinds of packs:
+Three kinds of packs:
   <folder>                          mods/<folder> of the "source" repository (Git LFS)
   drive <folder> <zip>=<id> ...     zips already built (by this script's --local mode) and
                                     shared on Google Drive with a public link; they are
                                     copied to the release as they are (quote a folder
-                                    name with spaces: drive "My Mod" ...)"""
+                                    name with spaces: drive "My Mod" ...)
+  local <folder>                    modpacks/<folder> of this repository: charts made with
+                                    the game itself (local "charts made in sniff")"""
 import os, re, shlex, shutil, subprocess, sys, zipfile
 
 LIMIT = int(os.environ.get('GH_PACK_LIMIT', 1_900_000_000))  # GitHub allows 2 GiB per release file
@@ -37,7 +39,7 @@ def slug(name):
 
 
 def read_list():
-    source, commit, folders, drive = None, None, [], {}
+    source, commit, folders, drive, local = None, None, [], {}, set()
     for line in open(os.path.join(HERE, 'packs.txt'), encoding='utf-8'):
         line = line.strip()
         if not line or line.startswith('#'):
@@ -48,9 +50,15 @@ def read_list():
             _, folder, *zips = shlex.split(line)  # a folder name with spaces is quoted
             drive[folder] = [tuple(z.split('=', 1)) for z in zips]
             folders.append(folder)
+        elif line.startswith('local '):
+            _, folder = shlex.split(line)
+            if not os.path.isdir(os.path.join(HERE, folder)):
+                raise SystemExit('no folder modpacks/%s for: %s' % (folder, line))
+            local.add(folder)
+            folders.append(folder)
         else:
             folders.append(line)
-    return source, commit, folders, drive
+    return source, commit, folders, drive, local
 
 
 def fetch_drive(file_id, out):
@@ -124,7 +132,7 @@ def main():
         for p in pack(sys.argv[2], os.path.basename(sys.argv[2].rstrip('/')), out):
             print(p, os.path.getsize(p))
         return
-    source, commit, folders, drive = read_list()
+    source, commit, folders, drive, local = read_list()
     work = os.path.abspath('modpack-work')
     os.makedirs(work, exist_ok=True)
     if run('gh', 'release', 'view', TAG, check=False) != 0:
@@ -148,16 +156,19 @@ def main():
     state = read_tsv(STATE)
 
     # What each pack is built from now: the source folder's git tree (no file
-    # content is needed for it), or its Drive files.
+    # content is needed for it), its Drive files, or this repository's folder's tree.
     repo = os.path.join(work, 'src')
     env = dict(os.environ, GIT_LFS_SKIP_SMUDGE='1')
-    if any(f not in drive for f in folders) and not os.path.isdir(repo):
+    if any(f not in drive and f not in local for f in folders) and not os.path.isdir(repo):
         run('git', 'clone', '--filter=blob:none', '--no-checkout', 'https://github.com/%s.git' % source, repo, env=env)
         run('git', 'sparse-checkout', 'init', '--no-cone', cwd=repo, env=env)
     current = {}
     for f in folders:
         if f in drive:
             current[f] = 'drive:' + ' '.join('%s=%s' % z for z in drive[f])
+        elif f in local:
+            tree = (run('git', 'rev-parse', 'HEAD:modpacks/' + f, capture=True, check=False, cwd=HERE) or '').strip()
+            current[f] = 'local:' + tree if tree else ''
         else:
             tree = (run('git', 'rev-parse', '%s:mods/%s' % (commit, f), capture=True, check=False, cwd=repo) or '').strip()
             current[f] = 'git:' + tree if tree else ''
@@ -214,7 +225,18 @@ def main():
         state[folder] = current[folder]
         write_manifest()
         drop_unused(old)
-    todo = [f for f in todo if f not in drive]
+    for folder in [f for f in todo if f in local]:
+        parts = pack(os.path.join(HERE, folder), folder, work)
+        for p in parts:
+            run('gh', 'release', 'upload', TAG, p, '--clobber')
+            have.add(os.path.basename(p))
+            os.remove(p)
+        old = manifest.get(folder, [])
+        manifest[folder] = [os.path.basename(p) for p in parts]
+        state[folder] = current[folder]
+        write_manifest()
+        drop_unused(old)
+    todo = [f for f in todo if f not in drive and f not in local]
     if todo:
         for folder in todo:
             run('git', 'sparse-checkout', 'set', '--no-cone', '/mods/' + folder + '/', cwd=repo, env=env)

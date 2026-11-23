@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "chart.hpp"
+#include "count.hpp"
 #include "keys.hpp"
 
 namespace gh {
@@ -44,6 +45,11 @@ struct StreamedNote {
 
 struct StreamedNotes {
     std::vector<StreamedNote> notes;
+    // Notes that stand for more notes of the file than their stack byte
+    // holds (a count chart's cells: their stack is 0): how many each counts,
+    // any size, by index in `notes`, in order. .ghc 4 and .ghb 2 keep them.
+    std::vector<std::pair<uint64_t, Count>> big;
+    Count countAt(size_t i) const;  // the notes of the file note i stands for
     std::vector<uint32_t> rangeStart;  // per sectionNotes array, plus a final end marker
     std::vector<std::string> types;
     int maxData = -1;
@@ -75,6 +81,9 @@ public:
     explicit StreamedNotesBuilder(StreamedNotes& out);
     std::string beginArray();
     void add(double time, int noteData, double length, const std::string& type = {});
+    // A note that stands for `count` notes of the file (a count chart's
+    // cell), kept on its own: not stacked with the notes around it.
+    void addCount(double time, int noteData, double length, const std::string& type, const Count& count);
     void finish();
 
 private:

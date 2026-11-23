@@ -55,9 +55,26 @@ enum : uint8_t {
     kChanName = 0xCB,     // a channel's (or plugin's) name, as the user set it
     kPlaylist = 0xE9,     // the arrangement: an array of clips
     kMixerParams = 0xE1,  // the mixer: no more channels after it
+    kFl25Text = 0xAC,     // FL Studio 25+: a dword, then a string a byte long (not a plain dword)
 };
 
 constexpr size_t kNoteSize = 24;
+
+}  // namespace
+
+// Where a pattern clip starts in its pattern (ticks): FL Studio 20 and later
+// keep whole ticks, -1 for "from its start"; older projects a float.
+double flpClipOffset(const unsigned char* p) {
+    int32_t iv;
+    std::memcpy(&iv, p, 4);
+    if (iv == -1) return 0;
+    if (iv >= 0 && iv < (1 << 28)) return double(iv);
+    float fv;
+    std::memcpy(&fv, p, 4);
+    return std::isfinite(fv) && fv > 0 ? double(fv) : 0.0;
+}
+
+namespace {
 
 bool isSpecial(uint32_t pitch) { return pitch == 53 || pitch == 54 || pitch == 56 || pitch == 57 || pitch == 58; }
 bool isChartPitch(uint32_t pitch) { return (pitch >= 48 && pitch <= 51) || (pitch >= 60 && pitch <= 63); }
@@ -100,7 +117,15 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
         uint32_t value = 0;
         const unsigned char* data = nullptr;
         size_t len = 0;
-        if (id < 64) {
+        if (id == kFl25Text) {  // FL Studio 25 and 26: a dword, a length byte, UTF-16 text
+            if (i + 5 > end) break;
+            value = rd32(b + i);
+            len = b[i + 4];
+            i += 5;
+            if (i + len > end) break;
+            data = b + i;
+            i += len;
+        } else if (id < 64) {
             if (i + 1 > end) break;
             value = b[i];
             i += 1;
@@ -146,9 +171,10 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
             case kPlaylist:
                 if (!havePlaylist && data) {
                     havePlaylist = true;
-                    // Clips of 32 bytes (60 from FL Studio 21), each with 20480
-                    // in its bytes 4-5: the size whose clips all have it.
-                    for (size_t size : {size_t(60), size_t(32)}) {
+                    // Clips of 32 bytes (60 from FL Studio 21, 88 in FL Studio
+                    // 26), each with 20480 in its bytes 4-5: the size whose
+                    // clips all have it.
+                    for (size_t size : {size_t(88), size_t(60), size_t(32)}) {
                         if (len == 0 || len % size) continue;
                         bool all = true;
                         for (size_t k = 0; k + size <= len && all; k += size) all = rd16(data + k + 4) == 20480;
@@ -162,9 +188,7 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
                             c.pattern = int(item - 20480);
                             c.length = rd32(r + 8);
                             c.track = 499 - int(rd16(r + 12));
-                            float st = 0;
-                            std::memcpy(&st, r + 24, 4);
-                            c.start = std::isfinite(st) && st > 0 ? double(st) : 0.0;
+                            c.start = flpClipOffset(r + 24);
                             out.playlist.push_back(c);
                         }
                         break;
@@ -355,6 +379,11 @@ bool flpChartPath(const std::string& chartPath, std::string& file, int& pattern)
     if (!endsWithI(base, ".flp") && !endsWithI(base, ".fsc")) return false;
     if (hash != std::string::npos) {
         const std::string num = chartPath.substr(hash + 1);
+        if (equalsI(num, "playlist")) {  // the whole song: every clip of the playlist, every note
+            file = base;
+            pattern = kFlpWholeSong;
+            return true;
+        }
         if (num.empty() || !std::all_of(num.begin(), num.end(), [](char c) { return std::isdigit((unsigned char)c); })) {
             base = chartPath;  // a '#' in the file name itself
             if (!endsWithI(base, ".flp") && !endsWithI(base, ".fsc")) return false;

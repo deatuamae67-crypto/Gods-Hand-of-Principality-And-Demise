@@ -85,15 +85,32 @@ struct GhnStats {
 };
 bool writeGhn(const std::string& path, const Chart& chart, std::string& err, GhnStats* stats = nullptr);
 
-// A chart as God's Hand's binary chart (.ghc), each counted note listed:
-// up to 2^31 notes (more: keep it .ghn). notes: how many were listed.
+// A chart as God's Hand's binary chart (.ghc): each note of the chart once,
+// with how many notes it counts, of any size (.ghc 4 when one needs more
+// than a stack byte's 255). notes: how many notes they count (saturating).
 bool writeChartAsGhc(const std::string& path, const Chart& chart, std::string& err, uint64_t* notes = nullptr);
 // The same notes as a bigit chart (.ghb, bigit_chart.hpp).
 bool writeChartAsGhb(const std::string& path, const Chart& chart, std::string& err, uint64_t* notes = nullptr);
 
+// Issue #36's max-notes charts: the most notes the game counts, 2^256 - 1
+// (Count::max()), all on the player's side, spread as evenly as they go - a
+// note every millisecond on each of its lanes from fromMs to toMs (whole
+// milliseconds), each standing for its share of them (the first ones for one
+// more, so that they add up exactly).
+struct MaxNotesSpec {
+    std::string title;
+    double fromMs = 0, toMs = 0;
+    double bpm = 120, speed = 3;
+    int lanes = 4;
+};
+bool makeMaxNotesChart(const MaxNotesSpec& spec, Chart& out, std::string& err);
+// godshand --max-notes <out> <from ms> <to ms> [bpm] [title]: one saved as
+// .ghn, .ghc or .ghb, the formats that hold counts this large. 0 when it worked.
+int makeMaxNotesChartFile(const std::string& out, const MaxNotesSpec& spec);
+
 // godshand --convert <chart> <out>: any chart the game reads to .ghn, .ghc,
-// the iutk engine's .bin or the threadripper engine's .thr, by the output's
-// extension. Prints what it did; 0 when it worked.
+// .ghb, the iutk engine's .bin or the threadripper engine's .thr, by the
+// output's extension. Prints what it did; 0 when it worked.
 int convertChartFile(const std::string& in, const std::string& out);
 
 }  // namespace gh

@@ -10,14 +10,18 @@
 //   types: u32 length + bytes, each
 //   u64 skeleton bytes, u64 packed, packed bytes           (deflate)
 //   u64 ranges, u64 bytes, u64 packed, packed bytes        (varint gaps)
+//   version 4: u64 big, u64 bytes, u64 packed, packed bytes (the notes whose
+//       stack is 0 - a count chart's cells - each as the varint gap from the
+//       last one's index, then its count as a varint of any length)
 //   blocks: u32 bytes, u32 packed, each; then the packed blocks
 //
 // A block holds five columns, their lengths first (u32 each): times (the
 // change of the gap from the note before, in ns, zigzag varints), lengths
 // (us, zigzag varints), noteData (version 3: varints, 0..2047; before: bytes),
-// stack bytes, types (varints; bit 15 the alt flag). Version 1 kept the alt
-// flag in bit 7 of noteData (values 0..63 only). Versions 1 and 2 are still
-// read.
+// stack bytes (0: the count is in the big table), types (varints; bit 15 the
+// alt flag). Version 1 kept the alt flag in bit 7 of noteData (values 0..63
+// only). Version 3 is written when no note needs the big table; 1 to 3 are
+// still read.
 #include "chart_binary.hpp"
 
 #include "bigit_chart.hpp"
@@ -41,7 +45,7 @@ namespace gh {
 namespace {
 
 constexpr uint32_t kMagic = 0x42434847u;  // "GHCB"
-constexpr uint32_t kVersion = 3;  // 1 and 2 are still read
+constexpr uint32_t kVersion = 4;  // 1 to 3 are still read
 constexpr uint32_t kBlockNotes = 1u << 18;  // 262144 notes: enough blocks for every core
 
 void putU32(std::string& o, uint32_t v) {
@@ -216,8 +220,9 @@ bool writeBinaryChart(const std::string& path, const std::string& skeleton, cons
         }
     }
     std::string head;
+    const uint32_t version = sn.big.empty() ? 3u : kVersion;  // 3: what older versions of the game read
     putU32(head, kMagic);
-    putU32(head, kVersion);
+    putU32(head, version);
     putU64(head, n);
     putU64(head, sn.rawCount);
     putU32(head, uint32_t(int32_t(sn.maxData)));
@@ -255,6 +260,23 @@ bool writeBinaryChart(const std::string& path, const std::string& skeleton, cons
     putU64(head, ranges.size());
     putU64(head, rangesPacked.size());
     head += rangesPacked;
+    if (version >= 4) {
+        std::string big, bigPacked;
+        uint64_t last = 0;
+        for (const auto& [idx, count] : sn.big) {
+            putVar(big, idx - last);
+            last = idx;
+            count.appendVarint(big);
+        }
+        if (!pack(big, bigPacked, level)) {
+            err = "could not pack the counts";
+            return false;
+        }
+        putU64(head, sn.big.size());
+        putU64(head, big.size());
+        putU64(head, bigPacked.size());
+        head += bigPacked;
+    }
     for (uint32_t b = 0; b < blocks; ++b) {
         putU32(head, rawLens[b]);
         putU32(head, uint32_t(packed[b].size()));
@@ -352,6 +374,32 @@ bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::s
         if (!getVar(p, e, v)) { err = "damaged binary chart"; return false; }
         at += v;
         r = uint32_t(at);
+    }
+    if (version >= 4) {  // the counts of the notes whose stack is 0
+        uint64_t bigN = 0, bigRaw = 0, bigPacked = 0;
+        if (!readU64(f, bigN) || !readU64(f, bigRaw) || !readU64(f, bigPacked) || bigRaw > (uint64_t(1) << 34) ||
+            bigPacked > (uint64_t(1) << 34) || bigN > h.notes) {
+            err = "damaged binary chart";
+            return false;
+        }
+        buf.assign(size_t(bigPacked), '\0');
+        std::string raw;
+        if ((bigPacked && !readAll(f, buf.data(), buf.size())) ||
+            !unpack(reinterpret_cast<const uint8_t*>(buf.data()), buf.size(), raw, size_t(bigRaw))) {
+            err = "damaged binary chart";
+            return false;
+        }
+        const uint8_t* q = reinterpret_cast<const uint8_t*>(raw.data());
+        const uint8_t* qe = q + raw.size();
+        sn->big.resize(size_t(bigN));
+        uint64_t idx = 0;
+        for (auto& [i, count] : sn->big) {
+            uint64_t gap;
+            if (!getVar(q, qe, gap)) { err = "damaged binary chart"; return false; }
+            idx += gap;
+            i = idx;
+            if (Count::readVarint(q, qe, count) == Count::Read::Truncated) { err = "damaged binary chart"; return false; }
+        }
     }
     return true;
 }

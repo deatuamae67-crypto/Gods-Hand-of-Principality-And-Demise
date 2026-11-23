@@ -4,6 +4,7 @@
 // Finding songs in every mod layout (song_scan.cpp), PulseForge charts, audio
 // lengths and assets shared between mods.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -24,6 +25,7 @@
 #include "miniz.h"
 #include "common.hpp"
 #include "flp_import.hpp"
+#include "flp_song.hpp"
 #include "json_merge.hpp"
 #include "scene.hpp"
 #include "song_scan.hpp"
@@ -520,6 +522,194 @@ void testFlpSong() {
         SCHECK(lead.size() == 3 && lead[0].time == 96 && lead[1].time == 288 && lead[2].time == 768 && lead[2].pitch == 72);
         SCHECK(flpSongNotes(p, -1).size() == 6);
     }
+}
+
+// An FL Studio 26 project as issue #36's song is saved: a 0xAC event (a
+// dword, then text a byte long), clips of 88 bytes whose window in the
+// pattern is in whole ticks (-1: from its start), the player's and the
+// opponent's instruments each with an "(Alt)" twin, stacked notes, holds and
+// portamento. Without `playlist`, its patterns play one after another.
+std::string makeFl26Song(bool playlist) {
+    std::string ev;
+    auto word = [&](uint8_t id, uint16_t v) { ev += char(id); ev += char(v & 255); ev += char(v >> 8); };
+    auto dword = [&](uint8_t id, uint32_t v) {
+        ev += char(id);
+        for (int i = 0; i < 4; ++i) ev += char((v >> (8 * i)) & 255);
+    };
+    auto array = [&](uint8_t id, const std::string& data) {
+        ev += char(id);
+        size_t n = data.size();
+        do {
+            uint8_t c = uint8_t(n & 0x7F);
+            n >>= 7;
+            if (n) c |= 0x80;
+            ev += char(c);
+        } while (n);
+        ev += data;
+    };
+    auto utf16 = [](const std::string& a) {
+        std::string w;
+        for (char c : a) { w += c; w += char(0); }
+        return w + std::string(2, '\0');
+    };
+    auto le = [](uint32_t v, int n) {
+        std::string r;
+        for (int i = 0; i < n; ++i) r += char((v >> (8 * i)) & 255);
+        return r;
+    };
+    array(0xC7, "26.1.3.5570");
+    dword(0x9C, 150000);  // 150 BPM
+    {
+        const std::string t = utf16("Arp");  // read as a plain dword, the stream would be lost here
+        ev += char(0xAC);
+        ev += le(7, 4);
+        ev += char(t.size());
+        ev += t;
+    }
+    array(0xC2, utf16("Twenty Six"));
+    const char* names[] = {"Boyfriend", "Boyfriend (Alt)", "Dad", "Metronome"};
+    for (uint16_t ch = 0; ch < 4; ++ch) {
+        word(0x40, ch);
+        array(0xC9, utf16("Sampler"));
+        array(0xCB, utf16(names[ch]));
+    }
+    std::string notes;
+    auto note = [&](uint32_t t, uint16_t ch, uint32_t dur, uint8_t pitch, uint8_t vel, bool porta) {
+        std::string r(24, '\0');
+        r.replace(0, 4, le(t, 4));
+        r.replace(6, 2, le(ch, 2));
+        r.replace(8, 4, le(dur, 4));
+        r[12] = char(pitch);
+        if (porta) r[19] = char(0x10);
+        r[21] = char(vel);
+        notes += r;
+    };
+    word(0x41, 1);
+    for (int k = 0; k < 3; ++k) note(0, 0, 24, 48, 100, false);  // three notes on one another
+    note(0, 2, 24, 61, 100, false);    // the opponent's down (61 % 4 = 1)
+    note(48, 1, 24, 50, 100, false);   // the player's up, on its Alt channel
+    note(96, 0, 192, 63, 100, false);  // right, two beats long: held 192 - 24 ticks
+    note(144, 2, 48, 52, 32, false);   // soft: held 48 - 24 ticks
+    note(192, 0, 24, 49, 100, true);   // portamento: the alt animation
+    array(0xE0, notes);
+    notes.clear();
+    word(0x41, 2);
+    note(0, 2, 24, 62, 100, false);
+    array(0xE0, notes);
+    if (playlist) {
+        std::string clips;
+        auto clip = [&](uint32_t pos, uint16_t item, uint32_t len, int32_t start, int32_t end) {
+            std::string c(88, '\0');
+            c.replace(0, 4, le(pos, 4));
+            c.replace(4, 2, le(20480, 2));
+            c.replace(6, 2, le(item, 2));
+            c.replace(8, 4, le(len, 4));
+            c.replace(12, 2, le(499, 2));
+            c.replace(24, 4, le(uint32_t(start), 4));
+            c.replace(28, 4, le(uint32_t(end), 4));
+            clips += c;
+        };
+        clip(0, 20481, 384, -1, -1);    // pattern 1, whole
+        clip(384, 20481, 96, 48, 144);  // pattern 1's ticks 48 to 144
+        clip(500, 3, 200, -1, -1);      // an audio clip: no notes
+        clip(768, 20482, 384, -1, -1);  // pattern 2
+        array(0xE9, clips);
+    }
+    array(0xE1, std::string(16, '\0'));  // the mixer: no channels after it
+    word(0x40, 9);
+    std::string f = "FLhd";
+    f += le(6, 4) + std::string("\0\0\x04\0", 4) + char(96) + char(0) + "FLdt" + le(uint32_t(ev.size()), 4);
+    return f + ev;
+}
+
+// A whole FL Studio project as one chart (issue #36's song): every note of
+// every channel, through every clip of the playlist, counted.
+void testFlpWholeSong() {
+    // Where a clip starts in its pattern: whole ticks from FL Studio 20,
+    // -1 for none; a float before.
+    {
+        auto bytes = [](uint32_t v) { return std::array<unsigned char, 4>{uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}; };
+        float f = 96.0f;
+        uint32_t fb;
+        std::memcpy(&fb, &f, 4);
+        SCHECK(flpClipOffset(bytes(0xFFFFFFFFu).data()) == 0 && flpClipOffset(bytes(48).data()) == 48 &&
+               flpClipOffset(bytes(fb).data()) == 96);
+    }
+    // The pattern reader finds its way through the 0xAC event and the 88-byte clips.
+    {
+        FlpProject p;
+        std::string err;
+        SCHECK(readFlp(makeFl26Song(true), p, err));
+        SCHECK(p.title == "Twenty Six" && p.ppqn == 96 && std::fabs(p.bpm - 150) < 1e-9);
+        SCHECK(p.playlist.size() == 3 && p.playlist[0].start == 0 && p.playlist[1].start == 48 && p.playlist[1].position == 384 &&
+               p.playlist[2].pattern == 2);
+        SCHECK(p.channels.size() >= 3 && p.channels[1].name == "Boyfriend (Alt)" && p.channels[2].name == "Dad");
+    }
+    const fs::path base = fs::temp_directory_path() / "gh_flp_whole";
+    fs::remove_all(base);
+    put(base / "song.flp", makeFl26Song(true));
+    put(base / "loose.flp", makeFl26Song(false));
+    std::string err;
+    Chart c;
+    FlpSongStats st;
+    std::vector<double> progress;
+    SCHECK(flpSongToChart(str(base / "song.flp"), c, err, {}, &st, [&](double v) { progress.push_back(v); }));
+    SCHECK(st.version == "26.1.3.5570" && st.ppq == 96 && std::fabs(st.bpm - 150) < 1e-9 && st.noteRecords == 9 && st.clips == 3 &&
+           st.cells == 9);
+    SCHECK(st.notes == Count(11) && st.player == Count(8) && st.opponent == Count(3) && st.channels.size() == 3);
+    SCHECK(!progress.empty() && progress.back() == 1.0);
+    SCHECK(c.title == "Twenty Six" && c.keys == 4 && std::fabs(c.speed - 3.0) < 1e-9 && c.playerNotes == Count(8) &&
+           c.opponentNotes == Count(3) && c.notes.size() == 9);
+    // 96 ticks a beat at 150 BPM: 400 ms a beat, 4.1667 ms a tick.
+    struct Want { double ms; int side, lane; double hold; bool alt; uint64_t count; };
+    const Want want[] = {{0, 0, 1, 0, false, 1},     {0, 1, 0, 0, false, 3},       {200, 1, 2, 0, true, 1},
+                         {400, 1, 3, 700, false, 1}, {600, 0, 0, 100, false, 1},   {800, 1, 1, 0, true, 1},
+                         {1600, 1, 2, 0, true, 1},   {1800, 1, 3, 700, false, 1}, {3200, 0, 2, 0, false, 1}};
+    bool all = c.notes.size() == std::size(want);
+    for (const Want& w : want) {
+        const Note* n = nullptr;
+        for (const Note& k : c.notes)
+            if (std::fabs(k.time - w.ms) < 1e-6 && k.side == w.side && k.lane == w.lane) n = &k;
+        all = all && n && std::fabs(n->length - w.hold) < 1e-3 && bool(n->flags & kFlagAlt) == w.alt && c.countOf(*n) == Count(w.count);
+    }
+    SCHECK(all);
+    // Bars of four beats, the camera on the side with more notes in each.
+    SCHECK(c.sections.size() == 3 && c.sections[0].mustHit && c.sections[1].mustHit && !c.sections[2].mustHit);
+    SCHECK(c.focusAt(100) == 1 && c.focusAt(3300) == 0);
+    // The sides given by channel.
+    Chart swapped;
+    FlpSongOptions opt;
+    opt.playerChannels = {2};
+    opt.opponentChannels = {0, 1};
+    SCHECK(flpSongToChart(str(base / "song.flp"), swapped, err, opt) && swapped.playerNotes == Count(3) && swapped.opponentNotes == Count(8));
+    // No playlist: the patterns one after another, a bar each at least.
+    Chart loose;
+    FlpSongStats ls;
+    SCHECK(flpSongToChart(str(base / "loose.flp"), loose, err, {}, &ls) && ls.notes == Count(9) && loose.playerNotes == Count(6) &&
+           loose.opponentNotes == Count(3));
+    SCHECK(!loose.notes.empty() && std::fabs(loose.notes.back().time - 1600) < 1e-6);  // pattern 2 at the second bar
+    // "song.flp#playlist" through the chart loader, and to every format that
+    // holds its counts.
+    std::string file;
+    int pat = 0;
+    SCHECK(flpChartPath("a/song.flp#playlist", file, pat) && file == "a/song.flp" && pat == kFlpWholeSong);
+    Chart viaLoader;
+    SCHECK(loadChartFile(str(base / "song.flp") + "#playlist", "Normal", viaLoader, err) && viaLoader.playerNotes == Count(8) &&
+           viaLoader.opponentNotes == Count(3) && viaLoader.notes.size() == 9);
+    for (const char* ext : {".ghn", ".ghc", ".ghb", ".bin"}) {
+        const std::string out = str(base / (std::string("song") + ext));
+        SCHECK(convertChartFile(str(base / "song.flp") + "#playlist", out) == 0);
+        Chart back;
+        SCHECK(loadChartFile(out, "Normal", back, err) && back.playerNotes == Count(8) && back.opponentNotes == Count(3));
+    }
+    // Not a project, a project cut short, a project with no notes.
+    Chart bad;
+    put(base / "bad.flp", "not a project");
+    SCHECK(!flpSongToChart(str(base / "bad.flp"), bad, err) && !err.empty());
+    put(base / "short.flp", makeFl26Song(true).substr(0, 10));
+    SCHECK(!flpSongToChart(str(base / "short.flp"), bad, err));
+    SCHECK(!flpSongToChart(str(base / "missing.flp"), bad, err));
+    fs::remove_all(base);
 }
 
 void testFlStudio() {
@@ -1118,8 +1308,33 @@ void testGhnCharts() {
                 same = wg.notes[i].side == wide.notes[i].side && wg.notes[i].lane == wide.notes[i].lane;
             SCHECK(same);
         }
-        // Counts no .ghc can list: refused, nothing written.
-        SCHECK(convertChartFile(str(base / "song.ghn"), str(base / "huge.ghc")) != 0 && !fs::exists(base / "huge.ghc"));
+        // Counts of any size: .ghc 4 and .ghb 2 keep each note's count
+        // (2^200 notes at 10 s here), so both sides come back exactly.
+        for (const char* ext : {".ghc", ".ghb"}) {
+            const std::string hp = str(base / (std::string("huge") + ext));
+            SCHECK(convertChartFile(str(base / "song.ghn"), hp) == 0);
+            Chart hg;
+            SCHECK(loadChartFile(hp, "Normal", hg, err) && hg.playerNotes == c.playerNotes && hg.opponentNotes == c.opponentNotes);
+            bool found = false;
+            for (const Note& n : hg.notes) found = found || (std::fabs(n.time - 9999.999999) < 0.01 && hg.countOf(n) == huge);
+            SCHECK(found);
+            // And back to .ghn: the same counts again.
+            SCHECK(convertChartFile(hp, hp + ".ghn") == 0);
+            Chart hn;
+            SCHECK(loadChartFile(hp + ".ghn", "Normal", hn, err) && hn.playerNotes == c.playerNotes && hn.opponentNotes == c.opponentNotes);
+        }
+        // Only a chart with a count past a stack's 255 needs the new
+        // versions; the others are still written as .ghc 3 and .ghb 1, which
+        // older versions of the game read.
+        auto fileVersion = [](const fs::path& p) -> uint32_t {
+            std::ifstream f(p, std::ios::binary);
+            unsigned char h[8] = {};
+            f.read(reinterpret_cast<char*>(h), 8);
+            return f ? uint32_t(h[4]) | uint32_t(h[5]) << 8 | uint32_t(h[6]) << 16 | uint32_t(h[7]) << 24 : 0;
+        };
+        SCHECK(convertChartFile(str(base / "wide0.ghn"), str(base / "wide0.ghb")) == 0);
+        SCHECK(fileVersion(base / "wide0.ghc") == 3 && fileVersion(base / "wide0.ghb") == 1);
+        SCHECK(fileVersion(base / "small.ghc") == 4 && fileVersion(base / "huge.ghb") == 2);
     }
     // Extra keys off: a 7-key count chart plays with 4 keys, as its JSON would.
     {
@@ -1143,6 +1358,48 @@ void testGhnCharts() {
         SCHECK(loadChartFile(str(base / "k7.ghn"), "Normal", off, err, {}, 0, false) && off.keys == 4 && off.notes.size() == 2 &&
                off.countOf(off.notes[0]) == Count(5) && off.notes[1].lane == 2 && off.playerNotes == Count(6));
     }
+    fs::remove_all(base);
+}
+
+// Issue #36's max-notes charts: 2^256 - 1 notes, the player's alone, a note
+// a millisecond on each lane, through every format that holds them.
+void testMaxNotesCharts() {
+    const fs::path base = fs::temp_directory_path() / "gh_maxnotes";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    MaxNotesSpec spec;
+    spec.title = "Max";
+    spec.fromMs = 1000.4;  // whole milliseconds: 1001 to 1010
+    spec.toMs = 1010.9;
+    spec.bpm = 150;
+    Chart c;
+    SCHECK(makeMaxNotesChart(spec, c, err));
+    SCHECK(c.notes.size() == 40 && c.playerNotes == Count::max() && c.opponentNotes.isZero() && c.keys == 4 && c.title == "Max");
+    SCHECK(c.playerNotes.str() == "115792089237316195423570985008687907853269984665640564039457584007913129639935");
+    // Even shares: some notes one more than the others, never further apart.
+    Count lo = Count::max(), hi;
+    for (const Note& n : c.notes) {
+        const Count k = c.countOf(n);
+        if (k < lo) lo = k;
+        if (k > hi) hi = k;
+    }
+    SCHECK(hi == lo + Count(1));  // 2^256 - 1 = 15 (mod 40)
+    SCHECK(std::fabs(c.notes.front().time - 1001) < 1e-9 && std::fabs(c.notes.back().time - 1010) < 1e-9 && c.notes.back().lane == 3);
+    SCHECK(c.focusAt(5000) == 1 && !c.sections.empty() && c.sections[0].mustHit);
+    for (const char* ext : {".ghn", ".ghc", ".ghb"}) {
+        const std::string out = str(base / (std::string("max") + ext));
+        SCHECK(makeMaxNotesChartFile(out, spec) == 0);
+        Chart back;
+        SCHECK(loadChartFile(out, "Normal", back, err) && back.playerNotes == Count::max() && back.opponentNotes.isZero() &&
+               back.notes.size() == 40);
+    }
+    // The formats of 64-bit counts at most say so, and write nothing.
+    SCHECK(makeMaxNotesChartFile(str(base / "max.bin"), spec) != 0 && !fs::exists(base / "max.bin"));
+    SCHECK(convertChartFile(str(base / "max.ghn"), str(base / "max2.bin")) != 0);
+    SCHECK(convertChartFile(str(base / "max.ghn"), str(base / "max2.thr")) != 0 && !fs::exists(base / "max2.thr"));
+    spec.toMs = 10;  // before it starts
+    SCHECK(!makeMaxNotesChart(spec, c, err) && !err.empty());
     fs::remove_all(base);
 }
 
@@ -1486,6 +1743,8 @@ void runScanTests() {
     testBinaryChartsInMods();
     testFlStudio();
     testFlpSong();
+    testFlpWholeSong();
+    testMaxNotesCharts();
     testPulseForgeCharts();
     testSongIcons();
     testIutkCharts();

@@ -60,3 +60,8 @@ drive "shaggy bleeds" GodsHand-mod-shaggy-bleeds.zip=1VJoa6q8zcpfi9VU4kEfnUpjRMQ
 drive "the frame of wiring" GodsHand-mod-the-frame-of-wiring.zip=1JHGqqLDzx6yu7KHtjRuZeEuWVp3t7Ma6
 drive "JS Bambi Fansong Charts" GodsHand-mod-js-bambi-fansong-charts-part1.zip=120Bxl74Oed_aPNR-jWrOJ5utrfG4J7KN GodsHand-mod-js-bambi-fansong-charts-part2.zip=1AZ4OlmtCSBii_m5KM61kEnmY5GhnXBM6 GodsHand-mod-js-bambi-fansong-charts-part3.zip=1AAZWB1mxn-q9c0_K13Af5sDel3LiL7Pi
 drive funnysongs GodsHand-mod-funnysongs-part1.zip=1-pRiWC04hPtD7qK7kLzJugumM_nqP_oK GodsHand-mod-funnysongs-part2.zip=1rlrmEaGA8gy2wZvaYmbfEM9GWFk4I7ij
+
+# Charts made with the game itself (issue #36), kept in this repository under
+# modpacks/<folder>/: the song's FL Studio project through God's Hand's SNIFF
+# converter, and the max-notes charts.
+local "charts made in sniff"

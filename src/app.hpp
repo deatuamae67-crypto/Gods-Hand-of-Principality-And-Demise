@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "audio.hpp"
+#include "count_charts.hpp"
 #include "frame_pacer.hpp"
 #include "input.hpp"
 #include "library.hpp"
@@ -114,7 +115,9 @@ public:
     bool listSongs = false;
     bool checkCharts = false;  // --check-charts with --list-songs
     std::string checkScriptsDir;  // --check-scripts <folder>
-    std::string convertIn, convertOut;  // --convert <chart> <out.ghn|.ghc|.bin>
+    std::string convertIn, convertOut;  // --convert <chart> <out.ghn|.ghc|.ghb|.bin|.thr>
+    std::string maxNotesOut;             // --max-notes <out.ghn|.ghc|.ghb> <from ms> <to ms> [bpm] [title]
+    MaxNotesSpec maxNotes;
     // --merge <out.json> <part> <part> ... [--merge-mode auto|overlay|append]:
     // JSON merging without the window.
     std::string mergeOut, mergeMode = "auto";

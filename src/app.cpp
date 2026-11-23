@@ -282,6 +282,12 @@ int App::run(int argc, char** argv) {
         else if (!std::strcmp(a, "--convert")) {
             convertIn = next();
             convertOut = next();
+        } else if (!std::strcmp(a, "--max-notes")) {  // <out> <from ms> <to ms> [bpm] [title]
+            maxNotesOut = next();
+            maxNotes.fromMs = std::atof(next());
+            maxNotes.toMs = std::atof(next());
+            if (i + 1 < argc && argv[i + 1][0] != '-') maxNotes.bpm = std::atof(next());
+            if (i + 1 < argc && argv[i + 1][0] != '-') maxNotes.title = next();
         }
         else if (!std::strcmp(a, "--merge")) {
             mergeOut = next();
@@ -304,6 +310,7 @@ int App::run(int argc, char** argv) {
     }
     if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
     if (!convertIn.empty()) return convertChartFile(convertIn, convertOut);  // --convert <chart> <out>
+    if (!maxNotesOut.empty()) return makeMaxNotesChartFile(maxNotesOut, maxNotes);  // --max-notes <out> <from> <to> [bpm] [title]
     if (!mergeOut.empty()) return mergeChartFiles(mergeOut, mergeParts, mergeMode);  // --merge <out> <parts...>
     if (listSongs) {
         // Prints what the song library finds (no window): --list-songs [--base dir]

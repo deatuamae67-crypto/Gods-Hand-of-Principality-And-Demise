@@ -63,6 +63,9 @@ struct FlpProject {
 std::vector<FlpNote> flpSongNotes(const FlpProject& p, int channel);
 
 bool readFlp(std::string_view bytes, FlpProject& out, std::string& err);
+// Where a pattern clip starts in its pattern, in ticks, from its playlist
+// record's bytes 24-27 (whole ticks from FL Studio 20, -1 = none; a float before).
+double flpClipOffset(const unsigned char* p);
 bool readFlpFile(const std::string& path, FlpProject& out, std::string& err);
 
 // The patterns holding chart notes, by number. Strict: nearly all of the
@@ -78,6 +81,8 @@ bool flpToChart(const FlpProject& p, int pattern, Chart& out, std::string& err, 
 
 // "song.flp#3" names pattern 3 of song.flp (the library lists each pattern
 // with chart notes as a difficulty). Splits it; pattern -1 when none given.
+// "song.flp#playlist": the whole song (flp_song.hpp), pattern kFlpWholeSong.
+constexpr int kFlpWholeSong = -2;
 bool flpChartPath(const std::string& chartPath, std::string& file, int& pattern);
 
 }  // namespace gh

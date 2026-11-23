@@ -6,7 +6,7 @@ God's Hand plays Friday Night Funkin' mods made for Psych Engine (0.4 to 0.7.3 a
 
 - **Computers**: put the mod in the `mods/` folder next to the game, as a folder or a `.zip`. A `.zip` is unpacked into a folder of its own when the game starts; the archive moves to `mods/.installed/`.
 - **Android**: the game's files are in `Android/data/com.godshand.game/files/`, with `mods/` inside. Freeplay → **IMPORT ZIP** installs a `.zip` picked with the system's file picker.
-- **Mod packs**: Freeplay `M` downloads and installs packs from the game's `mods` release (45 packs, 803 songs from JS Engine mods among them). Not all of these mods are by the game's author: they belong to their creators.
+- **Mod packs**: Freeplay `M` downloads and installs packs from the game's `mods` release (46 packs, 803 songs from JS Engine mods among them, and "charts made in sniff": the charts made with the game for issue #36). Not all of these mods are by the game's author: they belong to their creators.
 - **Changes in the packs**: with Options → INTERFACE → **Auto-update** on, the game compares the packs you installed with the `mods` release when it starts (each zip's checksum, and when one differs, its list of files, read from the end of the zip without downloading it). **MOD PACKS** on the main menu then shows the packs that **CHANGED**, with the songs and files added, changed and removed: **INSTALL CHANGES** downloads and installs them, **REMOVE CHANGES** puts back the files they replaced, and **REMOVE PACK** takes the pack off (`ENTER` twice). Files you put in a pack's folder yourself stay.
 
 Freeplay lists every song the game finds; the mod's name comes from its `pack.json` or `mod.json` (`"name"`), else its folder.
