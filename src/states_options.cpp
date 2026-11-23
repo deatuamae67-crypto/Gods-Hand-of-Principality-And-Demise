@@ -100,7 +100,6 @@ public:
             {Row::Bool, "Opponent notes", "OFF hides the opponent's receptors and notes, as Psych's Opponent Notes.", &s.opponentNotes},
             {Row::Bool, "Opponent strums", "Light up the opponent's receptors when they sing.", &s.opponentStrums},
             {Row::Bool, "Note splashes", "Bursts of light on SICK! hits.", &s.noteSplashes},
-            {Row::Bool, "Touch controls", "Tap the lanes on a touchscreen (a mouse click counts as a tap).", &s.touchControls},
             {Row::Bool, "Extra keys", "Charts made for 1 to 18 keys keep them, as in Psych Extra Keys. OFF: every chart has 4 keys, like Psych and JS Engine.",
              &s.extraKeys},
             {Row::Header, "CONTROLS  (4 KEYS)", ""},
@@ -169,7 +168,8 @@ public:
              "Engine's 16-million-note limit) merged back into one, with no limit on its notes. OFF: it is not on the menu.",
              &s.jsonMerging},
             {Row::Bool, "Auto-update", "At start, the game looks on GitHub for a newer version: it downloads it, checks it and "
-             "installs it the next time the game starts (UPDATE on the main menu restarts it now; Android opens the installer). "
+             "installs it the next time the game starts (UPDATE on the main menu restarts it now; on Android, UPDATE opens the new "
+             "version's download in the browser, to install from there). "
              "It also looks for changes in the mod packs you installed: MOD PACKS shows them, to install or remove. Your "
              "settings, scores and mods stay. OFF: it never looks.",
              &s.autoUpdate},
@@ -257,7 +257,7 @@ public:
             // key bindings stay, for a Bluetooth keyboard.
             std::vector<Row> kept;
             for (Row& r : rows_) {
-                if (r.label == "Fullscreen" || r.label == "Touch controls" || r.label == "Video encoder") continue;
+                if (r.label == "Fullscreen" || r.label == "Video encoder") continue;
                 kept.push_back(std::move(r));
             }
             rows_ = std::move(kept);

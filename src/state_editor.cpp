@@ -2011,19 +2011,37 @@ private:
             line("Ctrl+wheel / top bar: lanes", gfx::fade(WHITE, 0.55f), 15);
     }
 
+    // Touchscreens: the PLAY, SAVE, UNDO and BACK buttons sit at the top
+    // right, over the panel's tabs; the panel then starts below them (as far
+    // as they reach into the picture: on a screen of another shape they may
+    // sit in the black bar above it).
+    float panelShift() const {
+        const App& a = app();
+        if (!a.touchMode) return 0;
+        std::vector<Rectangle> keys;
+        a.touch.buttonRects(keys);
+        float bottom = 0;
+        for (const Rectangle& r : keys) {
+            const Vector2 tl = gfx::toCanvas({r.x, r.y}), br = gfx::toCanvas({r.x + r.width, r.y + r.height});
+            if (br.x > kPanelX - 8 && tl.y < 88) bottom = std::max(bottom, br.y);
+        }
+        return std::max(0.0f, bottom + 6 - 46);
+    }
+
     // The tabbed panel. Immediate mode: drawing and clicks happen together.
     void drawPanel() {
         if (ui_.click) ui_.focus.clear();  // a click anywhere ends typing; a text field takes it back
-        DrawRectangleRounded({kPanelX - 8, 46, gfx::W - kPanelX, gfx::H - 54}, 0.03f, 6, kPanel);
+        const float top = panelShift(), gap = top > 0 ? 6.0f : 8.0f;  // the rows a little closer when it moves down
+        DrawRectangleRounded({kPanelX - 8, 46 + top, gfx::W - kPanelX, gfx::H - 54 - top}, 0.03f, 6, kPanel);
         static const char* tabs[] = {"Song", "Section", "Note", "Events", "Charting", "EZ Spam"};
         const float tw = (gfx::W - kPanelX - 16) / 6.0f;
         for (int i = 0; i < 6; ++i)
-            if (ui_.button({kPanelX + i * tw, 52, tw - 4, 30}, tabs[i], tab_ == i)) tab_ = i;
+            if (ui_.button({kPanelX + i * tw, 52 + top, tw - 4, 30}, tabs[i], tab_ == i)) tab_ = i;
         const float x = kPanelX, w = gfx::W - kPanelX - 18;
-        float y = 96;
+        float y = 96 + top;
         auto row = [&](float h = 30) {
             const Rectangle r{x, y, w, h};
-            y += h + 8;
+            y += h + gap;
             return r;
         };
         auto half = [&](int i) { return Rectangle{x + i * (w * 0.5f + 4), y, w * 0.5f - 4, 30}; };
@@ -2059,10 +2077,10 @@ private:
                 if (ui_.button(half(1), "Save and play")) {
                     if (save(true)) return;
                 }
-                y += 38;
+                y += 30 + gap;
                 if (ui_.button(half(0), "Reload audio")) reloadAudio();
                 if (ui_.button(half(1), reloadArmed_ ? "Reload: unsaved, again" : "Reload chart")) reloadChart();
-                y += 38;
+                y += 30 + gap;
                 if (ui_.button(half(0), "Clear notes")) {
                     snapshot();
                     notes_.clear();
@@ -2074,7 +2092,7 @@ private:
                     selEvent_ = -1;
                     dirty_ = statsDirty_ = true;
                 }
-                y += 38;
+                y += 30 + gap;
                 gfx::text(FontId::Ui, "FL Studio (SNIFF): drop a .flp or .fsc here", x, y, 15, kDim);
                 y += 20;
                 gfx::text(FontId::Ui, "C3-D#3 player, C4-D#4 opponent, F3/F#3 camera", x, y, 15, kDim);
@@ -2133,14 +2151,14 @@ private:
                     if (ui_.button({x, y, tw3 - 2, 30}, "Copy (Ctrl+C)")) copySelectionOrSection();
                     if (ui_.button({x + tw3 + 2, y, tw3 - 2, 30}, "Cut (Ctrl+X)")) cutSelectionOrSection();
                     if (ui_.button({x + 2 * tw3 + 4, y, tw3 - 2, 30}, "Paste (Ctrl+V)")) paste();
-                    y += 38;
+                    y += 30 + gap;
                 }
                 if (ui_.button(half(0), "Clear notes")) clearSection(true, false);
                 if (ui_.button(half(1), "Clear events")) clearSection(false, true);
-                y += 38;
+                y += 30 + gap;
                 if (ui_.button(half(0), "Swap sides")) swapSides();
                 if (ui_.button(half(1), "Mirror lanes")) mirror();
-                y += 38;
+                y += 30 + gap;
                 ui_.stepper(row(), "Sections back", copyBack_, 1, 1, std::max(1.0, double(sections_.size())), "%.0f");
                 if (ui_.button(row(), "Copy notes from that section")) copyLastSection(int(copyBack_));
                 // JS Engine: a range of sections to the clipboard (paste puts it at the line).
@@ -2177,7 +2195,7 @@ private:
                         applyToSelection([&](EdNote& e) { e.stack = int(st); });
                     if (ui_.button(half(0), "Delete")) deleteSelection();
                     if (ui_.button(half(1), "Unselect")) clearSelection();
-                    y += 38;
+                    y += 30 + gap;
                 }
                 y += 6;
                 heading("Spam tools");
@@ -2207,7 +2225,7 @@ private:
                     heading(TextFormat("Event %d of %d at %.0f ms", int(selEvent_) - first + 1, lastI - first + 1, e->timeMs));
                     if (ui_.button(half(0), "< previous")) selEvent_ = selEvent_ > first ? selEvent_ - 1 : lastI;
                     if (ui_.button(half(1), "next >")) selEvent_ = selEvent_ < lastI ? selEvent_ + 1 : first;
-                    y += 38;
+                    y += 30 + gap;
                     int idx = int(std::find(eventNames_.begin(), eventNames_.end(), e->name) - eventNames_.begin());
                     if (idx >= int(eventNames_.size())) {
                         eventNames_.push_back(e->name);
@@ -2235,7 +2253,7 @@ private:
                         selEvent_ = -1;
                         dirty_ = statsDirty_ = true;
                     }
-                    y += 38;
+                    y += 30 + gap;
                 } else {
                     heading("New events");
                     ui_.dropdown("evnew", row(), "Event", eventNames_, eventIdx_, 64);
@@ -2288,7 +2306,7 @@ private:
                 auto twoButtons = [&](const char* a, const char* b, double& v, double lo, double hi) {
                     if (ui_.button(half(0), a)) v = clampv(v * 2, lo, hi);
                     if (ui_.button(half(1), b)) v = clampv(v / 2, lo, hi);
-                    y += 38;
+                    y += 30 + gap;
                 };
                 ui_.stepper(row(), "Spam Count", ezCount_, 1, 0, 999999, "%.4g");
                 twoButtons("x2 Amount", "x0.5 Amount", ezCount_, 0, 999999);

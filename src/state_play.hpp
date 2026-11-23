@@ -412,10 +412,8 @@ private:
     Replay record_, playback_;
     bool replaying_ = false;
     size_t replayIdx_ = 0;
-    bool touchDown_[kMaxKeys] = {};
     void laneDown(int lane, double t);
     void laneUp(int lane, double t);
-    void handleTouch();
 };
 
 }  // namespace gh

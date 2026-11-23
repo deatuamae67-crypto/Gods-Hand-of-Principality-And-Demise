@@ -82,7 +82,7 @@ struct Status {
     Stage stage = Stage::Idle;
     std::string version;   // the release found ("v2.3.0")
     std::string message;   // for the player
-    std::string file;      // Android: the APK to install
+    std::string url;       // Android: the new APK's download link (the browser downloads it)
     double progress = 0;   // download, 0..1
 };
 

@@ -128,7 +128,7 @@ jobs:
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null || true
-          "$sdkmanager" "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018" > /dev/null
+          "$sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" > /dev/null
           # Ninja: the runner's own, else the one in the SDK's CMake package (from
           # Google's servers, so an Ubuntu mirror outage does not stop the build).
           if ! command -v ninja > /dev/null; then

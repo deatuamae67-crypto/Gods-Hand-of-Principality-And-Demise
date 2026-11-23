@@ -318,11 +318,10 @@ public:
                     case MainItem::ModPacks: a.change(makeModPacks()); break;
                     case MainItem::Update:
                         if (platform::kAndroid) {
-                            // The system installer, with the APK the updater downloaded.
-                            const int r = platform::installApk(a.updater.status().file);
-                            a.notify(r == 1   ? "The installer is open: confirm the update there."
-                                     : r == 2 ? "Allow installing apps from God's Hand, then choose UPDATE again."
-                                              : "The installer could not be opened.",
+                            // The browser downloads the new APK; it installs from there.
+                            a.notify(platform::openUrl(a.updater.status().url)
+                                         ? "The download opens in the browser: install the new version from there."
+                                         : "No browser could open the download: get it from the Releases page.",
                                      10.0);
                             chosen_ = -1;
                         } else {

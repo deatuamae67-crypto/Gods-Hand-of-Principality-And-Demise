@@ -129,7 +129,19 @@ void runUpdate(Updater::Shared& sh, std::string base, std::string current, std::
         sh.set(Stage::Failed, rel.tag + " has no " + asset + " yet.");
         return;
     }
-    if (!platform::kAndroid && pendingVersion(base) == rel.tag) {
+    // Android: the browser downloads the new APK and the player installs
+    // it from there. The game itself never downloads or installs an app
+    // (no permission to install apps, nothing an app scanner like Google
+    // Play Protect takes for an app that installs others).
+    if (platform::kAndroid) {
+        {
+            std::lock_guard<std::mutex> lk(sh.m);
+            sh.st.url = a->url;
+        }
+        sh.set(Stage::Ready, "God's Hand " + rel.tag + " is out: UPDATE on the main menu opens its download.", 1.0);
+        return;
+    }
+    if (pendingVersion(base) == rel.tag) {
         sh.set(Stage::Ready, "God's Hand " + rel.tag + " is ready: it installs when the game starts again.", 1.0);
         return;
     }
@@ -159,14 +171,6 @@ void runUpdate(Updater::Shared& sh, std::string base, std::string current, std::
             sh.set(Stage::Failed, "The download of " + rel.tag + " is damaged (its SHA-256 differs from GitHub's).");
             return;
         }
-    }
-    if (platform::kAndroid) {
-        {
-            std::lock_guard<std::mutex> lk(sh.m);
-            sh.st.file = dest;
-        }
-        sh.set(Stage::Ready, "God's Hand " + rel.tag + " is downloaded: UPDATE on the main menu installs it.", 1.0);
-        return;
     }
     std::vector<std::string> files;
     if (!stagePackage(dest, base + "update/staging", files, err) || !writeReady(base, rel.tag, files, err)) {

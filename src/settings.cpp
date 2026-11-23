@@ -119,7 +119,6 @@ bool Settings::load(const std::string& path) {
         else if (k == "fullscreen") fullscreen = b;
         else if (k == "showTimings") showTimings = b;
         else if (k == "opponentStrums") opponentStrums = b;
-        else if (k == "touchControls") touchControls = b;
         else if (k == "fpsCap") fpsCap = clampv(int(d), 0, 1000);
         else if (k == "offsetMs") offsetMs = clampv(float(d), -500.0f, 500.0f);
         else if (k == "scrollSpeed") scrollSpeed = clampv(float(d), 0.0f, 10.0f);
@@ -186,7 +185,7 @@ bool Settings::save(const std::string& path) const {
       << "\nsafeFrames=" << safeFrames << "\nratingOffset=" << ratingOffset << "\nautoPause=" << autoPause << "\nnoReset=" << noReset
       << "\nantialiasing=" << antialiasing << "\nsplashAlpha=" << splashAlpha << "\ncomboOffset=" << comboOffset[0] << "," << comboOffset[1]
       << "," << comboOffset[2] << "," << comboOffset[3] << "\nnoteSkin=" << noteSkin << "\nnoteColors=" << noteColorText(*this)
-      << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums << "\ntouchControls=" << touchControls
+      << "\nfullscreen=" << fullscreen << "\nshowTimings=" << showTimings << "\nopponentStrums=" << opponentStrums 
       << "\nfpsCap=" << fpsCap << "\noffsetMs=" << offsetMs << "\nscrollSpeed=" << scrollSpeed
       << "\nmasterVol=" << masterVol << "\nmusicVol=" << musicVol << "\nsfxVol=" << sfxVol
       << "\nhitsoundVol=" << hitsoundVol << "\nhitsoundMode=" << hitsoundMode << "\neditorPreview=" << editorPreview << "\neditorPreviewDown=" << editorPreviewDown

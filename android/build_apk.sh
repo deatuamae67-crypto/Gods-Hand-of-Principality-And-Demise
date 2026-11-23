@@ -4,7 +4,7 @@
 #
 #   ANDROID_SDK=~/android-sdk android/build_apk.sh [out.apk]
 #
-# Needs the Android SDK (platforms;android-34, build-tools;34.0.0,
+# Needs the Android SDK (platforms;android-35, build-tools;35.0.0,
 # ndk;27.2.12479018), a JDK, CMake, Ninja and zip.
 #
 # Environment (all optional):
@@ -18,8 +18,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 sdk="${ANDROID_SDK:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/android-sdk}}}"
 ndk="${ANDROID_NDK:-$sdk/ndk/27.2.12479018}"
-bt="$sdk/build-tools/34.0.0"
-jar="$sdk/platforms/android-34/android.jar"
+bt="$sdk/build-tools/35.0.0"
+jar="$sdk/platforms/android-35/android.jar"
 out="${1:-$root/build/GodsHand-android.apk}"
 abis="${ABIS:-arm64-v8a armeabi-v7a x86_64}"
 keystore="${GH_KEYSTORE:-$here/godshand.keystore}"
@@ -46,7 +46,7 @@ for abi in $abis; do
   # shellcheck disable=SC2086
   cmake -S "$root" -B "$bdir" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
-    -DANDROID_ABI="$abi" -DANDROID_PLATFORM=android-24 -DANDROID_STL=c++_static \
+    -DANDROID_ABI="$abi" -DANDROID_PLATFORM=android-24 -DANDROID_STL=c++_static -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
     -DCMAKE_BUILD_TYPE=Release ${CMAKE_ARGS:-} >/dev/null
   cmake --build "$bdir" --target godshand -j"$(nproc 2>/dev/null || echo 4)"
   mkdir -p "$work/lib/$abi"
@@ -68,7 +68,7 @@ cp "$root"/songs/* "$work/assets/songs/"
 # ---- resources, manifest and packaging
 "$bt/aapt2" compile --dir "$here/res" -o "$work/res.zip"
 "$bt/aapt2" link -o "$work/unsigned.apk" -I "$jar" --manifest "$here/AndroidManifest.xml" \
-  --min-sdk-version 24 --target-sdk-version 34 --version-code "$code" --version-name "$version" \
+  --min-sdk-version 24 --target-sdk-version 35 --version-code "$code" --version-name "$version" \
   -0 mpg -A "$work/assets" "$work/res.zip"
 (cd "$work/dex" && zip -q -X "$work/unsigned.apk" classes.dex)
 (cd "$work" && zip -q -X -r "$work/unsigned.apk" lib)

@@ -25,7 +25,6 @@ Every option of the Options menu, section by section (the text the game shows fo
 | Opponent notes | OFF hides the opponent's receptors and notes, as Psych's Opponent Notes. | on / off |
 | Opponent strums | Light up the opponent's receptors when they sing. | on / off |
 | Note splashes | Bursts of light on SICK! hits. | on / off |
-| Touch controls | Tap the lanes on a touchscreen (a mouse click counts as a tap). | on / off |
 | Extra keys | Charts made for 1 to 18 keys keep them, as in Psych Extra Keys. OFF: every chart has 4 keys, like Psych and JS Engine. | on / off |
 
 ## Controls  (4 keys)
@@ -77,7 +76,7 @@ Every option of the Options menu, section by section (the text the game shows fo
 | AutoChart | AUTOCHART on the main menu: songs played with a chart the game makes from their audio. Its charts carry a shame watermark and play only in God's Hand. OFF: it is not on the menu. | on / off |
 | AutoChart training | AutoChart places notes where the charts of your mods put them for sounds like those (train it on the AUTOCHART screen: TRAIN). OFF, or before it is trained: it follows the beat and the loudest sounds. | on / off |
 | JSON merging | JSON MERGING on the main menu: a chart split into parts (as players do to get past JS Engine's 16-million-note limit) merged back into one, with no limit on its notes. OFF: it is not on the menu. | on / off |
-| Auto-update | At start, the game looks on GitHub for a newer version: it downloads it, checks it and installs it the next time the game starts (UPDATE on the main menu restarts it now; Android opens the installer). It also looks for changes in the mod packs you installed: MOD PACKS shows them, to install or remove. Your settings, scores and mods stay. OFF: it never looks. | on / off |
+| Auto-update | At start, the game looks on GitHub for a newer version: it downloads it, checks it and installs it the next time the game starts (UPDATE on the main menu restarts it now; on Android, UPDATE opens the new version's download in the browser, to install from there). It also looks for changes in the mod packs you installed: MOD PACKS shows them, to install or remove. Your settings, scores and mods stay. OFF: it never looks. | on / off |
 | Audio visualizer | Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it is, how thick the notes are, your hits and misses, and your health. | on / off |
 | Score text zoom on hit | The score line grows a little on each note you hit, as in Psych. | on / off |
 | Botplay text | BOTPLAY (or REPLAY) on screen while the game plays by itself. | on / off |
