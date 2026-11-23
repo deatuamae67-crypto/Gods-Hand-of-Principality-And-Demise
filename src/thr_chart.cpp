@@ -349,14 +349,17 @@ bool writeThrChart(const std::string& path, const Chart& c, std::string& err) {
     };
     std::vector<Sec> secs;
     const double endMs = std::max(c.lengthMs, c.tempo.empty() ? 0.0 : c.tempo.back().timeMs) + 1.0;  // the last change too
+    // One pass over the tempo map: `ti` is the first change after the
+    // section's start (a change within a millionth of a millisecond of it -
+    // rounding - is at it), so a change however close after a start still
+    // ends a section there.
+    constexpr double kSame = 1e-6;
+    size_t ti = 0;
     for (double t = 0; t <= endMs;) {
-        const double bpm = c.bpmAt(t + 0.01);
+        while (ti < c.tempo.size() && c.tempo[ti].timeMs <= t + kSame) ++ti;
+        const double bpm = ti ? c.tempo[ti - 1].bpm : c.tempo.empty() ? 120.0 : c.tempo.front().bpm;
         double len = 4 * 60000.0 / bpm;
-        for (const TempoPoint& tp : c.tempo)
-            if (tp.timeMs > t + 0.5 && tp.timeMs < t + len) {
-                len = tp.timeMs - t;
-                break;
-            }
+        if (ti < c.tempo.size() && c.tempo[ti].timeMs < t + len) len = c.tempo[ti].timeMs - t;
         secs.push_back({t, c.focusAt(t + 1) == 1, 0, len * bpm / 60000.0});
         t += len;
     }

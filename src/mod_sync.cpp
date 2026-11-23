@@ -50,8 +50,15 @@ bool writeAll(const fs::path& p, const std::string& text) {
         o << text;
         if (!o) return false;
     }
-    fs::remove(p, ec);
+    // One rename replaces it (the old text stays until then); only where
+    // the system cannot rename over a file is the old one removed first.
     fs::rename(tmp, p, ec);
+    if (ec) {
+        ec.clear();
+        fs::remove(p, ec);
+        ec.clear();
+        fs::rename(tmp, p, ec);
+    }
     return !ec;
 }
 
@@ -150,6 +157,7 @@ void pruneEmpty(const fs::path& root, fs::path from) {
 
 bool moveFile(const fs::path& from, const fs::path& to) {
     std::error_code ec;
+    if (!fs::exists(from, ec)) return false;  // nothing to move: `to` stays as it is
     fs::create_directories(to.parent_path(), ec);
     fs::remove(to, ec);
     fs::rename(from, to, ec);
@@ -180,10 +188,8 @@ bool safeName(const std::string& folder) {
            folder[0] != '.';
 }
 
-bool loadRecord(const std::string& modsDir, const std::string& folder, Record& r) {
-    if (!safeName(folder)) return false;
-    std::string text;
-    if (!readAll(recordPath(modsDir, folder), text)) return false;
+namespace {
+bool parseRecord(const std::string& text, const std::string& folder, Record& r) {
     const std::vector<std::string> ls = lines(text);
     if (ls.empty() || ls[0] != "GHMOD 1") return false;
     r = Record{};
@@ -201,6 +207,13 @@ bool loadRecord(const std::string& modsDir, const std::string& folder, Record& r
         }
     }
     return true;
+}
+}  // namespace
+
+bool loadRecord(const std::string& modsDir, const std::string& folder, Record& r) {
+    if (!safeName(folder)) return false;
+    std::string text;
+    return readAll(recordPath(modsDir, folder), text) && parseRecord(text, folder, r);
 }
 
 bool saveRecord(const std::string& modsDir, const Record& r) {
@@ -592,8 +605,16 @@ bool installZips(const std::string& modsDir, const std::vector<std::string>& zip
             o.close();
             if (!ok || !o) {
                 fs::remove(dst, ec);
-                if (hadOld) moveFile(bak, dst);
-                backedUp.erase(rel);
+                if (hadOld && !moveFile(bak, dst)) {
+                    // The old file could not go back: its copy stays with the
+                    // undo, and REMOVE CHANGES puts it back.
+                    if (!logged.count(rel)) {
+                        log += "restore\t" + rel + "\n";
+                        logged.insert(rel);
+                    }
+                } else {
+                    backedUp.erase(rel);
+                }
                 ++res.skipped;
                 failed.insert(rel);
                 continue;
@@ -625,11 +646,22 @@ bool installZips(const std::string& modsDir, const std::vector<std::string>& zip
     // and the zips' digests are forgotten: the next check compares the files
     // themselves, finds these, and offers the change again.
     if (!failed.empty()) {
+        // The zip a file left as it was belongs to: the one that brings it
+        // now, else its zip in the old record (by name: a whole pack numbers
+        // its zips anew), else - that zip gone from the pack - the first.
+        auto ownerOf = [&](const std::string& rel, const FileInfo& fi) {
+            const auto n = next.find(rel);
+            if (n != next.end()) return n->second.zip;
+            if (hadRecord && fi.zip >= 0 && size_t(fi.zip) < old.zips.size())
+                for (size_t i = 0; i < rec.zips.size(); ++i)
+                    if (rec.zips[i].name == old.zips[size_t(fi.zip)].name) return int(i);
+            return 0;
+        };
         for (const std::string& rel : failed) {
             const auto b = before.find(rel);
             if (b != before.end() && fs::exists(root / toPath(rel), ec)) {
                 FileInfo fi = b->second;
-                if (opt.wholePack || fi.zip < 0 || size_t(fi.zip) >= rec.zips.size()) fi.zip = 0;
+                fi.zip = ownerOf(rel, fi);
                 rec.files[rel] = fi;
             } else {
                 rec.files.erase(rel);
@@ -649,7 +681,7 @@ UndoInfo undoInfo(const std::string& modsDir, const std::string& folder) {
     UndoInfo u;
     if (!safeName(folder)) return u;
     std::string text;
-    if (!readAll(undoDir(modsDir, folder) / "undo.txt", text)) return u;
+    if (!readAll(undoDir(modsDir, folder) / "undo.txt", text) && !readAll(undoDir(modsDir, folder) / "undo.txt.tmp", text)) return u;
     const std::vector<std::string> ls = lines(text);
     if (ls.empty() || ls[0] != "GHUNDO 1") return u;
     u.exists = true;
@@ -665,11 +697,23 @@ bool undoChanges(const std::string& modsDir, const std::string& folder, std::str
     if (!safeName(folder)) return false;
     const fs::path undo = undoDir(modsDir, folder), root = toPath(withSlash(modsDir) + folder);
     std::string text;
-    if (!readAll(undo / "undo.txt", text)) {
+    if (!readAll(undo / "undo.txt", text) && !readAll(undo / "undo.txt.tmp", text)) {
         message = folder + ": there is no change to remove";
         return false;
     }
-    int restored = 0, removed = 0, failed = 0;
+    // The record from before the change: what a file put back has to be.
+    Record prior;
+    std::string priorText;
+    const bool havePrior = readAll(undo / "record.pack", priorText) && parseRecord(priorText, folder, prior);
+    auto isPutBack = [&](const std::string& rel, const fs::path& dst) {
+        std::error_code e;
+        if (!fs::is_regular_file(dst, e)) return false;
+        const auto it = havePrior ? prior.files.find(rel) : prior.files.end();
+        if (it == prior.files.end()) return true;  // not in the record: there is all that can be checked
+        uint32_t crc = 0;
+        return uint64_t(fs::file_size(dst, e)) == it->second.size && crcOfFile(dst, crc) && crc == it->second.crc;
+    };
+    int restored = 0, removed = 0, failed = 0, lost = 0;
     std::string left;  // what could not be done (a file in use), kept to try again
     for (const std::string& l : lines(text)) {
         const std::vector<std::string> f = splitChar(l, '\t');
@@ -692,36 +736,56 @@ bool undoChanges(const std::string& modsDir, const std::string& folder, std::str
             pruneEmpty(root, dst.parent_path());
         } else if (f[0] == "restore") {
             const fs::path bak = undo / "files" / toPath(f[1]);
+            std::error_code e2;
             if (moveFile(bak, dst)) {
                 ++restored;
-            } else {
-                std::error_code e2;
-                if (fs::exists(bak, e2)) {  // its copy is still there: try again later
-                    ++failed;
-                    left += l + "\n";
-                }
+            } else if (fs::exists(bak, e2)) {  // in use: its copy stays, to try again
+                ++failed;
+                left += l + "\n";
+            } else if (isPutBack(f[1], dst)) {  // put back already (an earlier try)
+                ++restored;
+            } else {  // its copy is gone and the file is not as it was
+                ++failed;
+                ++lost;
+                left += l + "\n";
             }
         }
     }
+    // The record from before the change goes back once every file has.
     std::error_code ec;
-    if (failed) {
-        // The copies of the files not put back, and the record they belong
-        // with, stay until REMOVE CHANGES can finish.
-        writeAll(undo / "undo.txt", left);
-    } else {
+    bool recordBack = false;
+    if (!failed) {
+        const fs::path rp = recordPath(modsDir, folder);
         if (fs::exists(undo / "record.pack", ec)) {
             fs::create_directories(toPath(recordsDir(modsDir)), ec);
-            fs::copy_file(undo / "record.pack", recordPath(modsDir, folder), fs::copy_options::overwrite_existing, ec);
+            ec.clear();
+            fs::copy_file(undo / "record.pack", rp, fs::copy_options::overwrite_existing, ec);
+            recordBack = !ec;
         } else {
-            fs::remove(recordPath(modsDir, folder), ec);
+            ec.clear();
+            fs::remove(rp, ec);
+            recordBack = !fs::exists(rp, ec);
         }
+    }
+    bool kept = true;
+    if (failed || !recordBack) {
+        // What could not be done, the copies of the files not put back and
+        // the record they belong with stay until REMOVE CHANGES can finish.
+        // (If even the shorter list cannot be written, the whole one stays:
+        // what was done is found done next time.)
+        kept = writeAll(undo / "undo.txt", left);
+    } else {
         fs::remove_all(undo, ec);
         pruneEmpty(toPath(withSlash(modsDir)), root);
     }
-    message = folder + (failed ? ": part of the last change was removed (" : ": the last change was removed (") + std::to_string(restored) +
-              (restored == 1 ? " file" : " files") + " put back, " + std::to_string(removed) + " removed" +
-              (failed ? ", " + std::to_string(failed) + " in use: try again" : "") + ")";
-    return failed == 0;
+    message = folder + (failed || !recordBack ? ": part of the last change was removed (" : ": the last change was removed (") +
+              std::to_string(restored) + (restored == 1 ? " file" : " files") + " put back, " + std::to_string(removed) + " removed";
+    if (failed > lost) message += ", " + std::to_string(failed - lost) + " in use: try again";
+    if (lost) message += ", " + std::to_string(lost) + " with their copies gone: install the pack again";
+    if (!failed && !recordBack) message += "; the pack's record could not be put back: try again";
+    if (!kept) message += "; the list of what is left could not be saved";
+    message += ")";
+    return failed == 0 && recordBack;
 }
 
 bool removeMod(const std::string& modsDir, const std::string& folder, std::string& message) {

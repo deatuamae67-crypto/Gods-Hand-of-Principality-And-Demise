@@ -1287,7 +1287,8 @@ bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::str
                     ",\"gfVersion\":" + esc(c.gf) + ",\"stage\":" + esc(c.stage) + ",\"needsVoices\":true";
     // One keyCount: the opponent's beside the player's (Leather) when the
     // sides differ, else the chart's (JSON keeps the first of two).
-    if (c.sideKeys[0] && c.sideKeys[1] && c.sideKeys[0] != c.sideKeys[1])
+    const bool leather = c.sideKeys[0] && c.sideKeys[1] && c.sideKeys[0] != c.sideKeys[1];
+    if (leather)
         j += ",\"keyCount\":" + std::to_string(c.sideKeys[0]) + ",\"playerKeyCount\":" + std::to_string(c.sideKeys[1]);
     else if (c.keys != 4)
         j += ",\"keyCount\":" + std::to_string(c.keys);
@@ -1334,7 +1335,19 @@ bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::str
         for (auto it = from; it < to; ++it) {
             const Note& n = *it;
             const int k = c.keysOf(n.side);
-            const int data = (n.side == 1) == sc.mustHit ? n.lane : n.lane + k;
+            int data = n.lane;
+            if ((n.side == 1) != sc.mustHit) {
+                if (leather) {
+                    // Leather reads the values under the focused side's key
+                    // count as that side's, and a note's lane as the value
+                    // modulo its own side's: the least value past the
+                    // focused side's keys that leaves this lane.
+                    const int kf = c.keysOf(sc.mustHit ? 1 : 0);
+                    data = kf + ((int(n.lane) - kf) % k + k) % k;
+                } else {
+                    data = n.lane + k;
+                }
+            }
             const std::string type = n.type < c.noteTypes.size() ? c.noteTypes[n.type] : std::string();
             const uint64_t times = c.countOf(n).sat64();
             for (uint64_t r = 0; r < times; ++r) b.add(n.time, data, n.length, type);
