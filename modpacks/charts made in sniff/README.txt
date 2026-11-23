@@ -49,8 +49,9 @@ Made with:
   godshand --convert amfoternost-GHN.ghn amfoternost-GHC.ghc   (and .ghb, .bin)
 
 Not as .thr: a .thr lists every note one by one, and 3.56 trillion notes
-would take terabytes. Not as .raid: God's Hand reads R-Slice's .raid charts
-but does not write them.
+would take terabytes. Not as .raid: R-Slice's events stack 65,535 notes at
+most, so this chart would be 55,725,072 events (God's Hand reads .raid but
+does not write it).
 
 
 Andromeda Galaxy - data/andromeda-galaxy (the omniverse, 0:36 to 2:05)
@@ -67,7 +68,8 @@ counting an equal share of the total (some one more than others, so that
 they add up exactly). Their tempo, 120 BPM, only places the beat lines.
 
 Only .ghn, .ghc and .ghb hold counts this large: FNC1 (.bin) keeps 64-bit
-counts, and .thr lists every note.
+counts, .raid stacks 65,535 notes an event at most, and .thr lists every
+note.
 
 Made with:
   godshand --max-notes andromeda-galaxy-GHN.ghn 36000 125000 120 "Andromeda Galaxy"
