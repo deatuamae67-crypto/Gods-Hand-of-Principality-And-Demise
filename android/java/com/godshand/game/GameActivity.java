@@ -44,6 +44,7 @@ import java.util.Set;
 public class GameActivity extends NativeActivity {
     private static final int PICK_ZIPS = 4201;
     private static final int PICK_FOLDER = 4202;
+    private static final int PICK_CHARTS = 4203;
 
     /** Files the Psych Engine interface uses (lower case), wherever they are in the folder. */
     private static final Set<String> PSYCH_FILES = new HashSet<>(Arrays.asList(
@@ -62,6 +63,8 @@ public class GameActivity extends NativeActivity {
     public static volatile int importState = 0;
     /** Zips copied into mods/ by the last import. */
     public static volatile int importCount = 0;
+    /** The files the last pickChartFiles copied into merge/, one a line. */
+    public static volatile String pickedFiles = "";
     /**
      * Command-line options for the game, from the intent that started it
      * (am start ... --es args "--autoplay builtin:x --render"): the emulator test.
@@ -128,6 +131,33 @@ public class GameActivity extends NativeActivity {
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
     }
 
+    /**
+     * The game updating itself: the system installer opens with the APK it
+     * downloaded into update/ (UpdateProvider lends it). The first time,
+     * Android 8+ asks the player to allow installing from the game: its
+     * settings page opens, and UPDATE is chosen again afterwards.
+     * Returns 1 when the installer opened, 2 when the settings page did, 0 if
+     * neither could. Called from the game thread.
+     */
+    public int installApk(String path) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                Intent s = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(s);
+                return 2;
+            }
+            Uri uri = Uri.parse("content://" + getPackageName() + ".update/" + Uri.encode(new File(path).getName()));
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            return 1;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     /** Called from the game thread: a box with the on-screen keyboard (Freeplay's search). */
     public void askText(final String title, final String initial) {
         textResult = "";
@@ -190,6 +220,69 @@ public class GameActivity extends NativeActivity {
         importState = 1;
         importCount = 0;
         runOnUiThread(new Picker(this));
+    }
+
+    /** Called from the game thread: JSON merging, the parts of a chart. */
+    public void pickChartFiles() {
+        importState = 1;
+        importCount = 0;
+        pickedFiles = "";
+        runOnUiThread(new ChartPicker(this));
+    }
+
+    private static final class ChartPicker implements Runnable {
+        private final GameActivity activity;
+
+        ChartPicker(GameActivity activity) {
+            this.activity = activity;
+        }
+
+        @Override
+        public void run() {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            try {
+                activity.startActivityForResult(i, PICK_CHARTS);
+            } catch (Exception e) {
+                importState = 4;
+            }
+        }
+    }
+
+    /** Copies the chosen chart parts into merge/, keeping their names. */
+    private static final class ChartCopier extends Thread {
+        private final GameActivity activity;
+        private final List<Uri> uris;
+
+        ChartCopier(GameActivity activity, List<Uri> uris) {
+            this.activity = activity;
+            this.uris = uris;
+        }
+
+        @Override
+        public void run() {
+            File base = activity.getExternalFilesDir(null);
+            if (base == null) base = activity.getFilesDir();
+            File dir = new File(base, "merge");
+            dir.mkdirs();
+            StringBuilder names = new StringBuilder();
+            int n = 0;
+            for (Uri u : uris) {
+                String name = activity.displayName(u);
+                if (name == null || name.isEmpty()) continue;
+                File out = new File(dir, name.replaceAll("[\\\\/:*?\"<>|]", "_"));
+                if (activity.copyTo(u, out)) {
+                    if (names.length() > 0) names.append('\n');
+                    names.append(out.getAbsolutePath());
+                    ++n;
+                }
+            }
+            pickedFiles = names.toString();
+            importCount = n;
+            importState = n > 0 ? 3 : 4;
+        }
     }
 
     /** Called from the game thread: Options, Psych Engine folder. */
@@ -333,7 +426,7 @@ public class GameActivity extends NativeActivity {
             }
             return;
         }
-        if (requestCode != PICK_ZIPS) return;
+        if (requestCode != PICK_ZIPS && requestCode != PICK_CHARTS) return;
         List<Uri> uris = new ArrayList<>();
         if (resultCode == RESULT_OK && data != null) {
             ClipData clip = data.getClipData();
@@ -348,7 +441,8 @@ public class GameActivity extends NativeActivity {
             return;
         }
         importState = 2;
-        new Copier(this, uris).start();
+        if (requestCode == PICK_CHARTS) new ChartCopier(this, uris).start();
+        else new Copier(this, uris).start();
     }
 
     private boolean copyTo(Uri uri, File out) {

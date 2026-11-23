@@ -33,6 +33,12 @@ bool readBinaryChart(const std::string& path, std::string& skeleton, StreamedNot
 // The JSON part only (song name, characters... for the song list).
 bool readBinarySkeleton(const std::string& path, std::string& skeleton);
 
+// A block of notes as .ghc keeps it before deflate - five columns of small
+// numbers (times as changes of the gap, in ns; sustains in us; noteData;
+// stacks; types) - and back. The bigit charts code the same columns.
+std::string ghcColumns(const StreamedNote* notes, size_t count);
+bool ghcFromColumns(const std::string& raw, StreamedNote* out, size_t count);
+
 // Any chart the game reads (Psych JSON, PulseForge...) to a .ghc file.
 struct ConvertStats {
     uint64_t inBytes = 0, outBytes = 0, notes = 0;

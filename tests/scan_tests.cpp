@@ -3,13 +3,17 @@
 
 // Finding songs in every mod layout (song_scan.cpp), PulseForge charts, audio
 // lengths and assets shared between mods.
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "chart.hpp"
@@ -19,8 +23,10 @@
 #include "miniz.h"
 #include "common.hpp"
 #include "flp_import.hpp"
+#include "json_merge.hpp"
 #include "scene.hpp"
 #include "song_scan.hpp"
+#include "thr_chart.hpp"
 
 using namespace gh;
 namespace fs = std::filesystem;
@@ -421,6 +427,98 @@ std::string makeFlp() {
     f += "FLdt";
     u32(uint32_t(ev.size()));
     return f + ev;
+}
+
+// A song arranged in FL Studio: a sampler channel (its file names it), a
+// synth the user renamed, and pattern 1 placed twice on the playlist - the
+// second clip cut to its ticks 96 to 288.
+std::string makeFlpSong(size_t clipSize) {
+    std::string ev;
+    auto word = [&](uint8_t id, uint16_t v) { ev += char(id); ev += char(v & 255); ev += char(v >> 8); };
+    auto dword = [&](uint8_t id, uint32_t v) {
+        ev += char(id);
+        for (int i = 0; i < 4; ++i) ev += char((v >> (8 * i)) & 255);
+    };
+    auto array = [&](uint8_t id, const std::string& data) {
+        ev += char(id);
+        size_t n = data.size();
+        do {
+            uint8_t c = uint8_t(n & 0x7F);
+            n >>= 7;
+            if (n) c |= 0x80;
+            ev += char(c);
+        } while (n);
+        ev += data;
+    };
+    auto utf16 = [](const std::string& a) {
+        std::string w;
+        for (char c : a) { w += c; w += char(0); }
+        return w + std::string(2, '\0');
+    };
+    auto le = [](uint32_t v, int n) {
+        std::string r;
+        for (int i = 0; i < n; ++i) r += char((v >> (8 * i)) & 255);
+        return r;
+    };
+    array(0xC7, clipSize == 60 ? "21.2.3.4004" : "20.8.4.2576");
+    dword(0x9C, 120000);
+    word(0x40, 0);
+    array(0xC4, utf16("C:\\Samples\\Kick 01.wav"));
+    word(0x40, 1);
+    array(0xC9, utf16("3x Osc"));
+    array(0xCB, utf16("Lead"));
+    word(0x41, 1);
+    std::string notes;
+    auto note = [&](uint32_t t, uint16_t ch, uint32_t pitch) {
+        std::string r(24, '\0');
+        r.replace(0, 4, le(t, 4));
+        r.replace(6, 2, le(ch, 2));
+        r.replace(8, 4, le(24, 4));
+        r.replace(12, 4, le(pitch, 4));
+        r[21] = char(100);
+        notes += r;
+    };
+    note(0, 0, 60);
+    note(96, 1, 72);
+    note(192, 0, 60);
+    note(288, 1, 74);
+    array(0xE0, notes);
+    std::string clips;
+    auto clip = [&](uint32_t pos, uint32_t len, float start) {
+        std::string c(clipSize, '\0');
+        c.replace(0, 4, le(pos, 4));
+        c.replace(4, 2, le(20480, 2));
+        c.replace(6, 2, le(20480 + 1, 2));
+        c.replace(8, 4, le(len, 4));
+        c.replace(12, 2, le(499, 2));
+        uint32_t bits;
+        std::memcpy(&bits, &start, 4);
+        c.replace(24, 4, le(bits, 4));
+        clips += c;
+    };
+    clip(0, 384, 0);
+    clip(768, 192, 96);
+    array(0xE9, clips);
+    word(0x40, 2);  // after the mixer: not a channel
+    std::string f = "FLhd";
+    f += le(6, 4) + std::string("\0\0\x02\0", 4) + char(96) + char(0) + "FLdt" + le(uint32_t(ev.size()), 4);
+    return f + ev;
+}
+
+void testFlpSong() {
+    for (size_t size : {size_t(32), size_t(60)}) {
+        FlpProject p;
+        std::string err;
+        SCHECK(readFlp(makeFlpSong(size), p, err));
+        SCHECK(p.channels.size() >= 2 && p.channels[0].name == "Kick 01.wav" && p.channels[1].name == "Lead");
+        SCHECK(p.playlist.size() == 2 && p.playlist[1].position == 768 && p.playlist[1].start == 96 && p.playlist[1].pattern == 1);
+        const std::vector<FlpNote> kick = flpSongNotes(p, 0), lead = flpSongNotes(p, 1);
+        // Kick: 0 and 192 (first clip), 192 -> 768 + 96 (second clip, from tick 96).
+        SCHECK(kick.size() == 3 && kick[0].time == 0 && kick[1].time == 192 && kick[2].time == 864);
+        // Lead: 96 and 288 (first clip), 96 -> 768 (second); 288 is past the second clip.
+        SCHECK(lead.size() == 3 && lead[0].time == 96 && lead[1].time == 288 && lead[2].time == 768 && lead[2].pitch == 72);
+        SCHECK(flpSongNotes(p, -1).size() == 6);
+    }
 }
 
 void testFlStudio() {
@@ -949,6 +1047,37 @@ void testGhnCharts() {
         // Saved again over itself (Windows does not rename over a file).
         SCHECK(writeGhn(str(base / "ab.ghn"), ab, err) && !fs::exists(base / "ab.ghn.part"));
     }
+    // A count chart to .ghc: each counted note listed, the same chart played.
+    {
+        Chart small;
+        small.keys = 4;
+        small.title = "Small";
+        small.events = {{100, "Hey!", "BF", "0.6"}};
+        auto addS = [&](double t, int lane, int side, const Count& k) {
+            Note n;
+            n.time = t;
+            n.lane = uint16_t(lane);
+            n.side = uint8_t(side);
+            small.notes.push_back(n);
+            small.setCount(small.notes.back(), k);
+        };
+        addS(0, 0, 1, Count(3));
+        addS(500, 2, 0, Count(1));
+        addS(2500, 3, 1, Count(600));  // more than one .ghc stack (255)
+        small.finalize(120);
+        SCHECK(writeGhn(str(base / "small.ghn"), small, err));
+        SCHECK(convertChartFile(str(base / "small.ghn"), str(base / "small.ghc")) == 0);
+        Chart g;
+        SCHECK(loadChartFile(str(base / "small.ghc"), "Normal", g, err) && g.playerNotes == Count(603) && g.opponentNotes == Count(1) &&
+               g.events.size() == 1);
+        bool sameNotes = g.notes.size() == small.notes.size();
+        for (size_t i = 0; sameNotes && i < g.notes.size(); ++i)
+            sameNotes = std::fabs(g.notes[i].time - small.notes[i].time) < 1e-6 && g.notes[i].lane == small.notes[i].lane &&
+                        g.notes[i].side == small.notes[i].side && g.countOf(g.notes[i]) == small.countOf(small.notes[i]);
+        SCHECK(sameNotes);
+        // Counts no .ghc can list: refused, nothing written.
+        SCHECK(convertChartFile(str(base / "song.ghn"), str(base / "huge.ghc")) != 0 && !fs::exists(base / "huge.ghc"));
+    }
     // Extra keys off: a 7-key count chart plays with 4 keys, as its JSON would.
     {
         Chart k7;
@@ -1002,14 +1131,298 @@ void testSongIcons() {
     fs::remove_all(base);
 }
 
+// JSON merging (issue #36): split charts back into one.
+namespace mergetest {
+// A legacy Psych chart: `secs` sections of 4 beats at 120 BPM (2 s each),
+// mustHitSection alternating from true; notes as [time, data, length].
+std::string chart(const std::string& song, int secs, const std::vector<std::vector<std::string>>& notesBySection,
+                  const std::string& events = "[]") {
+    std::string o = "{\"song\":{\"song\":\"" + song + "\",\"bpm\":120,\"speed\":2.5,\"player1\":\"bf\",\"player2\":\"dad\",\"notes\":[";
+    for (int i = 0; i < secs; ++i) {
+        o += std::string(i ? "," : "") + "{\"sectionNotes\":[";
+        if (size_t(i) < notesBySection.size())
+            for (size_t k = 0; k < notesBySection[size_t(i)].size(); ++k) o += std::string(k ? "," : "") + notesBySection[size_t(i)][k];
+        o += "],\"mustHitSection\":" + std::string(i % 2 == 0 ? "true" : "false") + ",\"sectionBeats\":4}";
+    }
+    return o + "],\"events\":" + events + "}}";
+}
+// What a chart plays: every note as (time, side, lane, count).
+std::vector<std::tuple<double, int, int, uint64_t>> plays(const std::string& path) {
+    Chart c;
+    std::string err;
+    std::vector<std::tuple<double, int, int, uint64_t>> v;
+    if (!loadChartFile(path, "Normal", c, err)) return v;
+    for (const Note& n : c.notes) v.emplace_back(n.time, n.side, n.lane, c.countOf(n).sat64());
+    std::sort(v.begin(), v.end());
+    return v;
+}
+}  // namespace mergetest
+
+// AutoChart's charts (.ghac): marked, read back marked, never written in
+// another engine's format, and listed as their song's difficulties.
+void testAutoChartFiles() {
+    const fs::path base = fs::temp_directory_path() / "gh_ghac";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    Chart c;
+    c.autoCharted = true;
+    c.title = "Loose";
+    for (int i = 0; i < 16; ++i) {
+        Note n;
+        n.time = 500.0 + i * 250.0;
+        n.lane = uint16_t(i % 4);
+        n.side = uint8_t(i % 2);
+        c.notes.push_back(n);
+    }
+    c.finalize(120);
+    // A song of loose audio in songs/, with an AutoChart saved beside it.
+    putWav(base / "songs" / "Loose.wav", 6);
+    SCHECK(writeGhn(str(base / "songs" / "Loose-autochart-hard.ghac"), c, err));
+    SCHECK(isAutoChartFile(str(base / "songs" / "Loose-autochart-hard.ghac")) && isCountChart(str(base / "songs" / "Loose-autochart-hard.ghac")));
+    Chart back;
+    SCHECK(loadChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), "Hard", back, err) && back.autoCharted && back.notes.size() == 16);
+    // Never another engine's format.
+    SCHECK(!writeFnc1(str(base / "x.bin"), back, err) && !fs::exists(base / "x.bin"));
+    SCHECK(convertChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), str(base / "x.ghc")) != 0 && !fs::exists(base / "x.ghc"));
+    SCHECK(convertChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), str(base / "x.ghn")) != 0 && !fs::exists(base / "x.ghn"));
+    SCHECK(convertChartFile(str(base / "songs" / "Loose-autochart-hard.ghac"), str(base / "y.ghac")) == 0 && isAutoChartFile(str(base / "y.ghac")));
+    // A real chart is not saved as .ghac, and a .ghn is not marked.
+    Chart real = back;
+    real.autoCharted = false;
+    SCHECK(writeGhn(str(base / "real.ghn"), real, err) && !isAutoChartFile(str(base / "real.ghn")));
+    SCHECK(convertChartFile(str(base / "real.ghn"), str(base / "real.ghac")) != 0 && !fs::exists(base / "real.ghac"));
+    // The scan: the loose song keeps its AutoChart difficulties and gains the saved one.
+    SongScan sc;
+    scanSongsDir(str(base / "songs"), sc);
+    const SongEntry* e = byTitle(sc, "Loose");
+    SCHECK(e && e->autoChart && e->diffs.size() == 4 && e->diffs.back() == "AutoChart Hard" && endsWith(e->chartPaths.back(), ".ghac"));
+    // In a song's folder, a saved AutoChart is one of its charts.
+    put(base / "songs" / "Folder" / "folder.json", R"({"song":{"song":"Folder","bpm":120,"notes":[{"sectionNotes":[[0,0,0]],"mustHitSection":true}]}})");
+    putWav(base / "songs" / "Folder" / "Inst.wav", 4);
+    SCHECK(writeGhn(str(base / "songs" / "Folder" / "folder-autochart-easy.ghac"), c, err));
+    SongScan sc2;
+    scanSongsDir(str(base / "songs"), sc2);
+    const SongEntry* f = byTitle(sc2, "Folder");
+    SCHECK(f && std::find(f->diffs.begin(), f->diffs.end(), "AutoChart Easy") != f->diffs.end());
+    fs::remove_all(base);
+}
+
+// The threadripper engine's .thr, as strand reads it.
+namespace thrw {
+std::string le(uint64_t v, int n) {
+    std::string r;
+    for (int i = 0; i < n; ++i) r += char((v >> (8 * i)) & 255);
+    return r;
+}
+std::string f64(double d) {
+    uint64_t v;
+    std::memcpy(&v, &d, 8);
+    return le(v, 8);
+}
+std::string f32(float f) {
+    uint32_t v;
+    std::memcpy(&v, &f, 4);
+    return le(v, 4);
+}
+// A Zstandard frame holding `data` as it is (one raw block).
+std::string zstdRaw(const std::string& data) {
+    std::string z = le(0xFD2FB528u, 4);
+    z += char(0xA0);  // single segment, 4-byte content size
+    z += le(data.size(), 4);
+    z += le(1u | uint32_t(data.size()) << 3, 3);  // the last block, raw
+    return z + data;
+}
+// A zip of the given entries, each stored with its method's bytes as given.
+struct Entry {
+    std::string name, data;
+    uint16_t method;
+    size_t size;  // uncompressed
+    uint32_t crc;
+};
+std::string zip(const std::vector<Entry>& es) {
+    std::string out, cd;
+    for (const Entry& e : es) {
+        const size_t at = out.size();
+        out += le(0x04034b50u, 4) + le(20, 2) + le(0, 2) + le(e.method, 2) + le(0, 4) + le(e.crc, 4) + le(e.data.size(), 4) +
+               le(e.size, 4) + le(e.name.size(), 2) + le(0, 2) + e.name + e.data;
+        cd += le(0x02014b50u, 4) + le(20, 2) + le(20, 2) + le(0, 2) + le(e.method, 2) + le(0, 4) + le(e.crc, 4) + le(e.data.size(), 4) +
+              le(e.size, 4) + le(e.name.size(), 2) + le(0, 2) + le(0, 2) + le(0, 2) + le(0, 2) + le(0, 4) + le(at, 4) + e.name;
+    }
+    const size_t cdAt = out.size();
+    out += cd + le(0x06054b50u, 4) + le(0, 2) + le(0, 2) + le(es.size(), 2) + le(es.size(), 2) + le(cd.size(), 4) + le(cdAt, 4) + le(0, 2);
+    return out;
+}
+Entry entry(const std::string& name, const std::string& data, uint16_t method) {
+    const uint32_t crc = uint32_t(mz_crc32(MZ_CRC32_INIT, reinterpret_cast<const unsigned char*>(data.data()), data.size()));
+    return {name, method == 93 ? zstdRaw(data) : data, method, data.size(), crc};
+}
+}  // namespace thrw
+
+void testThrCharts() {
+    using namespace thrw;
+    const fs::path base = fs::temp_directory_path() / "gh_thr";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Written and read back: sides, lanes, holds, types (a Hurt Note is a mine), stacks listed.
+    Chart c;
+    c.title = "Thr Song";
+    c.keys = 4;
+    c.speed = 2.7;
+    c.events = {{250, "Hey!", "BF", "0.6"}};
+    auto add = [&](double t, int lane, int side, float len, const std::string& type, uint32_t count) {
+        Note n;
+        n.time = t;
+        n.lane = uint16_t(lane);
+        n.side = uint8_t(side);
+        n.length = len;
+        if (!type.empty()) applyNoteType(type, n, c);
+        c.notes.push_back(n);
+        c.setCount(c.notes.back(), Count(count));
+    };
+    add(0, 0, 1, 0, "", 1);
+    add(500, 3, 0, 750, "", 1);
+    add(1000, 2, 1, 0, "Hurt Note", 1);
+    add(1500, 1, 1, 0, "", 70000);  // past one filter block of 65,536
+    c.finalize(150);
+    SCHECK(writeThrChart(str(base / "a.thr"), c, err) && isThrChart(str(base / "a.thr")) && countChartKind(str(base / "a.thr")) == CountChartKind::Thr);
+    Chart r;
+    SCHECK(loadChartFile(str(base / "a.thr"), "Normal", r, err) && r.title == "Thr Song" && r.keys == 4 && std::fabs(r.speed - 2.7) < 1e-9);
+    SCHECK(r.notes.size() == 4 && r.playerNotes == Count(70002) && r.opponentNotes == Count(1) && r.events.size() == 1 &&
+           std::fabs(r.bpmAt(0) - 150) < 1e-9);
+    if (r.notes.size() == 4) {
+        SCHECK(r.notes[1].side == 0 && r.notes[1].lane == 3 && std::fabs(r.notes[1].length - 750) < 1e-3);
+        SCHECK(r.notes[2].kind == kMine && r.noteTypes[r.notes[2].type] == "Hurt Note");
+        SCHECK(r.notes[3].lane == 1 && r.countOf(r.notes[3]) == Count(70000));
+    }
+    // strand's own layout, packed with Zstandard: noteData under keyCount on
+    // the side of the section's mustHit (not psych_v1).
+    auto sectionRec = [](uint64_t notes, bool must) {
+        std::string p(40, '\0');
+        p.replace(8, 4, le(notes & 0xFFFFFFFFu, 4));
+        p.replace(12, 4, le(must ? 1 : 0, 4));
+        p.replace(32, 4, le(notes >> 32, 4));
+        return p;
+    };
+    std::string sections = le(0x534C4254u, 4) + std::string(4, '\0') + f64(2) + std::string(16, '\0');
+    sections += sectionRec(2, true) + sectionRec(2, false);
+    auto noteRec = [](double t, int data) { return f64(t) + f32(0) + le(uint32_t(data), 2) + le(0, 2); };
+    std::string notes = le(0x4E4C4254u, 4) + std::string(4, '\0') + f64(4) + std::string(16, '\0');
+    notes += noteRec(0, 0) + noteRec(100, 5) + noteRec(2000, 2) + noteRec(2100, 7);
+    const std::string meta = R"({"song":{"song":"Strand","bpm":120,"speed":1.5},"tbl":{"parts":[{"prefix":"","keyCount":4,"types":[null],"notesPerFile":4194304,"noteFiles":1,"noteCount":4}]}})";
+    put(base / "b.thr", zip({entry("strand-metadata.json", meta, 93), entry("notes/sections.bin", sections, 93),
+                             entry("notes/notes-00000.bin", notes, 0)}));
+    Chart b;
+    SCHECK(loadChartFile(str(base / "b.thr"), "Normal", b, err) && b.notes.size() == 4 && b.title == "Strand");
+    if (b.notes.size() == 4) {
+        SCHECK(b.notes[0].side == 1 && b.notes[0].lane == 0 && b.notes[1].side == 0 && b.notes[1].lane == 1);  // mustHit: 0-3 the player's
+        SCHECK(b.notes[2].side == 0 && b.notes[2].lane == 2 && b.notes[3].side == 1 && b.notes[3].lane == 3);  // not: the opponent's
+    }
+    // LZMA (method 14) is named in the error.
+    put(base / "c.thr", zip({entry("x-metadata.json", meta, 0), entry("notes/sections.bin", sections, 14), entry("notes/notes-00000.bin", notes, 0)}));
+    Chart lz;
+    SCHECK(!loadChartFile(str(base / "c.thr"), "Normal", lz, err) && err.find("LZMA") != std::string::npos);
+    // In a song's folder, and through the converter.
+    put(base / "songs" / "Thr Song" / "Inst.ogg", "x");
+    fs::copy_file(base / "a.thr", base / "songs" / "Thr Song" / "thr song.thr");
+    SongScan sc;
+    scanSongsDir(str(base / "songs"), sc);
+    const SongEntry* e = byTitle(sc, "Thr Song");
+    SCHECK(e && !e->autoChart && e->chartPaths.size() == 1 && endsWith(e->chartPaths[0], ".thr"));
+    SCHECK(convertChartFile(str(base / "a.thr"), str(base / "a.ghn")) == 0 && convertChartFile(str(base / "a.ghn"), str(base / "back.thr")) == 0);
+    Chart back;
+    SCHECK(loadChartFile(str(base / "back.thr"), "Normal", back, err) && back.playerNotes == r.playerNotes && back.notes.size() == r.notes.size());
+    fs::remove_all(base);
+}
+
+void testJsonMerge() {
+    using namespace mergetest;
+    const fs::path base = fs::temp_directory_path() / "gh_merge";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    std::string err;
+    // Overlay: the same 4 sections in both parts, the first part's notes in
+    // sections 0-1, the second's in 2-3 (one stacked three times).
+    put(base / "song-2.json", chart("song", 4, {{}, {}, {"[4000,0,0]", "[4500,5,0]"}, {"[6000,1,0]", "[6000,1,0]", "[6000,1,0]"}},
+                                    "[[100,[[\"Hey!\",\"BF\",\"0.6\"]]]]"));
+    put(base / "song-1.json", chart("song", 4, {{"[0,0,0]", "[500,4,250]"}, {"[2000,2,0]"}}, "[[100,[[\"Hey!\",\"BF\",\"0.6\"]]]]"));
+    put(base / "song-10.json", chart("song", 4, {}));
+    std::vector<MergePart> parts = {inspectPart(str(base / "song-10.json")), inspectPart(str(base / "song-2.json")),
+                                    inspectPart(str(base / "song-1.json"))};
+    orderParts(parts);
+    SCHECK(parts[0].name == "song-1.json" && parts[1].name == "song-2.json" && parts[2].name == "song-10.json");
+    SCHECK(parts[0].ok && parts[0].sections == 4 && parts[0].notes == 3 && parts[1].notes == 5 && parts[0].spanMs == 8000);
+    SCHECK(detectMergeMode(parts) == MergeMode::Overlay);
+    MergeResult res;
+    SCHECK(mergeChartParts({str(base / "song-1.json"), str(base / "song-2.json")}, str(base / "merged.json"), MergeMode::Auto, res, err));
+    SCHECK(res.mode == MergeMode::Overlay && res.notes == 8 && res.sections == 4 && res.events == 1);
+    auto both = plays(str(base / "song-1.json"));
+    for (const auto& n : plays(str(base / "song-2.json"))) both.push_back(n);
+    std::sort(both.begin(), both.end());
+    SCHECK(plays(str(base / "merged.json")) == both);  // every note where and whose it was
+    Chart m;
+    SCHECK(loadChartFile(str(base / "merged.json"), "Normal", m, err) && m.events.size() == 1 && m.playerNotes + m.opponentNotes == Count(8));
+    // Append, the second part's notes from 0 again: they go after the first part.
+    put(base / "a-1.json", chart("a", 2, {{"[0,0,0]"}, {"[2500,1,0]"}}));
+    put(base / "a-2.json", chart("a", 3, {{"[0,2,0]"}, {}, {"[4100,3,0]"}}, "[[50,[[\"Hey!\",\"GF\",\"\"]]]]"));
+    std::vector<MergePart> ap = {inspectPart(str(base / "a-1.json")), inspectPart(str(base / "a-2.json"))};
+    SCHECK(detectMergeMode(ap) == MergeMode::Append);
+    SCHECK(mergeChartParts({str(base / "a-1.json"), str(base / "a-2.json")}, str(base / "a.json"), MergeMode::Auto, res, err));
+    SCHECK(res.mode == MergeMode::Append && res.sections == 5 && res.notes == 4);
+    auto ap2 = plays(str(base / "a.json"));
+    SCHECK(ap2.size() == 4 && std::get<0>(ap2[2]) == 4000 && std::get<0>(ap2[3]) == 8100);  // moved by 4 s (2 sections)
+    Chart a;
+    SCHECK(loadChartFile(str(base / "a.json"), "Normal", a, err) && a.events.size() == 1 && a.events[0].timeMs == 4050);
+    // Append, slices of a song that kept their times: nothing moves.
+    put(base / "b-1.json", chart("b", 2, {{"[0,0,0]"}, {"[2500,1,0]"}}));
+    put(base / "b-2.json", chart("b", 2, {{"[4000,2,0]"}, {"[6100,3,0]"}}));
+    std::vector<MergePart> bp = {inspectPart(str(base / "b-1.json")), inspectPart(str(base / "b-2.json"))};
+    SCHECK(detectMergeMode(bp) == MergeMode::Append);
+    SCHECK(mergeChartParts({str(base / "b-1.json"), str(base / "b-2.json")}, str(base / "b.json"), MergeMode::Auto, res, err));
+    auto bp2 = plays(str(base / "b.json"));
+    SCHECK(bp2.size() == 4 && std::get<0>(bp2[2]) == 4000 && std::get<0>(bp2[3]) == 6100 && std::get<1>(bp2[3]) == 0);
+    // Psych 1.0 charts keep their shape.
+    put(base / "v1-1.json", "{\"song\":\"v\",\"format\":\"psych_v1\",\"bpm\":100,\"notes\":[{\"sectionNotes\":[[0,0,0]],\"mustHitSection\":true,\"sectionBeats\":4}],\"events\":[]}");
+    put(base / "v1-2.json", "{\"song\":\"v\",\"format\":\"psych_v1\",\"bpm\":100,\"notes\":[{\"sectionNotes\":[[1200,5,0]],\"mustHitSection\":true,\"sectionBeats\":4}],\"events\":[]}");
+    SCHECK(mergeChartParts({str(base / "v1-1.json"), str(base / "v1-2.json")}, str(base / "v1.json"), MergeMode::Overlay, res, err));
+    {
+        std::ifstream in(base / "v1.json");
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        SCHECK(text.rfind("{\"song\":\"v\",\"format\":\"psych_v1\"", 0) == 0 && res.notes == 2);
+    }
+    // Parts whose notes wait on disk merge the same.
+    g_mergeSpillAbove = 1;
+    SCHECK(mergeChartParts({str(base / "song-1.json"), str(base / "song-2.json")}, str(base / "spilled.json"), MergeMode::Auto, res, err));
+    SCHECK(res.notes == 8 && plays(str(base / "spilled.json")) == both);
+    SCHECK(mergeChartParts({str(base / "a-1.json"), str(base / "a-2.json")}, str(base / "spilled.json"), MergeMode::Auto, res, err));
+    SCHECK(res.notes == 4 && plays(str(base / "spilled.json")) == ap2);
+    g_mergeSpillAbove = size_t(1) << 20;
+    SCHECK(!fs::exists(base / "spilled.json.notes0.tmp") && !fs::exists(base / "spilled.json.part"));
+    // Cancelled: no file is left.
+    std::atomic<bool> stop{true};
+    SCHECK(!mergeChartParts({str(base / "song-1.json"), str(base / "song-2.json")}, str(base / "c.json"), MergeMode::Auto, res, err,
+                            nullptr, &stop) &&
+           !fs::exists(base / "c.json") && !fs::exists(base / "c.json.part"));
+    // A part that is not a chart is named in the error.
+    put(base / "bad-3.json", "{\"song\":{\"song\":\"x\"}}");
+    SCHECK(!mergeChartParts({str(base / "song-1.json"), str(base / "bad-3.json")}, str(base / "x.json"), MergeMode::Auto, res, err) &&
+           err.find("bad-3") != std::string::npos);
+    fs::remove_all(base);
+}
+
 void runScanTests() {
     testBinaryChartsInMods();
     testFlStudio();
+    testFlpSong();
     testPulseForgeCharts();
     testSongIcons();
     testIutkCharts();
     testRaidCharts();
     testGhnCharts();
+    testJsonMerge();
+    testThrCharts();
+    testAutoChartFiles();
     testAudioSeconds();
     testModLayouts();
 }

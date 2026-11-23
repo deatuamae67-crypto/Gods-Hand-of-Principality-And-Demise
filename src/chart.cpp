@@ -191,7 +191,7 @@ void Chart::mirror() {
 
 // --------------------------------------------------------------- parsing ---
 
-static void applyNoteType(std::string_view type, Note& n, Chart& c) {
+void applyNoteType(std::string_view type, Note& n, Chart& c) {
     if (type.empty()) return;
     n.type = c.typeIndex(std::string(type));
     std::string t = toLower(type);

@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "raymath.h"
 #include "rlgl.h"
 
 namespace gh::gfx {
@@ -18,6 +19,7 @@ namespace {
 Font g_title{}, g_ui{};
 bool g_titleOwned = false, g_uiOwned = false;
 Texture2D g_glow{};
+constexpr Rectangle kGlowSrc{0, 0, 128, 128};  // the glow's part of g_glow
 Texture2D g_note[5]{};
 Texture2D g_receptor[2]{};  // arrow, diamond
 
@@ -108,19 +110,30 @@ void init(const std::string& baseDir) {
     g_title = loadFont(baseDir + "assets/fonts/LuckiestGuy-Regular.ttf", 112, g_titleOwned);
     g_ui = loadFont(baseDir + "assets/fonts/Rajdhani-Bold.ttf", 72, g_uiOwned);
 
-    Image gi = GenImageColor(128, 128, BLANK);
+    // The soft glow (a white disc fading out, 128 x 128, kGlowSrc) and, at
+    // the other end of the same texture, a white square raylib draws its
+    // shapes from. Shapes and glows (stars, sparks, lights, the characters'
+    // eyes) then share one texture and go to the graphics card together,
+    // instead of one draw call each time one follows the other (a sky of
+    // stars was hundreds a frame). Nothing looks different: raylib's shapes
+    // take the same white, and the glow's mipmaps never reach the square.
+    // Mods' sprites, makeGraphic ones too, are drawn from their own textures.
+    Image gi = GenImageColor(256, 128, BLANK);
     Color* px = static_cast<Color*>(gi.data);
     for (int y = 0; y < 128; ++y)
         for (int x = 0; x < 128; ++x) {
             const float dx = (x + 0.5f) / 64.0f - 1.0f, dy = (y + 0.5f) / 64.0f - 1.0f;
             const float r = std::sqrt(dx * dx + dy * dy);
             const float a = saturate(1.0f - r);
-            px[y * 128 + x] = Color{255, 255, 255, (unsigned char)(a * a * 255.0f)};
+            px[y * 256 + x] = Color{255, 255, 255, (unsigned char)(a * a * 255.0f)};
         }
+    for (int y = 0; y < 64; ++y)
+        for (int x = 192; x < 256; ++x) px[y * 256 + x] = WHITE;
     g_glow = LoadTextureFromImage(gi);
     UnloadImage(gi);
     GenTextureMipmaps(&g_glow);
     SetTextureFilter(g_glow, TEXTURE_FILTER_TRILINEAR);
+    SetShapesTexture(g_glow, {224, 32, 1, 1});  // the middle of the white square (192-255, 0-63)
 
     for (int d = 0; d < 5; ++d) g_note[d] = makeGlyph(d == kCenter ? 1 : 0, dirColor(d), false, 384);
     g_receptor[0] = makeGlyph(0, WHITE, true, 384);
@@ -130,6 +143,7 @@ void init(const std::string& baseDir) {
 void shutdown() {
     if (g_titleOwned) UnloadFont(g_title);
     if (g_uiOwned) UnloadFont(g_ui);
+    SetShapesTexture(Texture2D{}, Rectangle{});  // back to raylib's own white pixel
     UnloadTexture(g_glow);
     for (auto& t : g_note) UnloadTexture(t);
     for (auto& t : g_receptor) UnloadTexture(t);
@@ -160,6 +174,27 @@ void endFrameTarget() {
 bool frameTargetActive() { return g_frameRt.id != 0; }
 
 void beginTexture(const RenderTexture2D& rt) { BeginTextureMode(rt); }
+
+namespace {
+// A picture's alpha to 1, its colours untouched (rgb = dst, alpha = 1).
+void makeOpaque(const RenderTexture2D& rt) {
+    BeginTextureMode(rt);
+    rlSetBlendFactorsSeparate(RL_ZERO, RL_ONE, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    DrawRectangle(0, 0, rt.texture.width, rt.texture.height, BLACK);
+    EndBlendMode();
+    EndTextureMode();
+}
+}  // namespace
+
+void blendFrame(const RenderTexture2D& into, const RenderTexture2D& from, float a) {
+    const Texture2D& t = from.texture;
+    makeOpaque(from);  // so a is the weight everywhere
+    BeginTextureMode(into);
+    DrawTextureRec(t, {0, 0, float(t.width), -float(t.height)}, {0, 0}, Fade(WHITE, std::clamp(a, 0.0f, 1.0f)));
+    EndTextureMode();
+    makeOpaque(into);  // blending lowered its alpha (a^2 + (1 - a)): back to 1
+}
 
 void endTexture() {
     EndTextureMode();
@@ -291,6 +326,21 @@ Camera2D screenCamera(float zoom, Vector2 focus, float rotationDeg) {
 }
 
 void beginCanvas(float zoom, Vector2 focus, float rotationDeg) { BeginMode2D(screenCamera(zoom, focus, rotationDeg)); }
+
+Rectangle visibleArea() {
+    // The corners of the picture (-1..1 once projected) taken back through
+    // the camera and the projection to the coordinates being drawn in.
+    const Matrix inv = MatrixInvert(MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection()));
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    for (int k = 0; k < 4; ++k) {
+        const Vector3 p = Vector3Transform({k & 1 ? 1.0f : -1.0f, k & 2 ? 1.0f : -1.0f, 0}, inv);
+        if (k == 0 || p.x < x0) x0 = p.x;
+        if (k == 0 || p.x > x1) x1 = p.x;
+        if (k == 0 || p.y < y0) y0 = p.y;
+        if (k == 0 || p.y > y1) y1 = p.y;
+    }
+    return {x0, y0, x1 - x0, y1 - y0};
+}
 void endCanvas() { EndMode2D(); }
 
 void drawLetterbox() {
@@ -392,28 +442,174 @@ void quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color col) {
     tri(a, b, c, col);
     tri(a, c, d, col);
 }
-void convex(const std::vector<Vector2>& pts, Color col) {
-    for (size_t i = 1; i + 1 < pts.size(); ++i) tri(pts[0], pts[i], pts[i + 1], col);
+
+namespace {
+float cross3(Vector2 a, Vector2 b, Vector2 c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); }
+// Quads on the shapes texture, as raylib draws its shapes; each quad is two
+// triangles (q0 q1 q2, q0 q2 q3), each turned the way raylib does not cull
+// (what tri does to one triangle).
+struct QuadPen {
+    explicit QuadPen(Color col) {
+        const Texture2D tex = GetShapesTexture();
+        const Rectangle r = GetShapesTextureRectangle();
+        rlSetTexture(tex.id);
+        rlBegin(RL_QUADS);
+        rlColor4ub(col.r, col.g, col.b, col.a);
+        rlNormal3f(0, 0, 1);
+        rlTexCoord2f((r.x + r.width * 0.5f) / float(tex.width), (r.y + r.height * 0.5f) / float(tex.height));
+    }
+    ~QuadPen() {
+        rlEnd();
+        rlSetTexture(0);
+    }
+    void put(Vector2 a, Vector2 b, Vector2 c, Vector2 d) const {
+        rlVertex2f(a.x, a.y);
+        rlVertex2f(b.x, b.y);
+        rlVertex2f(c.x, c.y);
+        rlVertex2f(d.x, d.y);
+    }
+    void tri(Vector2 a, Vector2 b, Vector2 c) const {
+        if (cross3(a, b, c) > 0) std::swap(b, c);
+        put(a, b, c, c);
+    }
+};
+}  // namespace
+
+// A fan from the first point, two triangles per quad (half the vertices of
+// one triangle at a time, all in one go), each turned to face the screen.
+void convex(const Vector2* p, size_t n, Color col) {
+    if (n < 3) return;
+    const QuadPen pen(col);
+    for (size_t i = 1; i + 1 < n; i += 2) {
+        if (i + 2 >= n) {
+            pen.tri(p[0], p[i], p[i + 1]);
+            break;
+        }
+        const float c1 = cross3(p[0], p[i], p[i + 1]), c2 = cross3(p[0], p[i + 1], p[i + 2]);
+        if (c1 <= 0 && c2 <= 0) {
+            pen.put(p[0], p[i], p[i + 1], p[i + 2]);
+        } else if (c1 >= 0 && c2 >= 0) {
+            pen.put(p[0], p[i + 2], p[i + 1], p[i]);
+        } else {  // not convex there: each on its own
+            pen.tri(p[0], p[i], p[i + 1]);
+            pen.tri(p[0], p[i + 1], p[i + 2]);
+        }
+    }
+}
+void convex(const std::vector<Vector2>& pts, Color col) { convex(pts.data(), pts.size(), col); }
+void thickLine(Vector2 a, Vector2 b, float thick, Color col) {
+    const float dx = b.x - a.x, dy = b.y - a.y, len = std::sqrt(dx * dx + dy * dy);
+    if (len <= 0 || thick <= 0) return;
+    const float s = thick / (2 * len);
+    const Vector2 r{-s * dy, s * dx};
+    const Vector2 q0{a.x - r.x, a.y - r.y}, q1{a.x + r.x, a.y + r.y}, q2{b.x + r.x, b.y + r.y}, q3{b.x - r.x, b.y - r.y};
+    const QuadPen pen(col);
+    if (cross3(q0, q1, q2) > 0) pen.put(q0, q3, q2, q1);
+    else pen.put(q0, q1, q2, q3);
 }
 void capsule(Vector2 a, Vector2 b, float r, Color col) {
-    DrawLineEx(a, b, r * 2.0f, col);
-    DrawCircleV(a, r, col);
-    DrawCircleV(b, r, col);
+    thickLine(a, b, r * 2.0f, col);
+    disc(a, r, col);
+    disc(b, r, col);
+}
+
+namespace {
+// Sides for a circle of radius r: each side strays at most 0.25 pixels from
+// the true circle (raylib's own rule for circles, at half its error), from 8
+// to raylib's 36.
+int sidesFor(float r) {
+    if (r <= 2.0f) return 8;
+    const float k = 1.0f - 0.25f / r;
+    const float th = std::acos(std::clamp(2.0f * k * k - 1.0f, -1.0f, 1.0f));
+    if (th <= 0.0f) return 36;
+    return std::clamp(int(std::ceil(6.2831853f / th)), 8, 36);
+}
+}  // namespace
+
+void disc(Vector2 c, float r, Color col) {
+    if (r <= 0) return;
+    DrawCircleSector(c, r, 0, 360, sidesFor(r), col);
+}
+
+void circleGradient(Vector2 c, float r, Color inner, Color outer) {
+    if (r <= 0) return;
+    const int n = sidesFor(r);
+    const Texture2D tex = GetShapesTexture();
+    const Rectangle sr = GetShapesTextureRectangle();
+    rlSetTexture(tex.id);
+    rlBegin(RL_QUADS);
+    rlNormal3f(0, 0, 1);
+    rlTexCoord2f((sr.x + sr.width * 0.5f) / float(tex.width), (sr.y + sr.height * 0.5f) / float(tex.height));
+    // Two sides per quad (centre, then three points of the edge), turned as
+    // raylib's own circles are.
+    auto edge = [&](int i) {
+        const float a = 6.2831853f * float(i) / float(n);
+        return Vector2{c.x + std::sin(a) * r, c.y + std::cos(a) * r};
+    };
+    for (int i = 0; i < n; i += 2) {
+        const Vector2 p0 = edge(i), p1 = edge(i + 1), p2 = edge(std::min(i + 2, n));
+        rlColor4ub(inner.r, inner.g, inner.b, inner.a);
+        rlVertex2f(c.x, c.y);
+        rlColor4ub(outer.r, outer.g, outer.b, outer.a);
+        rlVertex2f(p0.x, p0.y);
+        rlVertex2f(p1.x, p1.y);
+        rlVertex2f(p2.x, p2.y);
+    }
+    rlEnd();
+    rlSetTexture(0);
+}
+
+void splineCatmullRom(const Vector2* p, int n, float thick, Color col) {
+    if (n < 4 || thick <= 0) return;
+    const float half = thick * 0.5f;
+    disc(p[1], half, col);
+    {
+        const QuadPen pen(col);
+        // The left and right edges where the last piece ended.
+        Vector2 prevL{}, prevR{};
+        bool started = false;
+        for (int i = 0; i + 3 < n; ++i) {
+            const Vector2 p1 = p[i], p2 = p[i + 1], p3 = p[i + 2], p4 = p[i + 3];
+            const float len = std::hypot(p3.x - p2.x, p3.y - p2.y);
+            const int div = std::clamp(int(len / 3.0f) + 2, 2, 24);  // pieces of about 3 pixels
+            Vector2 cur = p2;
+            for (int j = 1; j <= div; ++j) {
+                const float t = float(j) / float(div), t2 = t * t, t3 = t2 * t;
+                const float q0 = -t3 + 2.0f * t2 - t, q1 = 3.0f * t3 - 5.0f * t2 + 2.0f;
+                const float q2 = -3.0f * t3 + 4.0f * t2 + t, q3 = t3 - t2;
+                const Vector2 nxt{0.5f * (p1.x * q0 + p2.x * q1 + p3.x * q2 + p4.x * q3),
+                                  0.5f * (p1.y * q0 + p2.y * q1 + p3.y * q2 + p4.y * q3)};
+                const float dx = nxt.x - cur.x, dy = nxt.y - cur.y, d = std::sqrt(dx * dx + dy * dy);
+                if (d <= 0) continue;
+                const float s = half / d;
+                if (!started) {
+                    prevL = {cur.x + dy * s, cur.y - dx * s};
+                    prevR = {cur.x - dy * s, cur.y + dx * s};
+                    started = true;
+                }
+                const Vector2 L{nxt.x + dy * s, nxt.y - dx * s}, R{nxt.x - dy * s, nxt.y + dx * s};
+                if (cross3(prevL, prevR, R) > 0) pen.put(prevL, L, R, prevR);
+                else pen.put(prevL, prevR, R, L);
+                prevL = L;
+                prevR = R;
+                cur = nxt;
+            }
+        }
+    }
+    disc(p[n - 2], half, col);
 }
 // raylib 5.5's DrawRectangleGradientEx takes its corners as top-left,
 // bottom-left, bottom-right, top-right (whatever its parameters are called):
 // its own DrawRectangleGradientV passes (top, bottom, bottom, top).
 void gradientRect(Rectangle r, Color top, Color bottom) { DrawRectangleGradientEx(r, top, bottom, bottom, top); }
 
-Texture2D& glowTexture() { return g_glow; }
-
 void glow(Vector2 c, float radius, Color col) {
     BeginBlendMode(BLEND_ADDITIVE);
-    DrawTexturePro(g_glow, {0, 0, 128, 128}, {c.x, c.y, radius * 2, radius * 2}, {radius, radius}, 0, col);
+    DrawTexturePro(g_glow, kGlowSrc, {c.x, c.y, radius * 2, radius * 2}, {radius, radius}, 0, col);
     EndBlendMode();
 }
 void softCircle(Vector2 c, float radius, Color col) {
-    DrawTexturePro(g_glow, {0, 0, 128, 128}, {c.x, c.y, radius * 2, radius * 2}, {radius, radius}, 0, col);
+    DrawTexturePro(g_glow, kGlowSrc, {c.x, c.y, radius * 2, radius * 2}, {radius, radius}, 0, col);
 }
 
 namespace {
@@ -562,7 +758,7 @@ void Particles::draw(bool additive) const {
         const float t = saturate(p.life / p.maxLife);
         if (p.kind == 0) {
             const float s = p.size * (0.5f + 0.5f * t);
-            DrawTexturePro(g_glow, {0, 0, 128, 128}, {p.p.x, p.p.y, s * 2, s * 2}, {s, s}, 0, fade(p.c, t));
+            DrawTexturePro(g_glow, kGlowSrc, {p.p.x, p.p.y, s * 2, s * 2}, {s, s}, 0, fade(p.c, t));
         } else if (p.kind == 1) {
             const float len = std::sqrt(p.v.x * p.v.x + p.v.y * p.v.y) * 0.04f + 2.0f;
             const float inv = 1.0f / std::max(1e-3f, std::sqrt(p.v.x * p.v.x + p.v.y * p.v.y));

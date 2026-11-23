@@ -166,16 +166,28 @@ Prepared Library::prepare(const SongEntry& e, const std::string& diff, bool mirr
             }
         }
         if (!p.inst) { p.error = "cannot decode " + e.inst; return p; }
-        if (!chartFile.empty()) {
-            if (!override()) return p;
+        // A difficulty AutoChart saved (.ghac): read, not made again.
+        std::string saved;
+        for (size_t i = 0; i < e.diffs.size() && i < e.chartPaths.size(); ++i)
+            if (e.diffs[i] == diff && !e.chartPaths[i].empty() && !forceAutoChart) saved = e.chartPaths[i];
+        if (!chartFile.empty() || !saved.empty()) {
+            std::string err;
+            if (!loadChartFile(chartFile.empty() ? saved : chartFile, diff, p.chart, err, {}, 0, extraKeys)) {
+                p.error = err;
+                return p;
+            }
+            if (p.chart.title.empty()) p.chart.title = e.title;
+            p.chart.difficulty = diff;
         } else {
             AutoChartInfo info;
-            if (!autoChart(p.inst->data.data(), p.inst->frames(), p.inst->channels, Mixer::kRate, d, p.chart, &info)) {
+            const auto model = autoChartModel();  // trained on the mods' charts, when Options allow it
+            if (!autoChart(p.inst->data.data(), p.inst->frames(), p.inst->channels, Mixer::kRate, d, p.chart, &info, model.get())) {
                 p.error = "AutoChart found no rhythm in this audio";
                 return p;
             }
             p.chart.title = e.title;
             p.chart.difficulty = diff;
+            p.chart.autoCharted = true;  // the shame watermark (issue #36)
         }
     } else {
         size_t idx = 0;

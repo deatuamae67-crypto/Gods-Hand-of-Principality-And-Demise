@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodsHand VERSION 2.1.0 LANGUAGES C CXX)
+project(GodsHand VERSION 2.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +29,7 @@ include(FetchContent)
 
 # The complete source package ships every library in third_party/: use those
 # copies instead of downloading (the game then builds without internet).
-foreach(dep IN ITEMS lua miniz pl_mpeg raylib)
+foreach(dep IN ITEMS lua miniz pl_mpeg raylib zstd)
   string(TOUPPER ${dep} dep_upper)
   if(NOT FETCHCONTENT_SOURCE_DIR_${dep_upper} AND IS_DIRECTORY ${CMAKE_SOURCE_DIR}/third_party/${dep})
     set(FETCHCONTENT_SOURCE_DIR_${dep_upper} ${CMAKE_SOURCE_DIR}/third_party/${dep})
@@ -80,6 +80,29 @@ else()
   target_compile_options(gh_miniz PRIVATE -w)
 endif()
 
+# ---- zstd (reading .thr charts packed with Zstandard) ------------------------------
+# Only its decompressor, in portable C. Set FETCHCONTENT_SOURCE_DIR_ZSTD to use a
+# local checkout.
+FetchContent_Declare(zstd
+  GIT_REPOSITORY https://github.com/facebook/zstd.git
+  GIT_TAG v1.5.6
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR do-not-add)  # we compile the decompressor's sources ourselves
+FetchContent_MakeAvailable(zstd)
+add_library(gh_zstd STATIC
+  ${zstd_SOURCE_DIR}/lib/common/debug.c ${zstd_SOURCE_DIR}/lib/common/entropy_common.c
+  ${zstd_SOURCE_DIR}/lib/common/error_private.c ${zstd_SOURCE_DIR}/lib/common/fse_decompress.c
+  ${zstd_SOURCE_DIR}/lib/common/xxhash.c ${zstd_SOURCE_DIR}/lib/common/zstd_common.c
+  ${zstd_SOURCE_DIR}/lib/decompress/huf_decompress.c ${zstd_SOURCE_DIR}/lib/decompress/zstd_ddict.c
+  ${zstd_SOURCE_DIR}/lib/decompress/zstd_decompress.c ${zstd_SOURCE_DIR}/lib/decompress/zstd_decompress_block.c)
+target_include_directories(gh_zstd PUBLIC ${zstd_SOURCE_DIR}/lib)
+target_compile_definitions(gh_zstd PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0 ZSTD_MULTITHREAD=0)
+if(MSVC)
+  target_compile_options(gh_zstd PRIVATE /W0)
+else()
+  target_compile_options(gh_zstd PRIVATE -w)
+endif()
+
 # ---- pl_mpeg (MPEG-1 video for cutscenes) -----------------------------------------
 # Set FETCHCONTENT_SOURCE_DIR_PL_MPEG to use a local checkout.
 FetchContent_Declare(pl_mpeg
@@ -94,6 +117,7 @@ add_library(gh_core STATIC
   src/chart.cpp
   src/chart_stream.cpp
   src/chart_binary.cpp
+  src/bigit_chart.cpp
   src/basegame.cpp
   src/builtin_events.cpp
   src/shader_glsl.cpp
@@ -103,6 +127,8 @@ add_library(gh_core STATIC
   src/session.cpp
   src/count.cpp
   src/count_charts.cpp
+  src/json_merge.cpp
+  src/thr_chart.cpp
   src/synth.cpp
   src/composer.cpp
   src/psych.cpp
@@ -112,6 +138,9 @@ add_library(gh_core STATIC
   src/lua_host.cpp
   src/replay.cpp
   src/mod_install.cpp
+  src/mod_sync.cpp
+  src/sha256.cpp
+  src/updater.cpp
   src/autochart.cpp
   src/note_raster.cpp
   src/frame_pacer.cpp
@@ -138,7 +167,7 @@ elseif(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCH
   target_compile_definitions(gh_core PRIVATE GH_ARM_ASM=1)
   message(STATUS "Note renderer: ARM64 assembly")
 endif()
-target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz)
+target_link_libraries(gh_core PUBLIC Threads::Threads gh_lua gh_miniz gh_zstd)
 if(MSVC)
   target_compile_options(gh_core PRIVATE /W3 /utf-8)
 else()
@@ -146,7 +175,8 @@ else()
 endif()
 
 if(GH_BUILD_TESTS)
-  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/raster_tests.cpp tests/pacer_tests.cpp)
+  add_executable(gh_tests tests/tests.cpp tests/psych_tests.cpp tests/scan_tests.cpp tests/update_tests.cpp tests/raster_tests.cpp
+                 tests/pacer_tests.cpp)
   target_link_libraries(gh_tests PRIVATE gh_core)
   enable_testing()
   add_test(NAME core COMMAND gh_tests)
@@ -245,6 +275,32 @@ if(GH_BUILD_GAME)
     file(WRITE ${gh_raudio} "${gh_src}")
     message(STATUS "Patched raylib's raudio.c: the audio device stops before it closes")
   endif()
+  # Textures clamp at their edges instead of repeating (raylib's default):
+  # drawn with smoothing, a picture's edge otherwise picks up the colours of
+  # its opposite edge - a thin line of the wrong colour along the left and
+  # right sides of note atlases and of the camera layers (issue #36, seen on
+  # phones, where the scale makes it show). Nothing in the game tiles a
+  # texture by repeating it. Applied once, in raylib's own source.
+  set(gh_rlgl ${raylib_SOURCE_DIR}/src/rlgl.h)
+  file(READ ${gh_rlgl} gh_src)
+  if(NOT gh_src MATCHES "GhClampByDefault")
+    set(gh_wrap_s "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);       // Set texture to repeat on x-axis")
+    set(gh_wrap_t "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);       // Set texture to repeat on y-axis")
+    string(FIND "${gh_src}" "${gh_wrap_s}" gh_at1)
+    string(FIND "${gh_src}" "${gh_wrap_t}" gh_at2)
+    if(gh_at1 EQUAL -1 OR gh_at2 EQUAL -1)
+      message(FATAL_ERROR "Could not patch ${gh_rlgl} (raylib 5.5 expected)")
+    endif()
+    string(REPLACE "${gh_wrap_s}" "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);  // GhClampByDefault (God's Hand)" gh_src "${gh_src}")
+    string(REPLACE "${gh_wrap_t}" "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);  // GhClampByDefault (God's Hand)" gh_src "${gh_src}")
+    string(REGEX MATCHALL "GhClampByDefault" gh_found "${gh_src}")
+    list(LENGTH gh_found gh_count)
+    if(NOT gh_count EQUAL 4)  # both branches of rlLoadTexture, S and T
+      message(FATAL_ERROR "Could not patch ${gh_rlgl}: ${gh_count} of 4 places (raylib 5.5 expected)")
+    endif()
+    file(WRITE ${gh_rlgl} "${gh_src}")
+    message(STATUS "Patched raylib's rlgl.h: textures clamp at their edges")
+  endif()
   if(ANDROID)
     # Android: make raylib follow the window when it changes size (see
     # cmake/raylib_android_resize.c). Applied once, in raylib's own source.
@@ -294,7 +350,12 @@ if(GH_BUILD_GAME)
     src/state_editor.cpp
     src/state_editors.cpp
     src/state_modpacks.cpp
+    src/state_json_merge.cpp
+    src/state_autochart.cpp
+    src/autochart_train.cpp
     src/process.cpp
+    src/net.cpp
+    src/updater_job.cpp
     src/render_mode.cpp
     src/platform.cpp
     src/folder_picker.cpp
@@ -367,7 +428,7 @@ if(GH_BUILD_GAME)
     target_link_libraries(godshand PRIVATE ${CMAKE_DL_LIBS})  # the FPS counter asks NVIDIA's library, when there is one
   endif()
   if(WIN32)
-    target_link_libraries(godshand PRIVATE shell32 ole32 opengl32 advapi32)  # the folder dialog; the processor's name (psapi and pdh are looked up)
+    target_link_libraries(godshand PRIVATE shell32 ole32 comdlg32 opengl32 advapi32 urlmon wininet)  # the folder and file dialogs; the processor's name (psapi and pdh are looked up); downloads without curl
   endif()
 
   # Runtime layout next to the executable: assets/, songs/, mods/
@@ -377,20 +438,23 @@ if(GH_BUILD_GAME)
       COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/songs $<TARGET_FILE_DIR:godshand>/songs
       COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:godshand>/mods)
 
-    install(TARGETS godshand RUNTIME DESTINATION .)
-    install(DIRECTORY assets songs DESTINATION .)
-    install(FILES README.md LICENSE DESTINATION .)
-    install(DIRECTORY licenses DESTINATION .)  # third-party license texts (Apache 2.0)
+    # The game's own files (the release packages: cmake --install --component game);
+    # raylib's library and headers for programmers stay out.
+    install(TARGETS godshand RUNTIME DESTINATION . COMPONENT game)
+    install(DIRECTORY assets songs DESTINATION . COMPONENT game)
+    install(FILES README.md LICENSE DESTINATION . COMPONENT game)
+    install(DIRECTORY licenses DESTINATION . COMPONENT game)  # third-party license texts (Apache 2.0)
   endif()
 endif()
 
 # Streamed song audio is tested with raylib's decoders when raylib is built.
 if(GH_BUILD_TESTS AND TARGET raylib)
   target_sources(gh_tests PRIVATE tests/audio_tests.cpp src/audio.cpp src/audio_decode.cpp src/platform.cpp src/folder_picker.cpp
-                 src/render_mode.cpp src/process.cpp src/sysinfo.cpp src/settings.cpp)
+                 src/render_mode.cpp src/process.cpp src/net.cpp src/updater_job.cpp src/sysinfo.cpp src/settings.cpp
+                 src/autochart_train.cpp)
   target_link_libraries(gh_tests PRIVATE raylib)
   if(WIN32)
-    target_link_libraries(gh_tests PRIVATE shell32 ole32 advapi32)  # platform.cpp's folder dialog; sysinfo.cpp's registry reads
+    target_link_libraries(gh_tests PRIVATE shell32 ole32 comdlg32 advapi32 urlmon wininet)  # platform.cpp's folder and file dialogs; sysinfo.cpp's registry reads; net.cpp
   endif()
   if(APPLE)
     target_link_libraries(gh_tests PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreFoundation")  # sysinfo.cpp

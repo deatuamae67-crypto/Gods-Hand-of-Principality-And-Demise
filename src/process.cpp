@@ -3,9 +3,11 @@
 
 #include "process.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -20,8 +22,12 @@
 #include <sys/wait.h>  // no ffmpeg to run on Android (and posix_spawn needs API 28)
 #else
 #include <csignal>
+#include <cstring>
 #include <fcntl.h>
 #include <spawn.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
@@ -215,6 +221,60 @@ bool openWithSystem(const std::string& path) {
 #endif
     std::thread([opener, path] { runProcess(opener, {path}); }).detach();
     return true;
+#endif
+}
+
+bool relaunch(const std::string& exe, const std::vector<std::string>& args) {
+#if defined(_WIN32)
+    std::wstring cmd = L"\"" + toPath(exe).wstring() + L"\"";
+    for (size_t i = 1; i < args.size(); ++i) cmd += L" \"" + toPath(args[i]).wstring() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    const std::wstring dir = toPath(exe).parent_path().wstring();
+    if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.empty() ? nullptr : dir.c_str(), &si, &pi))
+        return false;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return true;
+#elif defined(__ANDROID__)
+    (void)exe;
+    (void)args;
+    return false;
+#else
+    std::vector<std::string> store = args;
+    if (store.empty()) store.push_back(exe);
+    std::vector<char*> argv;
+    for (std::string& a : store) argv.push_back(a.data());
+    argv.push_back(nullptr);
+    std::fflush(nullptr);  // what this process printed, before it is replaced
+    execv(exe.c_str(), argv.data());
+    return false;  // execv only comes back when it failed
+#endif
+}
+
+std::string currentExePath() {
+#if defined(_WIN32)
+    std::vector<wchar_t> buf(32768);
+    const DWORD n = GetModuleFileNameW(nullptr, buf.data(), DWORD(buf.size()));
+    if (n == 0 || n >= buf.size()) return "";
+    const auto u = fs::path(std::wstring(buf.data(), n)).u8string();
+    return std::string(u.begin(), u.end());
+#elif defined(__ANDROID__)
+    return "";
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string s(size, '\0');
+    if (_NSGetExecutablePath(s.data(), &size) != 0) return "";
+    s.resize(std::strlen(s.c_str()));
+    return s;
+#else
+    char buf[4096];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    return n > 0 ? std::string(buf, size_t(n)) : "";
 #endif
 }
 

@@ -265,6 +265,25 @@ void takeTouchEvents(std::vector<TouchEvent>& out) {
 
 void log(const std::string& s) { logInfo(s); }
 
+int installApk(const std::string& path) {
+    Jni j;
+    if (!j.env) return 0;
+    jclass cls = activityClass(j.env);
+    if (!cls) return 0;
+    jmethodID m = j.env->GetMethodID(cls, "installApk", "(Ljava/lang/String;)I");
+    int r = 0;
+    if (m) {
+        jstring jp = j.env->NewStringUTF(path.c_str());
+        r = j.env->CallIntMethod(GetAndroidApp()->activity->clazz, m, jp);
+        std::string err;
+        if (j.failed(err, "installer")) r = 0;
+        j.env->DeleteLocalRef(jp);
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    return r;
+}
+
 bool pickModZips() {
     Jni j;
     if (!j.env) return false;
@@ -280,6 +299,34 @@ bool pickModZips() {
     j.env->ExceptionClear();
     j.env->DeleteLocalRef(cls);
     return ok;
+}
+
+std::vector<std::string> pickFiles(const std::string&, const std::string&) {
+    Jni j;
+    if (!j.env) return {};
+    jclass cls = activityClass(j.env);
+    if (!cls) return {};
+    if (jmethodID m = j.env->GetMethodID(cls, "pickChartFiles", "()V")) {
+        j.env->CallVoidMethod(GetAndroidApp()->activity->clazz, m);
+        std::string err;
+        j.failed(err, "file picker");
+    }
+    j.env->ExceptionClear();
+    j.env->DeleteLocalRef(cls);
+    return {};
+}
+
+std::vector<std::string> pickedFiles() {
+    std::vector<std::string> out;
+    const std::string all = staticString("pickedFiles");
+    size_t b = 0;
+    while (b < all.size()) {
+        size_t e = all.find('\n', b);
+        if (e == std::string::npos) e = all.size();
+        if (e > b) out.push_back(all.substr(b, e - b));
+        b = e + 1;
+    }
+    return out;
 }
 
 std::string pickFolder(const std::string&) {
@@ -369,7 +416,6 @@ void prepareDataDir(const std::string& base) {
     if (!app || !app->activity || !app->activity->assetManager) return;
     copyAssetDir(app->activity->assetManager, "assets/fonts", base + "assets/fonts/");
     copyAssetDir(app->activity->assetManager, "songs", base + "songs/");
-    copyAssetDir(app->activity->assetManager, "assets/videos", base + "assets/videos/");  // the engine's intro
 }
 
 void setVsync(bool on) {
@@ -449,7 +495,7 @@ std::string displayPath(const std::string& path) {
     return path;
 }
 
-bool download(const std::string& url, const std::string& dest, std::string& err) {
+bool download(const std::string& url, const std::string& dest, std::string& err, const std::string& range) {
     Jni j;
     JNIEnv* env = j.env;
     if (!env) { err = "no Java environment"; return false; }
@@ -473,6 +519,9 @@ bool download(const std::string& url, const std::string& dest, std::string& err)
         env->CallVoidMethod(conn, env->GetMethodID(connCls, "setInstanceFollowRedirects", "(Z)V"), JNI_TRUE);
         env->CallVoidMethod(conn, env->GetMethodID(connCls, "setRequestProperty", "(Ljava/lang/String;Ljava/lang/String;)V"),
                             env->NewStringUTF("User-Agent"), env->NewStringUTF("GodsHand"));
+        if (!range.empty())
+            env->CallVoidMethod(conn, env->GetMethodID(connCls, "setRequestProperty", "(Ljava/lang/String;Ljava/lang/String;)V"),
+                                env->NewStringUTF("Range"), env->NewStringUTF(("bytes=" + range).c_str()));
         if (j.failed(err, "request setup")) break;
         const jint code = env->CallIntMethod(conn, env->GetMethodID(connCls, "getResponseCode", "()I"));
         if (j.failed(err, "no response")) break;
@@ -554,12 +603,15 @@ bool inBackground() { return false; }
 bool takeResumed() { return false; }
 void rememberVolume(float) {}
 std::string displayPath(const std::string& path) { return path; }
-bool download(const std::string&, const std::string&, std::string& err) {
+bool download(const std::string&, const std::string&, std::string& err, const std::string&) {
     err = "not available on this platform";
     return false;
 }
 bool pickModZips() { return false; }
+int installApk(const std::string&) { return 0; }
 std::string pickFolder(const std::string& title) { return pickFolderNative(title); }
+std::vector<std::string> pickFiles(const std::string& title, const std::string& pattern) { return pickFilesNative(title, pattern); }
+std::vector<std::string> pickedFiles() { return {}; }
 Import importStatus(int* count) {
     if (count) *count = 0;
     return Import::Idle;

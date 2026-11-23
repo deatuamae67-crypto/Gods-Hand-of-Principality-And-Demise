@@ -4,6 +4,8 @@
 // The duel: game flow, input, judgement events, classic visuals and the HUD.
 // Psych-mode scene and scripting live in play_psych.cpp.
 #include "state_play.hpp"
+
+#include "autochart.hpp"
 #include "psych_menus.hpp"
 #include "psych_ui.hpp"
 
@@ -113,6 +115,7 @@ void PlayState::enter() {
     const std::string diff = req_.diff, chartFile = req_.chartFile;
     const bool extraKeys = app().settings.extraKeys;
     const bool autoChart = req_.autoChart;
+    useAutoChartModel(a.userDir + "autochart-model.txt", a.settings.autoChartTrained);
     if (req_.preview) mirror = false;
     job_ = std::async(std::launch::async, [copy, diff, mirror, extraKeys, autoChart, chartFile] {
         return app().library.prepare(copy, diff, mirror, extraKeys, autoChart, chartFile);
@@ -372,6 +375,7 @@ void PlayState::draw() {
     gfx::beginCanvas();
     drawVisualizer();
     drawWatermark();
+    drawShameWatermark();
     if (phase_ == Phase::Paused) drawPause();
     if (phase_ == Phase::Dead) drawDead();
     drawDebugLog();
@@ -1789,8 +1793,11 @@ void PlayState::drawHud() {
         if (hudShown("botplayTxt", &botAlpha) && (s.botplayText || !engineText) && !bo->text.text.empty()) {
             const Vector2 c{bo->x + bo->width * 0.5f, bo->y};
             turned({c.x, c.y + 16}, bo->angle, bo->scaleX, bo->scaleY, [&] {
+                // The game's own look: where its BOTPLAY goes (150, or 560 in
+                // downscroll: above the time bar, not on it), moved as the object is.
                 if (!(psychText && ui.text(bo->text.text, c.x, c.y, 32, fade(WHITE, botAlpha), 0, 1.25f)))
-                    gfx::text(FontId::Title, bo->text.text, c.x, c.y + 66, 40, fade(kGold, botAlpha), Align::Center, 2.0f);
+                    gfx::text(FontId::Title, bo->text.text, c.x, c.y + (s.downscroll ? 560.0f : 150.0f) - L.botY, 40,
+                              fade(kGold, botAlpha), Align::Center, 2.0f);
             });
         }
     } else if ((cfg_.botplay || replaying_) && s.botplayText) {
@@ -2076,6 +2083,20 @@ void PlayState::drawWatermark() {
     const PsychUi& ui = psychUi();
     if (psych_ && ui.active() && ui.font()) ui.text(text, 2, gfx::H - 22, 16, fade(WHITE, 0.85f), -1, 1.0f);
     else gfx::text(FontId::Ui, text, 8, gfx::H - 26, 18, fade(kIvory, 0.75f), Align::Left, 1.2f);
+}
+
+// Issue #36: an AutoChart chart says so in the middle of the screen, the
+// whole song, whatever the options: nobody charted it, and the people who
+// chart songs by hand get no credit from it.
+void PlayState::drawShameWatermark() {
+    if (!chart_.autoCharted) return;
+    const float cx = gfx::W * 0.5f, cy = gfx::H * 0.5f;
+    const Color red{255, 70, 70, 255};
+    gfx::text(FontId::Title, "AUTOCHARTED", cx, cy - 58, 84, fade(red, 0.34f), Align::Center, 3.0f);
+    gfx::text(FontId::Ui, "Nobody charted this song: a machine guessed it from the audio.", cx, cy + 34, 26, fade(WHITE, 0.4f),
+              Align::Center, 1.5f);
+    gfx::text(FontId::Ui, "Charters spend hours on every note. Play their charts.", cx, cy + 66, 22, fade(WHITE, 0.34f), Align::Center,
+              1.5f);
 }
 
 void PlayState::drawDead() {

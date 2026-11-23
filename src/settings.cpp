@@ -68,6 +68,7 @@ bool Settings::load(const std::string& path) {
         else if (k == "shaders") shaders = b;
         else if (k == "noteDetail") noteDetail = clampv(int(d), 0, 1);
         else if (k == "noteRenderer") noteRenderer = clampv(int(d), 0, 3);
+        else if (k == "motionBlur") motionBlur = clampv(int(d), 0, 3);
         else if (k == "luaNoteCallbacks") luaNoteCallbacks = b;
         else if (k == "renderMode") renderMode = b;
         else if (k == "renderSize") renderSize = clampv(int(d), 0, 3);
@@ -86,8 +87,11 @@ bool Settings::load(const std::string& path) {
         else if (k == "healthBarAlpha") healthBarAlpha = clampv(float(d), 0.0f, 1.0f);
         else if (k == "hideHud") hideHud = b;
         else if (k == "watermark") watermark = b;
-        else if (k == "introVideo") introVideo = b;
         else if (k == "menuBlur") menuBlur = b;
+        else if (k == "autoChart") autoChart = b;
+        else if (k == "autoChartTrained") autoChartTrained = b;
+        else if (k == "jsonMerging") jsonMerging = b;
+        else if (k == "autoUpdate") autoUpdate = b;
         else if (k == "visualizer") visualizer = b;
         else if (k == "scoreZoom") scoreZoom = b;
         else if (k == "botplayText") botplayText = b;
@@ -172,11 +176,11 @@ bool Settings::save(const std::string& path) const {
       << "\nnoteSplashes=" << noteSplashes << "\nflashing=" << flashing << "\ncamZoom=" << camZoom
       << "\nshowFps=" << showFps << "\nfpsMemory=" << fpsMemory << "\nfpsFrameTimes=" << fpsFrameTimes << "\nfpsUsage=" << fpsUsage
       << "\nfpsHardware=" << fpsHardware << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nlowLatency=" << lowLatency << "\naudioLatency=" << audioLatency << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
-      << "\nnoteDetail=" << noteDetail << "\nnoteRenderer=" << noteRenderer << "\nluaNoteCallbacks=" << luaNoteCallbacks
+      << "\nnoteDetail=" << noteDetail << "\nnoteRenderer=" << noteRenderer << "\nmotionBlur=" << motionBlur << "\nluaNoteCallbacks=" << luaNoteCallbacks
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups
-      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark << "\nintroVideo=" << introVideo << "\nmenuBlur=" << menuBlur << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
+      << "\ntimeBar=" << timeBar << "\nhealthBarAlpha=" << healthBarAlpha << "\nhideHud=" << hideHud << "\nwatermark=" << watermark  << "\nmenuBlur=" << menuBlur << "\nautoChart=" << autoChart << "\nautoChartTrained=" << autoChartTrained << "\njsonMerging=" << jsonMerging << "\nautoUpdate=" << autoUpdate << "\nvisualizer=" << visualizer << "\nscoreZoom=" << scoreZoom
       << "\nbotplayText=" << botplayText << "\ncomboStacking=" << comboStacking << "\nopponentNotes=" << opponentNotes
       << "\npauseMusic=" << pauseMusic << "\nsickWindow=" << sickWindow << "\ngoodWindow=" << goodWindow << "\nbadWindow=" << badWindow
       << "\nsafeFrames=" << safeFrames << "\nratingOffset=" << ratingOffset << "\nautoPause=" << autoPause << "\nnoReset=" << noReset

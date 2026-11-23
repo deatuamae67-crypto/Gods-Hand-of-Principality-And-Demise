@@ -13,7 +13,9 @@
 #include <thread>
 #include <vector>
 
+#include "bigit_chart.hpp"
 #include "chart_binary.hpp"
+#include "thr_chart.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
 #include "json.hpp"
@@ -729,7 +731,8 @@ std::string metaOf(const Chart& c) {
         const psych::ChartEvent& e = c.events[i];
         j += std::string(i ? "," : "") + "[" + num(e.timeMs) + "," + esc(e.name) + "," + esc(e.v1) + "," + esc(e.v2) + "]";
     }
-    j += "],\"playerNotes\":\"" + c.playerNotes.str() + "\",\"opponentNotes\":\"" + c.opponentNotes.str() + "\",\"rawNotes\":\"" +
+    j += std::string("],\"autochart\":") + (c.autoCharted ? "true" : "false");
+    j += ",\"playerNotes\":\"" + c.playerNotes.str() + "\",\"opponentNotes\":\"" + c.opponentNotes.str() + "\",\"rawNotes\":\"" +
          (c.rawNoteCount.isZero() ? (c.playerNotes + c.opponentNotes).str() : c.rawNoteCount.str()) + "\"}";
     return j;
 }
@@ -916,6 +919,7 @@ bool loadGhn(const std::string& path, Chart& out, std::string& err) {
     const json::Value& r = d.root();
     out = Chart();
     metaChart(d, r, out);
+    out.autoCharted = std::memcmp(h, "GHAC", 4) == 0 || json::Document::boolean(d.get(r, "autochart"), false);
     if (const json::Value* sk = d.get(r, "sideKeys"); sk && d.size(*sk) == 2)
         for (int s = 0; s < 2; ++s) out.sideKeys[s] = std::clamp(int(json::Document::num(&d.at(*sk, size_t(s)), 0)), 0, kMaxKeys);
     if (const json::Value* ev = d.get(r, "events"))
@@ -1126,7 +1130,7 @@ bool writeGhn(const std::string& path, const Chart& chart, std::string& err, Ghn
     std::string metaStored = deflateOf(meta, 9);
     const bool metaPacked = !metaStored.empty() && metaStored.size() < meta.size();
     if (!metaPacked) metaStored = meta;
-    std::string head = "GHN1";
+    std::string head = chart.autoCharted ? "GHAC" : "GHN1";
     put32(head, 1);
     put32(head, 0);
     put32(head, uint32_t(outs.size()));
@@ -1180,6 +1184,7 @@ namespace {
 }  // namespace
 
 CountChartKind countChartKind(const std::string& path) {
+    if (isThrChart(path)) return CountChartKind::Thr;
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return CountChartKind::None;
     unsigned char m[5] = {};
@@ -1187,8 +1192,17 @@ CountChartKind countChartKind(const std::string& path) {
     std::fclose(f);
     if (n == 5 && std::memcmp(m, "FNC1", 4) == 0 && m[4] >= 2 && m[4] <= 4) return CountChartKind::Fnc1;
     if (n >= 4 && std::memcmp(m, "RAID", 4) == 0) return CountChartKind::Raid;
-    if (n >= 4 && std::memcmp(m, "GHN1", 4) == 0) return CountChartKind::Ghn;
+    if (n >= 4 && (std::memcmp(m, "GHN1", 4) == 0 || std::memcmp(m, "GHAC", 4) == 0)) return CountChartKind::Ghn;
     return CountChartKind::None;
+}
+
+bool isAutoChartFile(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    unsigned char m[4] = {};
+    const bool ok = std::fread(m, 1, 4, f) == 4 && std::memcmp(m, "GHAC", 4) == 0;
+    std::fclose(f);
+    return ok;
 }
 
 bool loadCountChart(const std::string& path, Chart& out, std::string& err) {
@@ -1196,11 +1210,16 @@ bool loadCountChart(const std::string& path, Chart& out, std::string& err) {
         case CountChartKind::Fnc1: return loadFnc1(path, out, err);
         case CountChartKind::Raid: return loadRaid(path, out, err);
         case CountChartKind::Ghn: return loadGhn(path, out, err);
+        case CountChartKind::Thr: return loadThrChart(path, out, err);
         default: err = path + " is not a chart this game counts"; return false;
     }
 }
 
 bool writeFnc1(const std::string& path, const Chart& chart, std::string& err) {
+    if (chart.autoCharted) {
+        err = "an AutoChart chart plays only in God's Hand: it stays .ghac";
+        return false;
+    }
     // Cells by time, then lane (as the converter sorts them).
     struct Cell {
         int32_t time;
@@ -1243,13 +1262,134 @@ bool writeFnc1(const std::string& path, const Chart& chart, std::string& err) {
     return true;
 }
 
+// A chart as God's Hand's binary chart (.ghc): a Psych chart's JSON
+// without its notes, and the notes, each counted note listed (a .ghc stacks
+// up to 255 notes on one), so up to 2^31 notes in all.
+namespace {
+// A chart as the JSON part and the listed notes a .ghc or .ghb keeps.
+bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::string& err, uint64_t* notesOut) {
+    using ghnfmt::esc;
+    using ghnfmt::num;
+    const Count total = c.playerNotes + c.opponentNotes;
+    if (!total.fits64() || total.w[0] > (uint64_t(1) << 31)) {
+        err = "a .ghc or .ghb lists its notes, and this chart counts " + total.grouped() + ": keep it as .ghn";
+        return false;
+    }
+    if (c.autoCharted) {
+        err = "an AutoChart chart plays only in God's Hand: it stays .ghac";
+        return false;
+    }
+    sn = StreamedNotes{};
+    StreamedNotesBuilder b(sn);
+    const double bpm0 = c.tempo.empty() ? 120.0 : c.tempo.front().bpm;
+    j = "{\"song\":{\"song\":" + esc(c.title) + ",\"bpm\":" + num(bpm0) + ",\"speed\":" + num(c.speed) +
+                    ",\"player1\":" + esc(c.player.empty() ? "bf" : c.player) + ",\"player2\":" + esc(c.opponent.empty() ? "dad" : c.opponent) +
+                    ",\"gfVersion\":" + esc(c.gf) + ",\"stage\":" + esc(c.stage) + ",\"needsVoices\":true";
+    if (c.keys != 4) j += ",\"keyCount\":" + std::to_string(c.keys);
+    if (c.sideKeys[0] && c.sideKeys[1] && c.sideKeys[0] != c.sideKeys[1])
+        j += ",\"keyCount\":" + std::to_string(c.sideKeys[0]) + ",\"playerKeyCount\":" + std::to_string(c.sideKeys[1]);
+    j += ",\"notes\":[";
+    // Sections: the chart's own, else four beats each over the whole chart.
+    struct Sec {
+        double t0, t1, beats, bpm;
+        bool mustHit, gf, alt, change;
+    };
+    std::vector<Sec> secs;
+    const double endMs = c.lengthMs + 1.0;
+    if (!c.sections.empty()) {
+        for (size_t i = 0; i < c.sections.size(); ++i) {
+            const SectionInfo& si = c.sections[i];
+            const double bpm = si.bpm > 0 ? si.bpm : c.bpmAt(si.timeMs + 0.01);
+            const double t1 = i + 1 < c.sections.size() ? c.sections[i + 1].timeMs : std::max(endMs, si.timeMs + si.beats * 60000.0 / bpm);
+            secs.push_back({si.timeMs, t1, si.beats > 0 ? si.beats : 4, bpm, si.mustHit, si.gf, si.alt, false});
+        }
+        if (!secs.empty()) secs.front().t0 = std::min(secs.front().t0, 0.0);
+    } else {
+        double t = 0;
+        while (t < endMs) {
+            const double bpm = c.bpmAt(t + 0.01), len = 4 * 60000.0 / bpm;
+            secs.push_back({t, t + len, 4, bpm, c.focusAt(t + 1) == 1, false, false, false});
+            t += len;
+        }
+    }
+    double prevBpm = bpm0;
+    for (Sec& sc : secs) {
+        sc.change = std::fabs(sc.bpm - prevBpm) > 1e-9;
+        prevBpm = sc.bpm;
+    }
+    auto at = [&](double ms) {
+        return std::lower_bound(c.notes.begin(), c.notes.end(), ms, [](const Note& n, double t) { return n.time < t; });
+    };
+    uint64_t listed = 0;
+    for (size_t i = 0; i < secs.size(); ++i) {
+        const Sec& sc = secs[i];
+        j += std::string(i ? "," : "") + "{\"sectionNotes\":" + b.beginArray() + ",\"mustHitSection\":" + (sc.mustHit ? "true" : "false") +
+             ",\"gfSection\":" + (sc.gf ? "true" : "false") + ",\"altAnim\":" + (sc.alt ? "true" : "false") +
+             ",\"changeBPM\":" + (sc.change ? "true" : "false") + ",\"bpm\":" + num(sc.bpm) + ",\"sectionBeats\":" + num(sc.beats) + "}";
+        const auto from = i == 0 ? c.notes.begin() : at(sc.t0);
+        const auto to = i + 1 == secs.size() ? c.notes.end() : at(sc.t1);
+        for (auto it = from; it < to; ++it) {
+            const Note& n = *it;
+            const int k = c.keysOf(n.side);
+            const int data = (n.side == 1) == sc.mustHit ? n.lane : n.lane + k;
+            const std::string type = n.type < c.noteTypes.size() ? c.noteTypes[n.type] : std::string();
+            const uint64_t times = c.countOf(n).sat64();
+            for (uint64_t r = 0; r < times; ++r) b.add(n.time, data, n.length, type);
+            listed += times;
+        }
+    }
+    b.finish();
+    j += "],\"events\":[";
+    for (size_t i = 0; i < c.events.size(); ++i) {
+        const psych::ChartEvent& e = c.events[i];
+        j += std::string(i ? "," : "") + "[" + num(e.timeMs) + ",[[" + esc(e.name) + "," + esc(e.v1) + "," + esc(e.v2) + "]]]";
+    }
+    j += "]}}";
+    if (notesOut) *notesOut = listed;
+    return true;
+}
+}  // namespace
+
+bool writeChartAsGhc(const std::string& path, const Chart& c, std::string& err, uint64_t* notesOut) {
+    std::string j;
+    StreamedNotes sn;
+    return chartToStreamed(c, j, sn, err, notesOut) && writeBinaryChart(path, j, sn, 3, err);
+}
+
+bool writeChartAsGhb(const std::string& path, const Chart& c, std::string& err, uint64_t* notesOut) {
+    std::string j;
+    StreamedNotes sn;
+    return chartToStreamed(c, j, sn, err, notesOut) && writeBigitChart(path, j, sn, err);
+}
+
 int convertChartFile(const std::string& in, const std::string& out) {
     const auto t0 = std::chrono::steady_clock::now();
     auto seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
     std::string err;
-    if (endsWithI(out, kBinaryChartExt)) {
+    if (isAutoChartFile(in) && !endsWithI(out, kAutoChartExt)) {
+        std::fprintf(stderr, "%s: an AutoChart chart plays only in God's Hand; it can only be saved as .ghac\n", in.c_str());
+        return 1;
+    }
+    const bool toBigit = endsWithI(out, kBigitChartExt);
+    if ((endsWithI(out, kBinaryChartExt) || toBigit) && (isCountChart(in) || isThrChart(in))) {
+        // A count chart (.ghn, the iutk engine's .bin, .raid) or a .thr: read, then its notes listed.
+        Chart c;
+        if (!loadChartFile(in, "Normal", c, err)) {
+            std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
+            return 1;
+        }
+        uint64_t listed = 0;
+        if (!(toBigit ? writeChartAsGhb(out, c, err, &listed) : writeChartAsGhc(out, c, err, &listed))) {
+            std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
+            return 1;
+        }
+        std::printf("%s -> %s: %s notes, %s bytes, %.2f s\n", in.c_str(), out.c_str(), Count(listed).grouped().c_str(),
+                    Count(fileSize(out)).grouped().c_str(), seconds());
+        return 0;
+    }
+    if (endsWithI(out, kBinaryChartExt) || toBigit) {
         ConvertStats st;
-        if (!convertChartToBinary(in, out, err, &st)) {
+        if (!(toBigit ? convertChartToBigit(in, out, err, &st) : convertChartToBinary(in, out, err, &st))) {
             std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
             return 1;
         }
@@ -1262,7 +1402,15 @@ int convertChartFile(const std::string& in, const std::string& out) {
         std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
         return 1;
     }
-    if (endsWithI(out, kCountChartExt)) {
+    if (!c.autoCharted && endsWithI(out, kAutoChartExt)) {
+        std::fprintf(stderr, "%s: .ghac is AutoChart's own format; save a charted song as .ghn\n", out.c_str());
+        return 1;
+    }
+    if (c.autoCharted && !endsWithI(out, kAutoChartExt)) {
+        std::fprintf(stderr, "%s: an AutoChart chart plays only in God's Hand; it can only be saved as .ghac\n", in.c_str());
+        return 1;
+    }
+    if (endsWithI(out, kCountChartExt) || endsWithI(out, kAutoChartExt)) {
         GhnStats st;
         if (!writeGhn(out, c, err, &st)) {
             std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
@@ -1271,6 +1419,15 @@ int convertChartFile(const std::string& in, const std::string& out) {
         std::printf("%s -> %s: %s notes in %s (%u blocks, %u repeated), %s bytes, %.2f s\n", in.c_str(), out.c_str(),
                     st.total.grouped().c_str(), Count(st.notes).grouped().c_str(), st.blocks, st.repeats, Count(st.bytes).grouped().c_str(),
                     seconds());
+        return 0;
+    }
+    if (endsWithI(out, kThrExt)) {
+        if (!writeThrChart(out, c, err)) {
+            std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
+            return 1;
+        }
+        std::printf("%s -> %s (threadripper .thr): %s notes, %s bytes, %.2f s\n", in.c_str(), out.c_str(),
+                    (c.playerNotes + c.opponentNotes).grouped().c_str(), Count(fileSize(out)).grouped().c_str(), seconds());
         return 0;
     }
     if (endsWithI(out, ".bin")) {
@@ -1282,7 +1439,7 @@ int convertChartFile(const std::string& in, const std::string& out) {
                     seconds());
         return 0;
     }
-    std::fprintf(stderr, "%s: write .ghn, .ghc or .bin\n", out.c_str());
+    std::fprintf(stderr, "%s: write .ghn, .ghc, .bin or .thr\n", out.c_str());
     return 1;
 }
 

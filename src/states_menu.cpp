@@ -3,6 +3,9 @@
 
 // Title, main menu, story, freeplay and credits screens.
 #include <atomic>
+#include <cctype>
+#include <cstring>
+#include <map>
 #include <cmath>
 #include <mutex>
 #include <thread>
@@ -120,73 +123,6 @@ void waitForBackgroundJobs() {
     for (int i = 0; i < 600 && g_jobs.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
 
-// ------------------------------------------------------------------ Intro --
-
-// The engine's intro (issue #31): assets/videos/intro.mpg before the title,
-// full screen with its sound (MPEG-1, which every platform plays). ENTER skips
-// it on a computer (Space, ESC and the gamepad's buttons too); on a
-// touchscreen the SKIP button does, and so does the back button.
-std::string introPath() { return app().base + "assets/videos/intro.mpg"; }
-
-class IntroState : public State {
-public:
-    bool wantsMenuMusic() const override { return false; }
-    TouchLayout touchLayout() const override {
-        TouchLayout t;
-        t.pad = false;
-        t.keys = {{"SKIP", KEY_ENTER}};
-        return t;
-    }
-    void enter() override {
-        App& a = app();
-        shownAt_ = a.now;
-        if (video_.open(introPath(), false, true)) {
-            video_.setVolume(a.settings.musicVol);
-            platform::log("intro " + std::to_string(video_.width()) + "x" + std::to_string(video_.height()) + ", " +
-                          std::to_string(int(video_.duration() * 1000)) + " ms");
-        } else {
-            leave();
-        }
-    }
-    void update(double dt) override {
-        App& a = app();
-        if (leaving_) return;
-        video_.update(std::min(dt, 0.1));  // a hitch does not jump ahead
-        if (a.input.accept() || a.input.back()) {
-            platform::log("intro skipped at " + std::to_string(int((a.now - shownAt_) * 1000)) + " ms");
-            leave();
-        } else if (video_.ended()) {
-            leave();
-        }
-    }
-    void draw() override {
-        App& a = app();
-        gfx::beginCanvas();
-        DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
-        if (video_.width() > 0 && video_.height() > 0) {  // the whole picture, as large as it fits
-            const float vw = float(video_.width()), vh = float(video_.height());
-            const float s = std::min(gfx::W / vw, gfx::H / vh);
-            DrawTexturePro(video_.texture(), {0, 0, vw, vh}, {(gfx::W - vw * s) * 0.5f, (gfx::H - vh * s) * 0.5f, vw * s, vh * s}, {0, 0},
-                           0, WHITE);
-        }
-        if (!a.touchMode) {  // the way out, after a moment
-            const float al = saturate((float(a.now - shownAt_) - 0.6f) / 0.4f) * 0.8f;
-            if (al > 0.01f) gfx::text(FontId::Ui, "ENTER  skip", gfx::W - 28, gfx::H - 48, 26, fade(WHITE, al), Align::Right, 2.0f);
-        }
-        gfx::endCanvas();
-    }
-
-private:
-    void leave() {
-        leaving_ = true;
-        video_.setVolume(0);  // the picture stays while the screen fades
-        app().change(makeTitle());
-    }
-    VideoPlayer video_;
-    bool leaving_ = false;
-    double shownAt_ = 0;
-};
-
 // ------------------------------------------------------------------ Title --
 
 class TitleState : public State {
@@ -298,50 +234,106 @@ private:
 // -------------------------------------------------------------- Main menu --
 
 // RENDER MODE and AUTOCHART open the song list for recording a video or
-// for playing a chart made from the song's audio.
-constexpr const char* kMainItems[] = {"STORY MODE", "FREEPLAY", "RENDER MODE", "AUTOCHART", "OPTIONS", "CREDITS", "QUIT"};
-// Psych's pictures for them (mainmenu/menu_<name>); the others are lettered.
-constexpr const char* kMainPsych[] = {"story_mode", "freeplay", "", "", "options", "credits", ""};
-constexpr int kMainCount = int(sizeof(kMainItems) / sizeof(kMainItems[0]));
+// for playing a chart made from the song's audio. AUTOCHART and JSON MERGING
+// are there only when they are turned on in Options. UPDATE appears when a
+// newer version is downloaded (Options: Auto-update), MOD PACKS when packs
+// you installed changed on the release.
+enum class MainItem { Story, Freeplay, Render, AutoChart, JsonMerge, ModPacks, Update, Options, Credits, Quit };
+struct MainEntry {
+    MainItem id;
+    const char* label;
+    const char* psych;  // Psych's picture for it (mainmenu/menu_<name>); the others are lettered
+};
+std::vector<MainEntry> mainItems() {
+    const Settings& s = app().settings;
+    std::vector<MainEntry> v = {{MainItem::Story, "STORY MODE", "story_mode"},
+                                {MainItem::Freeplay, "FREEPLAY", "freeplay"},
+                                {MainItem::Render, "RENDER MODE", ""}};
+    if (s.autoChart) v.push_back({MainItem::AutoChart, "AUTOCHART", ""});
+    if (s.jsonMerging) v.push_back({MainItem::JsonMerge, "JSON MERGING", ""});
+    bool packsChanged;
+    {
+        std::lock_guard<std::mutex> lk(app().packCheck->m);
+        packsChanged = app().packCheck->changed() > 0;
+    }
+    if (packsChanged) v.push_back({MainItem::ModPacks, "MOD PACKS", ""});
+    if (app().updater.status().stage == update::Stage::Ready) v.push_back({MainItem::Update, "UPDATE", ""});
+    v.push_back({MainItem::Options, "OPTIONS", "options"});
+    v.push_back({MainItem::Credits, "CREDITS", "credits"});
+    v.push_back({MainItem::Quit, "QUIT", ""});
+    return v;
+}
 
 class MainMenuState : public State {
 public:
     void enter() override {
-        app().mainSel = clampv(app().mainSel, 0, kMainCount - 1);
+        items_ = mainItems();
+        n_ = int(items_.size());
+        app().mainSel = clampv(app().mainSel, 0, n_ - 1);
         anim_ = float(app().mainSel);
     }
     void update(double dt) override {
         App& a = app();
         int& sel = a.mainSel;
+        if (chosen_ < 0 && a.now - itemsAt_ > 0.5) {
+            // UPDATE and MOD PACKS come when the checks at start find something.
+            itemsAt_ = a.now;
+            std::vector<MainEntry> fresh = mainItems();
+            if (fresh.size() != items_.size()) {
+                const MainItem was = items_[size_t(clampv(sel, 0, n_ - 1))].id;
+                items_ = std::move(fresh);
+                n_ = int(items_.size());
+                sel = 0;
+                for (int i = 0; i < n_; ++i)
+                    if (items_[size_t(i)].id == was) sel = i;
+            }
+        }
         anim_ = approach(anim_, float(sel), 14.0f, float(dt));
         // Psych's camera follows the chosen item (JS Engine: lerp 7.5 a second).
         camY_ = camY_ < -1e8f ? psychCamTarget(sel) : approach(camY_, psychCamTarget(sel), 7.5f, float(dt));
         if (chosen_ >= 0) {
             // Psych: the chosen item flickers for a second before its menu opens.
-            if (a.now - chosenAt_ > (pm::on() && chosen_ != kMainCount - 1 ? 1.0 : 0.55)) {
-                switch (chosen_) {
-                    case 0: a.change(makeStory()); break;
-                    case 1:
-                    case 2:
-                    case 3:
-                        a.songListMode = chosen_ == 2   ? App::SongListMode::Render
-                                         : chosen_ == 3 ? App::SongListMode::AutoChart
-                                                        : App::SongListMode::Play;
+            const MainItem id = items_[size_t(chosen_)].id;
+            if (a.now - chosenAt_ > (pm::on() && id != MainItem::Quit ? 1.0 : 0.55)) {
+                switch (id) {
+                    case MainItem::Story: a.change(makeStory()); break;
+                    case MainItem::Freeplay:
+                    case MainItem::Render:
+                    case MainItem::AutoChart:
+                        a.songListMode = id == MainItem::Render      ? App::SongListMode::Render
+                                         : id == MainItem::AutoChart ? App::SongListMode::AutoChart
+                                                                     : App::SongListMode::Play;
                         a.change(makeFreeplay());
                         break;
-                    case 4: a.change(makeOptions()); break;
-                    case 5: a.change(makeCredits()); break;
+                    case MainItem::JsonMerge: a.change(makeJsonMerge()); break;
+                    case MainItem::ModPacks: a.change(makeModPacks()); break;
+                    case MainItem::Update:
+                        if (platform::kAndroid) {
+                            // The system installer, with the APK the updater downloaded.
+                            const int r = platform::installApk(a.updater.status().file);
+                            a.notify(r == 1   ? "The installer is open: confirm the update there."
+                                     : r == 2 ? "Allow installing apps from God's Hand, then choose UPDATE again."
+                                              : "The installer could not be opened.",
+                                     10.0);
+                            chosen_ = -1;
+                        } else {
+                            a.restartAfterQuit = true;  // the game starts again and the update takes its place
+                            a.quit = true;
+                        }
+                        break;
+                    case MainItem::Options: a.change(makeOptions()); break;
+                    case MainItem::Credits: a.change(makeCredits()); break;
                     default: a.quit = true; break;
                 }
             }
             return;
         }
-        if (a.input.up()) { sel = (sel + kMainCount - 1) % kMainCount; sfxPlay(Sfx::Scroll); }
-        if (a.input.down()) { sel = (sel + 1) % kMainCount; sfxPlay(Sfx::Scroll); }
+        if (a.input.up()) { sel = (sel + n_ - 1) % n_; sfxPlay(Sfx::Scroll); }
+        if (a.input.down()) { sel = (sel + 1) % n_; sfxPlay(Sfx::Scroll); }
         if (a.input.accept()) {
             chosen_ = sel;
             chosenAt_ = a.now;
-            sfxPlay(sel == kMainCount - 1 ? Sfx::Cancel : Sfx::Confirm);
+            sfxPlay(items_[size_t(sel)].id == MainItem::Quit ? Sfx::Cancel : Sfx::Confirm);
         }
         if (a.input.back()) { sfxPlay(Sfx::Cancel); a.change(makeTitle()); }
         // 7: the editors (chart, character, stage, events), as Psych's Master Editor Menu.
@@ -358,7 +350,6 @@ public:
         App& a = app();
         const double now = a.now;
         const float pulse = menuPulse();
-        const char* const* items = kMainItems;
         gfx::beginCanvas();
         drawMenuBackground(now, 0x8C6CFF, pulse);
         CharacterState h;
@@ -367,23 +358,27 @@ public:
         gfx::glow({1080, 500}, 230 + 20 * pulse, fade(kGold, 0.3f));
         drawCharacter(h, {1080, 640}, 0.85f, now, true);
         gfx::text(FontId::Title, "GOD'S HAND", 60, 40, 44, kGold, Align::Left, 2.0f);
-        for (int i = 0; i < kMainCount; ++i) {
+        // 70 pixels apart, closer when there are more items than fit.
+        const float gap = std::min(70.0f, 460.0f / float(std::max(1, n_ - 1)));
+        for (int i = 0; i < n_; ++i) {
+            const char* label = items_[size_t(i)].label;
             const bool on = i == a.mainSel;
-            const float y = 128.0f + i * 70.0f - (on ? 6.0f : 0.0f);
+            const float y = 128.0f + i * gap - (on ? 6.0f : 0.0f);
             float size = on ? 56.0f + 4.0f * pulse : 42.0f;
             Color c = on ? kGold : fade(kIvory, 0.55f);
             if (chosen_ >= 0 && on && std::fmod(float(now - chosenAt_) * 10.0f, 2.0f) < 1.0f) c = WHITE;
             if (chosen_ >= 0 && !on) c = fade(c, std::max(0.0f, 1.0f - float(now - chosenAt_) * 3.0f));
-            if (on) gfx::glowText(FontId::Title, items[i], gfx::W / 2, y, size, c, Color{255, 180, 80, 255});
-            else gfx::text(FontId::Title, items[i], gfx::W / 2, y + 6, size, c, Align::Center, 2.0f);
+            if (on) gfx::glowText(FontId::Title, label, gfx::W / 2, y, size, c, Color{255, 180, 80, 255});
+            else gfx::text(FontId::Title, label, gfx::W / 2, y + 6, size, c, Align::Center, 2.0f);
             if (on) {
-                const float w = gfx::measure(FontId::Title, items[i], size).x * 0.5f + 40 + 6 * pulse;
+                const float w = gfx::measure(FontId::Title, label, size).x * 0.5f + 40 + 6 * pulse;
                 gfx::drawNote(gfx::kRight, {gfx::W / 2 - w, y + size * 0.55f}, 44);
                 gfx::drawNote(gfx::kLeft, {gfx::W / 2 + w, y + size * 0.55f}, 44);
             }
         }
         hints("UP/DOWN select   ENTER confirm   7 editors   ESC back   F11 fullscreen");
         gfx::text(FontId::Ui, a.library.report(), 16, gfx::H - 70, 20, fade(kIvory, 0.6f));
+        drawUpdateLine();
         gfx::endCanvas();
     }
 
@@ -392,10 +387,10 @@ private:
     // list): items 140 pixels apart from 108 - (n - 4) x 80, centred, and a
     // camera that follows the chosen one, the picture behind at a tenth of its
     // speed (scroll factor 0.25 - 0.05 x (n - 4)), the items at 0.135 x (n - 4).
-    static float psychItemY(int i) { return float(i) * 140.0f + 108.0f - float(std::max(kMainCount, 4) - 4) * 80.0f; }
-    static float psychCamTarget(int sel) {
-        const Vector2 sz = pm::menuItemSize(kMainPsych[sel], kMainItems[sel]);
-        return psychItemY(sel) + sz.y * 0.5f - (kMainCount > 4 ? float(kMainCount) * 8.0f : 0.0f);
+    float psychItemY(int i) const { return float(i) * 140.0f + 108.0f - float(std::max(n_, 4) - 4) * 80.0f; }
+    float psychCamTarget(int sel) const {
+        const Vector2 sz = pm::menuItemSize(items_[size_t(sel)].psych, items_[size_t(sel)].label);
+        return psychItemY(sel) + sz.y * 0.5f - (n_ > 4 ? float(n_) * 8.0f : 0.0f);
     }
     void drawPsych() {
         App& a = app();
@@ -403,8 +398,8 @@ private:
         gfx::beginCanvas();
         DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
         const float scroll = camY_ - gfx::H * 0.5f;  // the camera's scroll
-        const float bgFactor = std::max(0.25f - 0.05f * float(kMainCount - 4), 0.1f);
-        const float itemFactor = kMainCount >= 6 ? float(kMainCount - 4) * 0.135f : 0.0f;
+        const float bgFactor = std::max(0.25f - 0.05f * float(n_ - 4), 0.1f);
+        const float itemFactor = n_ >= 6 ? float(n_ - 4) * 0.135f : 0.0f;
         const auto bg = [&] { pm::background(pm::kMenuBG, WHITE, scroll * bgFactor, 1.175f); };
         if (a.settings.menuBlur) gfx::drawBlurred(bg);
         else bg();
@@ -413,25 +408,39 @@ private:
         // chosen item too, faster, and the others fade away.
         if (chosen_ >= 0 && a.settings.flashing && since < 1.1 && std::fmod(since, 0.30) < 0.15)
             pm::background(pm::kDesat, Color{0xFD, 0x71, 0x9B, 255}, scroll * bgFactor, 1.175f);
-        for (int i = 0; i < kMainCount; ++i) {
+        for (int i = 0; i < n_; ++i) {
+            const MainEntry& e = items_[size_t(i)];
             const bool on = i == a.mainSel;
             float alpha = 1.0f;
             if (chosen_ >= 0 && !on) alpha = std::max(0.0f, 1.0f - float(since) / 0.4f);
             if (chosen_ >= 0 && on && since < 1.0 && std::fmod(since, 0.12) >= 0.06) alpha = 0.0f;
             if (alpha <= 0) continue;
-            const Vector2 sz = pm::menuItemSize(kMainPsych[i], kMainItems[i]);
+            const Vector2 sz = pm::menuItemSize(e.psych, e.label);
             const float y = psychItemY(i) - scroll * itemFactor;
-            pm::menuItem(kMainPsych[i], kMainItems[i], {gfx::W * 0.5f, y + sz.y * 0.5f}, on, alpha, now);
+            pm::menuItem(e.psych, e.label, {gfx::W * 0.5f, y + sz.y * 0.5f}, on, alpha, now);
         }
         pm::vcr("God's Hand Engine v" GH_VERSION, 12, gfx::H - 44, 16);
         pm::vcr("Friday Night Funkin' v0.2.8", 12, gfx::H - 24, 16);
+        drawUpdateLine();
         gfx::endCanvas();
     }
+    // Bottom right: the update being downloaded, or ready.
+    void drawUpdateLine() {
+        const update::Status us = app().updater.status();
+        std::string t;
+        if (us.stage == update::Stage::Downloading) t = "Downloading " + us.version + ": " + std::to_string(int(us.progress * 100)) + "%";
+        else if (us.stage == update::Stage::Verifying) t = "Checking " + us.version + "...";
+        else if (us.stage == update::Stage::Ready) t = us.version + " ready: UPDATE";
+        if (!t.empty()) gfx::text(FontId::Ui, t, gfx::W - 14, gfx::H - 30, 18, fade(WHITE, 0.75f), Align::Right);
+    }
 
+    std::vector<MainEntry> items_ = mainItems();
+    int n_ = int(items_.size());
     float anim_ = 0;
     float camY_ = -1e9f;
     int chosen_ = -1;
     double chosenAt_ = 0;
+    double itemsAt_ = 0;
 };
 
 // ------------------------------------------------------------------ Story --
@@ -709,6 +718,12 @@ public:
                 a.change(makeChartEditor(e->id, e->diffs[size_t(diffIndex())]));
                 return;
             }
+        }
+        if (in.accept() && n > 0 && autoMode()) {  // AUTOCHART: its screen, for this song
+            remember();
+            sfxPlay(Sfx::Confirm);
+            a.change(makeAutoChartStudio(list_[size_t(sel)]->id, diffIndex()));
+            return;
         }
         if (in.accept() && n > 0) {
             const SongEntry* e = list_[size_t(sel)];
@@ -1037,6 +1052,14 @@ private:
 
 // ---------------------------------------------------------------- Credits --
 
+struct PsychCredit {
+    const char* name;
+    const char* desc;
+    unsigned color;               // 0: a section's title
+    const char* photo = nullptr;  // a person: assets/credits/<photo>.png, or their initials
+    const char* role = "";        // a person, in the scrolling credits
+};
+
 class CreditsState : public State {
 public:
     void enter() override {
@@ -1044,6 +1067,24 @@ public:
         sel_ = 1;
         anim_ = float(sel_);
         tint_ = gfx::rgb(kPsychCredits[sel_].color);
+        // The people's pictures: assets/credits/<name>.png (or .jpg); the
+        // game draws their initials where there is none.
+        for (const PsychCredit& c : kPsychCredits) {
+            if (!c.photo) continue;
+            for (const char* ext : {".png", ".jpg"}) {
+                const std::string path = app().base + "assets/credits/" + c.photo + ext;
+                if (!FileExists(path.c_str())) continue;
+                Texture2D t = LoadTexture(path.c_str());
+                if (t.id) {
+                    SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+                    photos_[c.photo] = t;
+                }
+                break;
+            }
+        }
+    }
+    ~CreditsState() override {
+        for (auto& [name, t] : photos_) UnloadTexture(t);
     }
     void update(double dt) override {
         App& a = app();
@@ -1091,13 +1132,30 @@ public:
             "@LIBRARIES",
             "raylib 5.5 by Ramon Santamaria (zlib license)",
             "Lua 5.4 (MIT license), miniz by Rich Geldreich (MIT), pl_mpeg by Dominic Szablewski (MIT)",
+            "Zstandard by Meta (BSD license)",
             "",
             "@FONTS",
             "Luckiest Guy by Astigmatic (Apache License 2.0)",
             "Rajdhani by Indian Type Foundry (SIL Open Font License)",
             "",
+            "@OWNERS",
+            "%Shashangabush",
+            "%ph3n0_typ3",
+            "%anter_guifer",
+            "%xxdet0xl1nt3rxx",
+            "%xeno_fiber d1ztr0",
+            "%That One Brudda From The Booshes",
+            "",
             "@CONTRIBUTORS",
-            "amogosgaming - ideas, testing and the Violets Tweak (older systems)",
+            "%amogosgaming",
+            "%iutkuiytkuyitkf",
+            "%melody",
+            "%auroraaastralis",
+            "%IAmCykluss",
+            "%manber468",
+            "%xentaphyll",
+            "%toazp",
+            "%TofpFL",
             "",
             "@ENGINE INSPIRED BY",
             "ShadowMario - Psych Engine",
@@ -1139,7 +1197,14 @@ public:
         for (const char* l : lines) {
             if (l[0] == '#') gfx::glowText(FontId::Title, l + 1, gfx::W / 2, y, 64, kGold, Color{255, 180, 80, 255});
             else if (l[0] == '@') gfx::text(FontId::Title, l + 1, gfx::W / 2, y + 10, 30, kGold, Align::Center, 2.0f);
-            else gfx::text(FontId::Ui, l, gfx::W / 2, y + 10, 28, kIvory, Align::Center, 1.5f);
+            else if (l[0] == '%') {
+                // A person: their picture, their name and what they did.
+                const PsychCredit* c = person(l + 1);
+                const std::string text = c ? std::string(c->name) + " - " + c->role : std::string(l + 1);
+                const float w = gfx::measure(FontId::Ui, text, 28).x;
+                if (c) drawPhoto(*c, gfx::W / 2 - w / 2 - 26, y + 26, 40);
+                gfx::text(FontId::Ui, text, gfx::W / 2 + 22, y + 10, 28, kIvory, Align::Center, 1.5f);
+            } else gfx::text(FontId::Ui, l, gfx::W / 2, y + 10, 28, kIvory, Align::Center, 1.5f);
             y += l[0] == '#' ? 80 : 46;
         }
         hints("ESC back");
@@ -1147,11 +1212,6 @@ public:
     }
 
 private:
-    struct PsychCredit {
-        const char* name;
-        const char* desc;
-        unsigned color;  // 0: a section's title
-    };
     static constexpr PsychCredit kPsychCredits[] = {
         {"God's Hand", "", 0},
         {"deatuamae67-crypto", "A project by deatuamae67-crypto: God's Hand of Principality and Demise, a rhythm duel", 0x8C6CFF},
@@ -1162,12 +1222,30 @@ private:
         {"Lua", "Lua 5.4 (MIT license): the mods' scripts", 0x2C2D72},
         {"miniz", "miniz by Rich Geldreich (MIT license): mods in .zip and the binary charts", 0x5AA0E6},
         {"pl_mpeg", "pl_mpeg by Dominic Szablewski (MIT license): the videos", 0x9A6AD8},
+        {"Zstandard", "Zstandard by Meta (BSD license): the threadripper engine's .thr charts", 0x4C8CE0},
         {"Fonts", "", 0},
         {"Luckiest Guy", "Luckiest Guy by Astigmatic (Apache License 2.0)", 0xFFC83D},
         {"Rajdhani", "Rajdhani by Indian Type Foundry (SIL Open Font License)", 0x3DD1FF},
+        {"Owners", "", 0},
+        {"Shashangabush", "One of God's Hand's owners", 0xF2B84B, "shashangabush", "owner"},
+        {"ph3n0_typ3", "One of God's Hand's owners", 0x7CE0C6, "ph3n0_typ3", "owner"},
+        {"anter_guifer", "One of God's Hand's owners", 0xE07C7C, "anter_guifer", "owner"},
+        {"xxdet0xl1nt3rxx", "One of God's Hand's owners", 0xA77CE0, "xxdet0xl1nt3rxx", "owner"},
+        {"xeno_fiber d1ztr0", "One of God's Hand's owners", 0x7CA8E0, "xeno_fiber_d1ztr0", "owner"},
+        {"That One Brudda From The Booshes", "One of God's Hand's owners", 0x9CD65C, "that_one_brudda_from_the_booshes", "owner"},
         {"Contributors", "", 0},
         {"amogosgaming", "Ideas (the Psych look everywhere, the chart editor's preview, shader layers...), testing, and the "
-                         "Violets Tweak that brought the game to older systems", 0x5CD6A0},
+                         "Violets Tweak that brought the game to older systems", 0x5CD6A0, "amogosgaming",
+         "ideas, testing and the Violets Tweak (older systems)"},
+        {"iutkuiytkuyitkf", "Contributor to God's Hand", 0xE0C04C, "iutkuiytkuyitkf", "contributor"},
+        {"melody", "Contributor to God's Hand", 0xFF8FC8, "melody", "contributor"},
+        {"auroraaastralis", "Contributor to God's Hand", 0x8FE8FF, "auroraaastralis", "contributor"},
+        {"IAmCykluss", "Contributor to God's Hand", 0xD8B04C, "iamcykluss", "contributor"},
+        {"manber468", "Contributor to God's Hand", 0x6CC0FF, "manber468", "contributor"},
+        {"xentaphyll", "Contributor to God's Hand", 0x6CE08C, "xentaphyll", "contributor"},
+        {"toazp", "Contributor to God's Hand", 0xFFA45C, "toazp", "contributor"},
+        {"TofpFL", "Contributor to God's Hand; R-Slice and Universal FNF Sprite Studio are among the engines it learned from",
+         0x4CD7E0, "tofpfl", "contributor"},
         {"Engine inspired by", "", 0},
         {"ShadowMario", "Psych Engine: the interface, the scripts and the menus God's Hand follows", 0xFF5DA0},
         {"JordanSantiagoYT", "JS Engine, SNIFF (MIDI to chart), Mods for JS Engine, and his engine forks (ZS Engine, "
@@ -1213,7 +1291,11 @@ private:
                 const float w = pm::boldWidth(c.name, 68);
                 pm::bold(c.name, (gfx::W - w) * 0.5f, y, 68);
             } else {
-                pm::plain(c.name, gfx::W * 0.5f - 70, y, 60, i == sel_ ? 1.0f : 0.6f);
+                // A long name gets smaller to fit, its picture right of it (as Psych's icons).
+                const float x = gfx::W * 0.5f - 70, room = gfx::W - 30 - x - (c.photo ? 140.0f : 0.0f);
+                const float full = pm::plainWidth(c.name, 60), h = full > room ? 60 * room / full : 60.0f;
+                const float w = pm::plain(c.name, x, y + (60 - h) * 0.5f, h, i == sel_ ? 1.0f : 0.6f);
+                if (c.photo) drawPhoto(c, x + w + 70, y + 30, 120, i == sel_ ? 1.0f : 0.6f);
             }
         }
         const std::string desc = kPsychCredits[sel_].desc;
@@ -1240,15 +1322,47 @@ private:
         gfx::endCanvas();
     }
 
+    static const PsychCredit* person(const char* name) {
+        for (const PsychCredit& c : kPsychCredits)
+            if (c.photo && !std::strcmp(c.name, name)) return &c;
+        return nullptr;
+    }
+    // A person's picture (square, framed), or their initials on their colour.
+    void drawPhoto(const PsychCredit& c, float cx, float cy, float size, float alpha = 1.0f) const {
+        const Color col = gfx::rgb(c.color);
+        const auto it = photos_.find(c.photo);
+        if (it != photos_.end()) {
+            // A round picture (assets/credits/ keeps them round, see its README) in a ring of their colour.
+            const Texture2D& t = it->second;
+            const float side = float(std::min(t.width, t.height));
+            const Rectangle src{(t.width - side) * 0.5f, (t.height - side) * 0.5f, side, side};
+            DrawCircleV({cx, cy}, size / 2 + 3, fade(col, alpha));
+            DrawTexturePro(t, src, {cx - size / 2, cy - size / 2, size, size}, {0, 0}, 0, fade(WHITE, alpha));
+            return;
+        }
+        std::string initials;
+        bool start = true;
+        for (const char* p = c.name; *p && initials.size() < 2; ++p) {
+            const unsigned char ch = static_cast<unsigned char>(*p);
+            if (std::isalnum(ch) && start) initials += char(std::toupper(ch));
+            start = !std::isalnum(ch);
+        }
+        if (initials.size() < 2 && std::strlen(c.name) > 1) initials = {char(std::toupper(static_cast<unsigned char>(c.name[0]))), c.name[1]};
+        DrawCircleV({cx, cy}, size / 2, fade(col, alpha));
+        DrawCircleLinesV({cx, cy}, size / 2, fade(WHITE, 0.8f * alpha));
+        const float lum = 0.299f * col.r + 0.587f * col.g + 0.114f * col.b;
+        gfx::text(FontId::Title, initials, cx, cy - size * 0.27f, size * 0.46f, fade(lum > 150 ? Color{25, 20, 35, 255} : WHITE, alpha),
+                  Align::Center);
+    }
+
     double t0_ = 0;
     int sel_ = 1;
     float anim_ = 1;
     Color tint_ = WHITE;
+    std::map<std::string, Texture2D> photos_;
 };
 
 std::unique_ptr<State> makeTitle() { return std::make_unique<TitleState>(); }
-std::unique_ptr<State> makeIntro() { return std::make_unique<IntroState>(); }
-bool introWanted() { return app().settings.introVideo && FileExists(introPath().c_str()); }
 std::unique_ptr<State> makeMainMenu() { return std::make_unique<MainMenuState>(); }
 std::unique_ptr<State> makeStory() { return std::make_unique<StoryState>(); }
 std::unique_ptr<State> makeFreeplay() { return std::make_unique<FreeplayState>(); }

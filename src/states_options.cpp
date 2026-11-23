@@ -131,6 +131,10 @@ public:
             {Row::Bool, "Shaders", "Mod shaders and screen effects. OFF is faster on weak devices.", &s.shaders},
             {Row::Bool, "Anti-aliasing", "Smooth scaling of mod pictures. OFF: sharp pixels and a little faster (Psych's Anti-Aliasing).",
              &s.antialiasing},
+            {Row::Choice, "Motion blur", "Songs: each frame keeps a little of the ones before, so fast notes leave a trail and "
+             "high scroll speeds look smoother (the same at any frame rate). Rendering mode: real motion blur, each video frame "
+             "the average of 2, 4 or 8 drawn between it and the next (that many times slower to record).",
+             nullptr, nullptr, 0, 0, 0, &s.motionBlur, {0, 1, 2, 3}, {"Off", "Light", "Medium", "Strong"}},
             {Row::Choice, "Note detail", "Spam charts: Adaptive draws notes stacked a few pixels apart once while the frame rate is "
              "under 60 (every note is still played). Full: every pixel.", nullptr, nullptr, 0, 0, 0, &s.noteDetail, {0, 1},
              {"Adaptive", "Full"}},
@@ -155,9 +159,20 @@ public:
             {Row::Bool, "Hide HUD", "Hides the health bar, the icons, the score line and the ratings, as Psych's Hide HUD.", &s.hideHud},
             {Row::Bool, "Watermark", "\"God's Hand Engine v.(version) (system) Edition\" in the bottom-left corner of songs, as JS Engine shows its own.",
              &s.watermark},
-            {Row::Bool, "Play intro at start", "The engine's intro video before the title screen. ENTER skips it (the SKIP button on a touchscreen).",
-             &s.introVideo},
             {Row::Bool, "Menu background blur", "Blurs the background of the main menu, Freeplay and the other menus.", &s.menuBlur},
+            {Row::Bool, "AutoChart", "AUTOCHART on the main menu: songs played with a chart the game makes from their audio. "
+             "Its charts carry a shame watermark and play only in God's Hand. OFF: it is not on the menu.", &s.autoChart},
+            {Row::Bool, "  AutoChart training", "AutoChart places notes where the charts of your mods put them for sounds like "
+             "those (train it on the AUTOCHART screen: TRAIN). OFF, or before it is trained: it follows the beat and the "
+             "loudest sounds.", &s.autoChartTrained},
+            {Row::Bool, "JSON merging", "JSON MERGING on the main menu: a chart split into parts (as players do to get past JS "
+             "Engine's 16-million-note limit) merged back into one, with no limit on its notes. OFF: it is not on the menu.",
+             &s.jsonMerging},
+            {Row::Bool, "Auto-update", "At start, the game looks on GitHub for a newer version: it downloads it, checks it and "
+             "installs it the next time the game starts (UPDATE on the main menu restarts it now; Android opens the installer). "
+             "It also looks for changes in the mod packs you installed: MOD PACKS shows them, to install or remove. Your "
+             "settings, scores and mods stay. OFF: it never looks.",
+             &s.autoUpdate},
             {Row::Bool, "Audio visualizer",
              "Bars in the top-right corner of songs that move with the music. Their colour follows the chart: whose turn it "
              "is, how thick the notes are, your hits and misses, and your health.",

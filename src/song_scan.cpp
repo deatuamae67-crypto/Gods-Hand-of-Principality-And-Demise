@@ -13,6 +13,7 @@
 
 #include "basegame.hpp"
 #include "chart.hpp"
+#include "bigit_chart.hpp"
 #include "chart_binary.hpp"
 #include "count_charts.hpp"
 #include "chart_stream.hpp"
@@ -173,7 +174,8 @@ bool chartContent(const fs::path& f) {
 // A count chart's name: God's Hand's .ghn, R-Slice's .raid, the iutk
 // engine's .bin (FNC1) - each read for what it holds.
 bool countChartName(const std::string& lowerName) {
-    return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, ".raid") || endsWithI(lowerName, ".bin");
+    return endsWithI(lowerName, kCountChartExt) || endsWithI(lowerName, kAutoChartExt) || endsWithI(lowerName, ".raid") ||
+           endsWithI(lowerName, ".bin") || endsWithI(lowerName, ".thr");
 }
 
 // A chart: Psych JSON, a binary .ghc (which may be the only one there: a
@@ -183,6 +185,10 @@ bool hasChartFile(const fs::path& dir) {
         const std::string n = toLower(pathStr(f.filename()));
         if (countChartName(n)) {
             if (isCountChart(pathStr(f))) return true;
+            continue;
+        }
+        if (endsWithI(n, kBigitChartExt)) {
+            if (isBigitChart(pathStr(f))) return true;
             continue;
         }
         if (endsWithI(n, kBinaryChartExt) ? isBinaryChart(pathStr(f)) : chartName(n) && chartContent(f)) return true;
@@ -473,6 +479,10 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             if (isBinaryChart(pathStr(f))) charts.push_back(f);
             continue;
         }
+        if (endsWithI(n, kBigitChartExt)) {  // and its bigit chart (.ghb)
+            if (isBigitChart(pathStr(f))) charts.push_back(f);
+            continue;
+        }
         if (countChartName(n)) {  // the iutk engine's Chart.bin and other count charts
             if (isCountChart(pathStr(f))) charts.push_back(f);
             continue;
@@ -484,17 +494,21 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
         charts.push_back(f);
     }
     // The same chart as .ghc and as .json: the binary one (it loads faster);
-    // as .ghn too: the count chart (the editor saves its stacks there whole).
-    std::vector<std::string> binaryStems, countStems;
+    // as .ghb and .ghc: the .ghc (the same notes, unpacked faster); as .ghn
+    // too: the count chart (the editor saves its stacks there whole).
+    std::vector<std::string> binaryStems, bigitStems, countStems;
     for (const fs::path& c : charts) {
         if (endsWithI(pathStr(c.filename()), kBinaryChartExt)) binaryStems.push_back(toLower(pathStr(c.stem())));
+        if (endsWithI(pathStr(c.filename()), kBigitChartExt)) bigitStems.push_back(toLower(pathStr(c.stem())));
         if (endsWithI(pathStr(c.filename()), kCountChartExt)) countStems.push_back(toLower(pathStr(c.stem())));
     }
     auto has = [](const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); };
     charts.erase(std::remove_if(charts.begin(), charts.end(),
                                 [&](const fs::path& c) {
                                     const std::string n = pathStr(c.filename()), stem = toLower(pathStr(c.stem()));
-                                    if (endsWithI(n, ".json")) return has(binaryStems, stem) || has(countStems, stem);
+                                    if (endsWithI(n, ".json"))
+                                        return has(binaryStems, stem) || has(bigitStems, stem) || has(countStems, stem);
+                                    if (endsWithI(n, kBigitChartExt)) return has(binaryStems, stem) || has(countStems, stem);
                                     return endsWithI(n, kBinaryChartExt) && has(countStems, stem);
                                 }),
                  charts.end());
@@ -540,6 +554,7 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             if (ls == key || songPathName(stem) == key || ls == "chart") diff = "Normal";  // "chart": iutk's Chart.bin
             else if (ls.rfind(key + "-", 0) == 0) diff = prettyName(stem.substr(key.size() + 1));
             else diff = prettyName(stem);
+            if (toLower(diff).rfind("autochart ", 0) == 0) diff = "AutoChart " + diff.substr(10);  // saved by AutoChart (.ghac)
             for (auto& f : found)
                 if (equalsI(f.first, diff)) diff += " (2)";
             found.push_back({diff, pathStr(c)});
@@ -658,6 +673,29 @@ double audioSeconds(const std::string& path) {
 
 // ------------------------------------------------------------- songs/ ----
 
+// A song of loose audio (its AutoChart made from the sound): the charts
+// AutoChart saved for it beside the audio ("<song>-autochart-<difficulty>.ghac")
+// join its difficulties.
+void addSavedAutoCharts(SongEntry& e) {
+    if (e.dataDir.empty() || e.songKey.empty()) return;
+    const std::string prefix = toLower(e.songKey) + "-autochart-";
+    std::vector<std::pair<std::string, std::string>> found;
+    for (const fs::path& f : listDir(toPath(e.dataDir), false)) {
+        const std::string n = toLower(pathStr(f.filename()));
+        if (n.rfind(prefix, 0) != 0 || !endsWithI(n, kAutoChartExt) || !isCountChart(pathStr(f))) continue;
+        const std::string stem = pathStr(f.stem());
+        found.push_back({"AutoChart " + prettyName(stem.substr(prefix.size())), pathStr(f)});
+    }
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
+        const int oa = diffOrder(a.first.substr(10)), ob = diffOrder(b.first.substr(10));
+        return oa != ob ? oa < ob : a.first < b.first;
+    });
+    for (auto& f : found) {
+        e.diffs.push_back(f.first);
+        e.chartPaths.push_back(f.second);
+    }
+}
+
 void scanSongsDir(const std::string& songsDirS, SongScan& out) {
     const fs::path songsDir = toPath(songsDirS);
     // Loose audio files in songs/: playable through AutoChart.
@@ -675,6 +713,7 @@ void scanSongsDir(const std::string& songsDirS, SongScan& out) {
         e.autoChart = true;
         e.diffs = {"Easy", "Normal", "Hard"};
         e.chartPaths = {"", "", ""};
+        addSavedAutoCharts(e);
         out.songs.push_back(e);
     }
     for (const fs::path& d : listDir(songsDir, true)) scanSongFolder(out.songs, pathStr(d), pathStr(d), "songs", pathStr(d) + "/");
@@ -1091,6 +1130,7 @@ void scanModsDir(const std::string& modsDirS, SongScan& out) {
                 e.autoChart = true;
                 e.diffs = {"Easy", "Normal", "Hard"};
                 e.chartPaths = {"", "", ""};
+                addSavedAutoCharts(e);
                 if (!fk.empty()) charted.insert(fk);
                 songs.push_back(e);
             }

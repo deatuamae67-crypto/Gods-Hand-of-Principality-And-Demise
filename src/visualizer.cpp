@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "audio.hpp"
+#include "gfx.hpp"
 
 namespace gh {
 
@@ -33,12 +34,12 @@ void vgradient(Rectangle r, Color top, Color bottom) { DrawRectangleGradientEx(r
 void pill(float x, float y0, float y1, float w, Color top, Color bottom) {
     const float r = w * 0.5f;
     if (y1 - y0 <= w) {
-        DrawCircleV({x + r, y1 - r}, r, mix(top, bottom, 0.5f));
+        gfx::disc({x + r, y1 - r}, r, mix(top, bottom, 0.5f));
         return;
     }
     vgradient({x, y0 + r, w, y1 - y0 - 2 * r}, top, bottom);
-    DrawCircleV({x + r, y0 + r}, r, top);
-    DrawCircleV({x + r, y1 - r}, r, bottom);
+    gfx::disc({x + r, y0 + r}, r, top);
+    gfx::disc({x + r, y1 - r}, r, bottom);
 }
 
 }  // namespace
@@ -136,8 +137,8 @@ void AudioVisualizer::draw(Rectangle area, float alpha) const {
         const float l = lv[size_t(b)];
         if (l < 0.3f) continue;
         const float x = area.x + float(b) * (bw + gap) + bw * 0.5f;
-        DrawCircleGradient(int(x), int(floorY - l * room * 0.55f), bw * 1.6f + l * room * 0.35f, withAlpha(tips[b], 0.16f * l * alpha),
-                           withAlpha(tips[b], 0.0f));
+        gfx::circleGradient({float(int(x)), float(int(floorY - l * room * 0.55f))}, bw * 1.6f + l * room * 0.35f,
+                            withAlpha(tips[b], 0.16f * l * alpha), withAlpha(tips[b], 0.0f));
     }
     EndBlendMode();
     for (int b = 0; b < B; ++b) {
@@ -152,16 +153,16 @@ void AudioVisualizer::draw(Rectangle area, float alpha) const {
         line[b] = {x + bw * 0.5f, floorY - h};
         // The peak: a small dot that hangs a moment over the bar.
         const float p = pk[size_t(b)];
-        if (p > 0.03f && p * room > h + bw) DrawCircleV({x + bw * 0.5f, floorY - p * room - bw * 0.5f}, bw * 0.38f,
-                                                        withAlpha(ColorBrightness(tips[b], 0.4f), 0.9f * alpha));
+        if (p > 0.03f && p * room > h + bw) gfx::disc({x + bw * 0.5f, floorY - p * room - bw * 0.5f}, bw * 0.38f,
+                                                      withAlpha(ColorBrightness(tips[b], 0.4f), 0.9f * alpha));
     }
     // A line of light over the tips, a soft one under a bright one.
     if (B >= 4) {
         const Color glowC = mix(top, WHITE, 0.3f);
         BeginBlendMode(BLEND_ADDITIVE);
-        DrawSplineCatmullRom(line, B, 4.0f, withAlpha(glowC, (0.16f + 0.12f * beatPulse_) * alpha));
+        gfx::splineCatmullRom(line, B, 4.0f, withAlpha(glowC, (0.16f + 0.12f * beatPulse_) * alpha));
         EndBlendMode();
-        DrawSplineCatmullRom(line, B, 1.3f, withAlpha(mix(glowC, WHITE, 0.4f), 0.55f * alpha));
+        gfx::splineCatmullRom(line, B, 1.3f, withAlpha(mix(glowC, WHITE, 0.4f), 0.55f * alpha));
     }
     // The floor: a line of light, brightest in the middle, flaring with the bass.
     const Color floorC = mix(mix(base, WHITE, 0.35f + 0.3f * beatPulse_), Color{255, 70, 70, 255}, danger);

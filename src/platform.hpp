@@ -78,14 +78,28 @@ std::string publishVideo(const std::string& path, const std::string& name);
 // <data folder>/psych-ui/ in the background (follow importStatus); "" comes back.
 std::string pickFolder(const std::string& title);
 std::string pickFolderNative(const std::string& title);  // folder_picker.cpp
+// The player picks files, several at once ("*.json"). Desktop: the system's
+// dialog (blocking); their paths come back (none if cancelled or there is no
+// dialog). Android: the system picker opens and the chosen files are copied
+// into <data folder>/merge/ in the background (follow importStatus, then
+// pickedFiles); none come back.
+std::vector<std::string> pickFiles(const std::string& title, const std::string& pattern);
+std::vector<std::string> pickFilesNative(const std::string& title, const std::string& pattern);  // folder_picker.cpp
+std::vector<std::string> pickedFiles();  // Android: what the last pickFiles copied
 bool inBackground();
 bool takeResumed();             // true once after the app comes back
 void rememberVolume(float v);   // master volume to restore after the background
 // Path shown to the player for a folder inside base (e.g. "Android/data/.../mods").
 std::string displayPath(const std::string& path);
 
-// HTTPS download to a file. Android only (through java.net); desktop uses curl.
-bool download(const std::string& url, const std::string& dest, std::string& err);
+// HTTPS download to a file. Android only (through java.net); desktop uses curl
+// (net.hpp). range: "first-last" or "-n" bytes ("" = the whole file).
+bool download(const std::string& url, const std::string& dest, std::string& err, const std::string& range = "");
+
+// Android: the system installer opens with this APK (the game updating
+// itself). 1: it opened; 2: Android's "install unknown apps" page opened
+// first (allow it, then try again); 0: neither. Desktop: 0.
+int installApk(const std::string& path);
 
 // Android: the system file picker copies the chosen mod zips into mods/.
 enum class Import { Idle, Picking, Copying, Done, Nothing };

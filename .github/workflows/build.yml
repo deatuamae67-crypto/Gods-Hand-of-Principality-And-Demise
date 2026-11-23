@@ -101,7 +101,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          cmake --install build --config Release --prefix dist/GodsHand
+          cmake --install build --config Release --prefix dist/GodsHand --component game
           mkdir -p dist/GodsHand/mods
           cd dist
           if [ "$RUNNER_OS" = "Windows" ]; then

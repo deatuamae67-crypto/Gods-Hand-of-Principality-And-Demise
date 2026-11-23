@@ -38,6 +38,7 @@ public:
     std::string perfInfo() const override;
     TouchLayout touchLayout() const override;
     bool keepsPictures() const override { return true; }
+    bool motionBlurred() const override { return true; }
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
     void openOptions();
@@ -141,6 +142,7 @@ private:
     void drawLoading();
     void drawDebugLog();
     void drawWatermark();
+    void drawShameWatermark();  // AutoChart charts: "AUTOCHARTED", mid-screen
     void syncScriptBpm();
     void updateVisualizer(double dt);
     void drawVisualizer() const;

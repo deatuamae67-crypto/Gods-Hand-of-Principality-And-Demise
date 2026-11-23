@@ -44,6 +44,7 @@ struct Settings {
     // 1 full (every pixel).
     int noteDetail = 0;
     int noteRenderer = 3;  // 0 GPU, 1 CPU with x86-64 assembly, 2 CPU with C++, 3 Auto
+    int motionBlur = 0;    // songs: 0 off, 1 light, 2 medium, 3 strong (frames blended; recording: 2/4/8 subframes a frame)
     bool luaNoteCallbacks = true;  // goodNoteHit, opponentNoteHit, noteMiss... (OFF: faster spam charts)
     // Rendering mode (desktop): songs play by themselves and are recorded to a
     // video with ffmpeg, frame by frame (render_mode.hpp).
@@ -67,8 +68,11 @@ struct Settings {
     // Psych Engine's own options (Visuals and UI, Gameplay).
     bool hideHud = false;       // health bar, icons, score line and ratings hidden
     bool watermark = true;      // "God's Hand (version)" in the bottom-left corner of songs
-    bool introVideo = true;     // the engine's intro (assets/videos/intro.mpg) before the title ("Play intro at start")
     bool menuBlur = false;      // the menus' background blurred
+    bool autoChart = false;     // AUTOCHART on the main menu (issue #36: shown only when turned on)
+    bool autoChartTrained = true;  // AutoChart charts with what it learned from the mods' charts (when it was trained)
+    bool jsonMerging = false;   // JSON MERGING on the main menu (the same)
+    bool autoUpdate = true;     // looks for a newer release and for mod pack changes at start (updater.hpp, mod_sync.hpp)
     bool visualizer = true;     // the audio visualizer in the top-right corner of songs
     bool scoreZoom = true;      // the score line grows a little on each note you hit
     bool botplayText = true;    // BOTPLAY (or REPLAY) on screen while the game plays by itself

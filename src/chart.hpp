@@ -72,6 +72,9 @@ struct Chart {
     int sideKeys[2] = {0, 0};
     int keysOf(int side) const { return sideKeys[side & 1] ? sideKeys[side & 1] : keys; }
     double speed = 2.0;        // FNF scroll speed (pixels/ms = 0.45 * speed)
+    // Made by AutoChart (issue #36): played with the shame watermark, and
+    // saved only as .ghac, which no other engine reads.
+    bool autoCharted = false;
     std::vector<Note> notes;   // sorted by time
     std::vector<TempoPoint> tempo;
     std::vector<FocusPoint> focus;
@@ -109,6 +112,10 @@ bool parseChart(std::string_view json, const std::string& difficulty, Chart& out
                 std::string_view vsliceMetadata = {}, bool extraKeys = true);
 
 bool readTextFile(const std::string& path, std::string& out);
+
+// A note's type by name, as charts give it: its index in the chart's types,
+// and what it does (mines for "Hurt Note" and the like, alt, GF, Hey!...).
+void applyNoteType(std::string_view type, Note& n, Chart& c);
 
 struct StreamedNotes;
 bool parseChartStreamed(std::string_view skeleton, const StreamedNotes& notes, const std::string& difficulty, Chart& out,

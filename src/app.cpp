@@ -4,11 +4,14 @@
 #include "app.hpp"
 #include "app_icon.hpp"
 #include "check_scripts.hpp"
+#include "autochart_train.hpp"
 #include "count_charts.hpp"
+#include "json_merge.hpp"
 #include "performance.hpp"
 #include "scene_draw.hpp"
 #include "psych_ui.hpp"
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +36,10 @@ extern "C" {
 extern unsigned int GhAudioPeriodMs, GhAudioPeriods;
 }
 
+#ifndef GH_VERSION
+#define GH_VERSION "dev"  // set by CMake from project(VERSION)
+#endif
+
 namespace gh {
 
 static App* g_app = nullptr;
@@ -46,6 +53,18 @@ int App::start(int argc, char** argv) {
 
 // Android log: which screen is open (the emulator test follows the game by it).
 static void logScreen(const State& s) { platform::log(std::string("screen ") + typeid(s).name()); }
+
+static std::vector<std::string> splitCommas(const std::string& s) {
+    std::vector<std::string> v;
+    size_t p = 0;
+    for (;;) {
+        const size_t e = s.find(',', p);
+        v.push_back(s.substr(p, e == std::string::npos ? std::string::npos : e - p));
+        if (e == std::string::npos) break;
+        p = e + 1;
+    }
+    return v;
+}
 
 static std::vector<double> parseList(const char* s) {
     std::vector<double> v;
@@ -219,6 +238,7 @@ int App::run(int argc, char** argv) {
     // The command line; on Android, the options given to the intent instead.
     std::vector<std::string> argStore;
     for (int i = 0; i < argc; ++i) argStore.push_back(argv[i]);
+    commandLine = argStore;
     for (std::string& s : platform::launchArgs()) argStore.push_back(std::move(s));
     std::vector<char*> argPtrs;
     for (std::string& s : argStore) argPtrs.push_back(s.data());
@@ -234,6 +254,18 @@ int App::run(int argc, char** argv) {
         } else if (!std::strcmp(a, "--human")) autoRun.botplay = false;
         else if (!std::strcmp(a, "--state")) { autoRun.enabled = true; autoRun.state = next(); }
         else if (!std::strcmp(a, "--shots")) autoRun.shots = parseList(next());
+        else if (!std::strcmp(a, "--press")) {
+            // "seconds:key,...": enter, esc, up, down, left, right, space, or a letter / digit.
+            for (const std::string& item : splitCommas(next())) {
+                const size_t c = item.find(':');
+                if (c == std::string::npos) continue;
+                const std::string k = toLower(trim(item.substr(c + 1)));
+                int code = k == "enter" ? KEY_ENTER : k == "esc" ? KEY_ESCAPE : k == "up" ? KEY_UP : k == "down" ? KEY_DOWN
+                         : k == "left" ? KEY_LEFT : k == "right" ? KEY_RIGHT : k == "space" ? KEY_SPACE : 0;
+                if (!code && k.size() == 1 && std::isalnum(static_cast<unsigned char>(k[0]))) code = std::toupper(static_cast<unsigned char>(k[0]));
+                if (code) autoRun.presses.push_back({std::atof(item.substr(0, c).c_str()), code});
+            }
+        }
         else if (!std::strcmp(a, "--shot-prefix")) autoRun.shotPrefix = next();
         else if (!std::strcmp(a, "--quit-after")) autoRun.quitAfter = std::atof(next());
         else if (!std::strcmp(a, "--rate")) mods.rate = clampv(std::atof(next()), 0.5, 2.0);
@@ -251,7 +283,19 @@ int App::run(int argc, char** argv) {
             convertIn = next();
             convertOut = next();
         }
+        else if (!std::strcmp(a, "--merge")) {
+            mergeOut = next();
+            while (i + 1 < argc && argv[i + 1][0] != '-') mergeParts.push_back(argv[++i]);
+        } else if (!std::strcmp(a, "--merge-mode")) mergeMode = next();
+        else if (!std::strcmp(a, "--merge-go")) autoRun.mergeGo = true;
+        else if (!std::strcmp(a, "--autochart-studio")) {
+            autoRun.enabled = true;
+            autoRun.studioSong = next();
+        } else if (!std::strcmp(a, "--train-autochart")) trainCli = true;
+        else if (!std::strcmp(a, "--studio-save")) autoRun.studioSave = true;
         else if (!std::strcmp(a, "--make-icon")) makeIconDir = next();
+        else if (!std::strcmp(a, "--update")) updateCli = true;  // looks for an update now, without the window
+        else if (!std::strcmp(a, "--update-from")) updateApi = next();  // another server than GitHub's API (tests)
         else if (!std::strcmp(a, "--touch")) touchMode = true;
         else if (!std::strcmp(a, "--perf")) perf = true;  // frame times on stdout every second
         else if (!std::strcmp(a, "--render")) renderCli = true;  // record the --autoplay song to renders/
@@ -260,6 +304,7 @@ int App::run(int argc, char** argv) {
     }
     if (!checkScriptsDir.empty()) return checkScripts(checkScriptsDir);  // --check-scripts <folder>
     if (!convertIn.empty()) return convertChartFile(convertIn, convertOut);  // --convert <chart> <out>
+    if (!mergeOut.empty()) return mergeChartFiles(mergeOut, mergeParts, mergeMode);  // --merge <out> <parts...>
     if (listSongs) {
         // Prints what the song library finds (no window): --list-songs [--base dir]
         // [--check-charts: load every chart and print its keys and notes, or why it fails]
@@ -307,6 +352,25 @@ int App::run(int argc, char** argv) {
         std::string cwd = std::string(GetWorkingDirectory()) + "/";
         if (FileExists((cwd + "assets/fonts/Rajdhani-Bold.ttf").c_str())) base = cwd;
     }
+    if (!platform::kAndroid && !autoRun.enabled) {
+        // An update downloaded last time takes its place before anything is
+        // loaded; a new program then starts at once (updater.hpp).
+        const update::Applied ap = update::applyPending(base);
+        if (ap.done) std::printf("[update] %s\n", ap.message.c_str());
+        if (ap.done && ap.exeChanged && relaunch(base + update::exeName(), commandLine)) return 0;
+        update::removeOldFiles(base);
+        startNotice_ = update::takeAppliedNote(base);  // shown on the first screen
+    }
+    if (updateCli) {
+        // godshand --update [--base dir]: the check, download and staging at
+        // once; the next start puts the files in place.
+        SetTraceLogLevel(LOG_WARNING);
+        updater.start(base, GH_VERSION, updateApi.empty() ? std::string(update::kApi) : updateApi);
+        updater.wait();
+        const update::Status us = updater.status();
+        std::printf("[update] %s\n", us.message.c_str());
+        return us.stage == update::Stage::Failed ? 1 : 0;
+    }
     userDir = base;
     if (!platform::kAndroid && !baseGiven && !FileExists((base + "portable.txt").c_str())) {
         const std::string u = platform::userDir();
@@ -316,6 +380,15 @@ int App::run(int argc, char** argv) {
             moveInUserData(base, u);
             userDir = u;
         }
+    }
+    {
+        // The engine's intro was removed (issue #36): its video, left by an
+        // older version in the game's folder (or copied out of the APK), goes.
+        std::error_code ec;
+        const std::string v = base + "assets/videos/intro.mpg";
+        std::filesystem::remove(std::filesystem::path(std::u8string(v.begin(), v.end())), ec);
+        const std::string d = base + "assets/videos";
+        std::filesystem::remove(std::filesystem::path(std::u8string(d.begin(), d.end())), ec);  // only when empty
     }
     settings.load(userDir + "settings.cfg");
     scores.load(userDir + "scores.cfg");
@@ -330,6 +403,29 @@ int App::run(int argc, char** argv) {
     }
     // Big charts read once load from here afterwards (chart_stream.hpp).
     setChartCacheDir(userDir + "cache/charts/");
+    if (trainCli) {
+        // godshand --train-autochart [--base dir]: AutoChart learns from every
+        // charted song of the mods, without the window; the game uses the
+        // model it saves (Options: AutoChart training).
+        SetTraceLogLevel(LOG_WARNING);
+        library.scan(base);
+        TrainProgress prog;
+        std::thread t([&] { trainAutoChart(library.songs(), userDir + "autochart-model.txt", prog); });
+        int shown = -1;
+        while (prog.running.load() || shown < 0) {
+            if (prog.done.load() != shown) {
+                shown = prog.done.load();
+                std::lock_guard<std::mutex> lk(prog.mtx);
+                std::printf("%d/%d songs, %d learned, %d skipped %s\n", shown, prog.total.load(), prog.learned.load(), prog.skipped.load(),
+                            prog.current.c_str());
+                std::fflush(stdout);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        t.join();
+        std::printf("%s (%s)\n", prog.message.c_str(), (userDir + "autochart-model.txt").c_str());
+        return 0;
+    }
 
     unsigned flags = platform::kAndroid ? 0u : (FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     if (settings.vsync) flags |= FLAG_VSYNC_HINT;
@@ -395,8 +491,8 @@ int App::run(int argc, char** argv) {
         mods.botplay = autoRun.botplay;
         state_ = makePlay(r);
     } else if (!autoRun.editorSong.empty()) state_ = makeChartEditor(autoRun.editorSong, autoRun.diff);
+    else if (!autoRun.studioSong.empty()) state_ = makeAutoChartStudio(autoRun.studioSong, 2);  // --autochart-studio <song>
     else if (autoRun.state == "menu") state_ = makeMainMenu();
-    else if (autoRun.state == "intro") state_ = makeIntro();  // the engine's intro, then the title
     else if (autoRun.state == "freeplay") state_ = makeFreeplay();
     else if (autoRun.state == "render-list" || autoRun.state == "autochart-list") {
         songListMode = autoRun.state == "render-list" ? SongListMode::Render : SongListMode::AutoChart;
@@ -411,15 +507,23 @@ int App::run(int argc, char** argv) {
     else if (autoRun.state == "scripts") state_ = makeScriptEditor();
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
     else if (autoRun.state == "converter") state_ = makeChartConverter();
+    else if (autoRun.state == "json-merge") state_ = makeJsonMerge();
     else if (autoRun.state == "note-colors") state_ = makeNoteColors();
     else if (autoRun.state == "note-skins") state_ = makeNoteSkins();
     else if (autoRun.state == "key-bindings") state_ = makeKeyBindings();
     else if (autoRun.state == "character-editor") state_ = makeCharacterEditor();
     else if (autoRun.state == "stage-editor") state_ = makeStageEditor();
     else if (autoRun.state == "event-editor") state_ = makeEventEditor();
-    else state_ = introWanted() ? makeIntro() : makeTitle();
+    else state_ = makeTitle();
     state_->enter();
     logScreen(*state_);
+    if (!startNotice_.empty()) notify(startNotice_, 10.0);
+    if (settings.autoUpdate && !autoRun.enabled) {
+        // A newer release, and changes in the mod packs installed (Options: Auto-update).
+        updater.start(base, GH_VERSION);
+        startPackCheck();
+        packNoticePending_ = true;
+    }
 
     double last = nowSec(), nextFrame = last, lastReal = last;
     while (!quit && !WindowShouldClose()) {
@@ -427,10 +531,12 @@ int App::run(int argc, char** argv) {
         if (renderer.active()) {
             // Rendering mode: one video frame of game time per loop, as fast
             // as the computer goes (no frame limit, no waiting for the screen).
-            renderClock_ += renderer.frameTime();
+            // Motion blur: several subframes make up one video frame.
+            const double step = renderer.frameTime() / double(renderSubframes());
+            renderClock_ += step;
             now = renderClock_;
             input.poll(now);
-            dt = renderer.frameTime();
+            dt = step;
             last = now;
             const double real = nowSec();
             if (real > lastReal) fps = fps * 0.95f + float(1.0 / (real - lastReal)) * 0.05f;
@@ -441,6 +547,7 @@ int App::run(int argc, char** argv) {
         now = nowSec() + clockShift_;
         input.poll(now);
         if (touchMode) touch.update(input, now);
+        if (autoRun.enabled) autoPress();
         const int cap = settings.vsync ? 0 : settings.fpsCap;
         if (cap > 0 && now < nextFrame) {
             const double wait = nextFrame - now;
@@ -489,9 +596,16 @@ int App::run(int argc, char** argv) {
     mixer.shutdown();
     psychUi().unload();
     sfxShutdown();
+    if (mbFrame_.id) UnloadRenderTexture(mbFrame_);
+    if (mbAccum_.id) UnloadRenderTexture(mbAccum_);
     gfx::shutdown();
     CloseAudioDevice();
     CloseWindow();
+    if (restartAfterQuit && !platform::kAndroid) {
+        // UPDATE on the main menu: the game starts again, and that start puts the update in place.
+        const std::string exe = currentExePath();
+        relaunch(exe.empty() ? base + update::exeName() : exe, commandLine);
+    }
     return 0;
 }
 
@@ -551,17 +665,50 @@ void App::frame() {
     // Rendering mode: the frame is drawn into the video's picture, sent to
     // ffmpeg with this frame's audio, and shown scaled in the window.
     const bool rendering = renderer.active();
+    const int subs = renderSubframes();
+    // Options > Motion blur in a song: the frame is drawn aside and blended in.
+    const bool blurLive = !rendering && settings.motionBlur > 0 && state_->motionBlurred() &&
+                          blurTargets(GetScreenWidth(), GetScreenHeight());
+    if (!blurLive) mbPrimed_ = false;
+    if (subs == 1) subframe_ = 0;
     BeginDrawing();
     ClearBackground(BLACK);
     if (rendering) {
         gfx::beginFrameTarget(renderer.target());
         ClearBackground(BLACK);
+    } else if (blurLive) {
+        gfx::beginFrameTarget(mbFrame_);
+        ClearBackground(BLACK);
     }
     state_->draw();
+    if (blurLive) {
+        gfx::endFrameTarget();
+        // The part of each frame that stays: the same whatever the frame rate.
+        static const float kKeep[3] = {0.45f, 0.62f, 0.78f};
+        const float keep = kKeep[clampv(settings.motionBlur, 1, 3) - 1];
+        const float a = mbPrimed_ ? 1.0f - std::pow(keep, float(clampv(dt, 0.0, 0.1) * 60.0)) : 1.0f;
+        gfx::blendFrame(mbAccum_, mbFrame_, a);
+        mbPrimed_ = true;
+        const Texture2D& t = mbAccum_.texture;
+        DrawTextureRec(t, {0, 0, float(t.width), -float(t.height)}, {0, 0}, WHITE);
+    }
     if (rendering) {
         gfx::drawLetterbox();
         gfx::endFrameTarget();
-        if (!renderer.captureFrame()) {
+        bool whole = true;  // a video frame is complete: sent with its audio
+        if (subs > 1 && blurTargets(renderer.target().texture.width, renderer.target().texture.height)) {
+            // Real motion blur: the subframes of one video frame averaged
+            // (the k-th weighs 1/(k+1)), the average sent as the frame.
+            gfx::blendFrame(mbAccum_, renderer.target(), 1.0f / float(subframe_ + 1));
+            if (++subframe_ < subs) {
+                whole = false;
+            } else {
+                subframe_ = 0;
+                gfx::blendFrame(renderer.target(), mbAccum_, 1.0f);
+            }
+        }
+        if (!whole) {
+        } else if (!renderer.captureFrame()) {
             stopRender();
         } else {
             const unsigned n = renderer.audioFramesFor(renderer.frames() - 1);
@@ -579,11 +726,11 @@ void App::frame() {
     }
     gfx::beginCanvas();
     if (fade_ > 0) DrawRectangleRec({-10, -10, gfx::W + 20, gfx::H + 20}, gfx::fade(BLACK, fade_));
-    drawFpsPanel();
     drawVolumeTray();
     if (renderer.active()) drawRenderBadge();
     const std::string msg = VideoRenderer::takeMessage();
     if (!msg.empty()) notify(msg, 10.0);
+    backgroundNotices();
     if (now < noticeUntil_ && !notice_.empty()) {
         const float al = float(clampv(noticeUntil_ - now, 0.0, 1.0));
         const Vector2 sz = gfx::measure(gfx::FontId::Ui, notice_, 20);
@@ -592,6 +739,7 @@ void App::frame() {
     }
     gfx::endCanvas();
     gfx::drawLetterbox();
+    drawFpsPanel();  // the window's own top left corner, over everything (issue #36)
     if (touchMode) touch.draw();
     EndDrawing();
 
@@ -694,19 +842,22 @@ void App::drawFpsPanel() {
         refreshFpsPanel();
     }
     if (!fpsPanelRt_.id || fpsPanelW_ <= 0) return;
-    // Always the top left corner, below the touch buttons when they sit in
-    // that corner.
+    // Always the window's top left corner (not the game picture's, which
+    // sits between black bars on screens of other shapes), in window pixels,
+    // below the touch buttons when they sit in that corner.
+    const float pw = fpsPanelW_ * cs, ph = fpsPanelH_ * cs;
     float px = 2, py = 2;
     if (touchMode) {
         std::vector<Rectangle> keys;
         touch.buttonRects(keys);
-        for (const Rectangle& r : keys) {
-            const Vector2 a = gfx::toCanvas({r.x, r.y}), b = gfx::toCanvas({r.x + r.width, r.y + r.height});
-            if (a.x < px + fpsPanelW_ && b.x > px && a.y < py + fpsPanelH_ && b.y > py) py = std::max(py, b.y + 4);
-        }
+        for (const Rectangle& r : keys)
+            if (r.x < px + pw && r.x + r.width > px && r.y < py + ph && r.y + r.height > py) py = std::max(py, r.y + r.height + 4);
     }
+    // A render texture holds its picture upside down, at its top: what was
+    // drawn at its top is its last rows. The panel is read from there,
+    // whatever size the texture was made at.
     const Texture2D& t = fpsPanelRt_.texture;
-    DrawTexturePro(t, {0, 0, fpsPanelW_ * cs, -fpsPanelH_ * cs}, {px, py, fpsPanelW_, fpsPanelH_}, {0, 0}, 0, WHITE);
+    DrawTexturePro(t, {0, float(t.height) - ph, pw, -ph}, {px, py, pw, ph}, {0, 0}, 0, WHITE);
 }
 
 // The panel's picture: its lines (wrapped to the screen), sized to fit them.
@@ -801,8 +952,7 @@ void App::refreshFpsPanel() {
         SetTextureFilter(fpsPanelRt_.texture, TEXTURE_FILTER_BILINEAR);
     }
     if (!fpsPanelRt_.id) return;
-    EndMode2D();  // out of the canvas, into the picture, at the window's scale
-    gfx::beginTexture(fpsPanelRt_);
+    gfx::beginTexture(fpsPanelRt_);  // into the picture, at the window's scale
     ClearBackground(BLANK);
     Camera2D cam{};
     cam.zoom = cs;
@@ -831,7 +981,6 @@ void App::refreshFpsPanel() {
     }
     EndMode2D();
     gfx::endTexture();
-    BeginMode2D(gfx::screenCamera());  // back to the canvas
 }
 
 // -------------------------------------------------------- rendering mode --
@@ -889,6 +1038,60 @@ void App::stopRender() {
     renderLabel.clear();
     if (path.empty()) notify("Rendering mode: " + err, 10.0);
     else std::printf("[render] %s\n", path.c_str());
+}
+
+int App::renderSubframes() const {
+    if (!renderer.active() || settings.motionBlur <= 0 || !state_ || !state_->motionBlurred()) return 1;
+    return 1 << clampv(settings.motionBlur, 1, 3);  // 2, 4, 8
+}
+
+// The motion blur's two pictures, at this size (made again when it changes).
+bool App::blurTargets(int w, int h) {
+    if (w <= 0 || h <= 0) return false;
+    if (mbFrame_.id && mbFrame_.texture.width == w && mbFrame_.texture.height == h) return true;
+    if (mbFrame_.id) UnloadRenderTexture(mbFrame_);
+    if (mbAccum_.id) UnloadRenderTexture(mbAccum_);
+    mbFrame_ = LoadRenderTexture(w, h);
+    mbAccum_ = LoadRenderTexture(w, h);
+    mbPrimed_ = false;
+    subframe_ = 0;
+    return mbFrame_.id && mbAccum_.id;
+}
+
+// --press: one key at a time, held for a frame.
+void App::autoPress() {
+    if (autoRun.held) {
+        input.setVirtual(autoRun.held, false, now);
+        autoRun.held = 0;
+        return;
+    }
+    if (autoRun.pressIndex < autoRun.presses.size() && now - startTime >= autoRun.presses[autoRun.pressIndex].first) {
+        autoRun.held = autoRun.presses[autoRun.pressIndex++].second;
+        input.setVirtual(autoRun.held, true, now);
+    }
+}
+
+// Said once each: an update ready to install, mod packs changed on the release.
+void App::backgroundNotices() {
+    if (now - backgroundAt_ < 0.25) return;
+    backgroundAt_ = now;
+    const update::Status us = updater.status();
+    if (us.stage != noticedStage_) {
+        noticedStage_ = us.stage;
+        if (us.stage == update::Stage::Ready) notify(us.message, 12.0);
+        if (us.stage == update::Stage::Failed || us.stage == update::Stage::UpToDate) std::printf("[update] %s\n", us.message.c_str());
+    }
+    int changed = 0;
+    {
+        // Only the check at start: MOD PACKS shows what its own checks find.
+        std::lock_guard<std::mutex> lk(packCheck->m);
+        if (!packNoticePending_ || !packCheck->done) return;
+        packNoticePending_ = false;
+        changed = packCheck->changed();
+    }
+    if (changed > 0 && !(us.stage == update::Stage::Ready && now < noticeUntil_))
+        notify(std::to_string(changed) + " mod pack(s) changed on the release since you installed them: MOD PACKS (Freeplay: M) "
+               "shows what changed, to install or remove.", 12.0);
 }
 
 void App::notify(const std::string& text, double seconds) {

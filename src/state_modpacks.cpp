@@ -1,11 +1,16 @@
 // God's Hand of Principality and Demise. Copyright (c) 2026 deatuamae67-crypto.
 // All rights reserved; see LICENSE. Forking is not allowed: contribute through issues.
 
-// Mod packs screen (Freeplay: M): downloads the packs published on the
-// game's "mods" release (with the system's curl; on Android through Java)
-// and installs them.
+// Mod packs screen (Freeplay: M): the packs published on the game's "mods"
+// release, downloaded (the system's curl; on Android through Java), checked
+// against the SHA-256 GitHub gives for them and installed with a record of
+// their files (mod_sync.hpp). For the packs installed, what changed on the
+// release since (issue #36): songs and files added, changed or removed, to
+// install - or, once installed, to remove again - and the packs taken off
+// the release, to remove.
 #include <algorithm>
 #include <atomic>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -14,9 +19,12 @@
 #include "app.hpp"
 #include "common.hpp"
 #include "gfx.hpp"
+#include "mod_sync.hpp"
+#include "net.hpp"
 #include "platform.hpp"
-#include "process.hpp"
 #include "raylib.h"
+#include "sha256.hpp"
+#include "updater.hpp"
 
 namespace gh {
 
@@ -24,25 +32,9 @@ namespace {
 namespace fs = std::filesystem;
 using gfx::Align;
 using gfx::FontId;
-
-constexpr const char* kReleaseUrl =
-    "https://github.com/deatuamae67-crypto/Gods-Hand-of-Principality-And-Demise/releases/download/mods/";
+using modsync::PackStatus;
 
 fs::path toPath(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
-
-struct Pack {
-    std::string folder;
-    std::vector<std::string> zips;
-};
-
-// Shared with the download thread.
-struct Shared {
-    std::mutex m;
-    std::string status;
-    std::string currentFile;  // .part being written
-    bool busy = false, manifestOk = false, done = false;
-    std::vector<Pack> packs;
-};
 
 uint64_t fileSizeOf(const std::string& p) {
     std::error_code ec;
@@ -50,18 +42,84 @@ uint64_t fileSizeOf(const std::string& p) {
     return ec ? 0 : uint64_t(s);
 }
 
+// Shared with the screen's worker thread.
+struct Shared {
+    std::mutex m;
+    std::string status;
+    std::string currentFile;  // .part being written
+    bool busy = false, done = false;
+};
+
+void runPackCheck(const std::string& base, PackCheck& pc) {
+    net::Http http(base);
+    std::string manifestText, apiJson, err;
+    modsync::Manifest man;
+    bool ok = http.available();
+    if (!ok) err = "curl was not found";
+    if (ok) ok = http.getText(std::string(modsync::kPacksUrl) + "mod-packs.txt", base + "cache/mod-packs.txt", manifestText, err);
+    if (ok && !modsync::parseManifest(manifestText, man)) {
+        ok = false;
+        err = "the list of packs is empty";
+    }
+    std::vector<PackStatus> packs;
+    if (ok) {
+        // Without the API's answer there are no SHA-256 to compare: each pack's files are then read.
+        std::string apiErr;
+        http.getText(std::string(update::kApi) + "releases/tags/mods", base + "cache/mods-release.json", apiJson, apiErr);
+        modsync::FetchRange fetch;
+        if (http.canRange())
+            fetch = [&http, base](const std::string& url, const std::string& range, std::string& bytes, std::string& e) {
+                return http.getText(url, base + "cache/pack-range.bin", bytes, e, range);
+            };
+        packs = modsync::comparePacks(base + "mods/", apiJson, man, fetch);
+    }
+    std::lock_guard<std::mutex> lk(pc.m);
+    pc.packs = std::move(packs);
+    pc.ok = ok;
+    pc.message = ok ? "" : "Could not reach the mods release (" + err + ").";
+    pc.running = false;
+    pc.done = true;
+    ++pc.generation;
+}
+
+std::string dateOf(long long t) {
+    if (t <= 0) return "";
+    const std::time_t tt = std::time_t(t);
+    char buf[32];
+    if (const std::tm* tm = std::localtime(&tt)) {
+        std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", tm);
+        return buf;
+    }
+    return "";
+}
+
 }  // namespace
+
+int PackCheck::changed() const {
+    int n = 0;
+    for (const PackStatus& p : packs) n += p.kind == PackStatus::Changed || p.kind == PackStatus::Gone;
+    return n;
+}
+
+void App::startPackCheck() {
+    {
+        std::lock_guard<std::mutex> lk(packCheck->m);
+        if (packCheck->running) return;
+        packCheck->running = true;
+    }
+    std::thread([pc = packCheck, b = base] { runPackCheck(b, *pc); }).detach();
+}
 
 class ModPacksState : public State {
 public:
     void enter() override {
         App& a = app();
-        if (!platform::kAndroid) curl_ = findProgram(a.base, "curl", "--version");
-        if (!canDownload()) {
+        if (!http_.available()) {
             sh_->status = "curl was not found. Download the packs from the game's Releases page (tag 'mods') and put the zips in mods/.";
             return;
         }
-        startJob([this, base = a.base] { fetchManifest(base); });
+        sh_->status = "Looking at the mods release...";
+        a.startPackCheck();  // a fresh look each time the screen opens (one already running is used)
     }
 
     void update(double) override {
@@ -75,7 +133,7 @@ public:
             sh_->done = false;
         }
         if (done) {
-            // Install what was downloaded (the library unpacks zips in mods/).
+            // The library finds the songs that came or went.
             a.library.scan(a.base, [](const std::string& zip, double f) {
                 BeginDrawing();
                 ClearBackground(Color{12, 8, 20, 255});
@@ -87,28 +145,34 @@ public:
                 PollInputEvents();
                 SwapScreenBuffer();
             });
-            std::lock_guard<std::mutex> lk(sh_->m);
-            sh_->status += "  Installed: " + a.library.report() + ".";
+            a.startPackCheck();  // what is installed now
         }
-        const int n = int(packs().size()) + 1;  // + "all"
-        if (!busy) {
-            if (in.up()) { sel_ = (sel_ + n - 1) % n; sfxPlay(Sfx::Scroll); }
-            if (in.down()) { sel_ = (sel_ + 1) % n; sfxPlay(Sfx::Scroll); }
-            if (in.accept() && canDownload() && n > 1) {
-                std::vector<Pack> todo;
-                if (sel_ == 0) {
-                    for (const Pack& p : packs())
-                        if (!installed(p)) todo.push_back(p);
-                } else {
-                    todo.push_back(packs()[size_t(sel_ - 1)]);
-                }
+        pullCheck();
+        const int n = int(rows_.size()) + 1;  // + "all"
+        if (busy) return;
+        if (detail_) {
+            updateDetail();
+            return;
+        }
+        if (in.up()) { sel_ = (sel_ + n - 1) % n; sfxPlay(Sfx::Scroll); }
+        if (in.down()) { sel_ = (sel_ + 1) % n; sfxPlay(Sfx::Scroll); }
+        if (in.accept() && n > 1 && http_.available()) {
+            if (sel_ == 0) {
+                std::vector<PackStatus> todo;
+                for (const PackStatus& p : rows_)
+                    if (p.kind == PackStatus::NotInstalled) todo.push_back(p);
                 if (!todo.empty()) {
                     sfxPlay(Sfx::Confirm);
-                    startJob([this, todo, base = a.base] { download(base, todo); });
+                    startJob([this, todo, base = a.base] { install(base, todo, false); });
                 }
+            } else {
+                const PackStatus& p = rows_[size_t(sel_ - 1)];
+                sfxPlay(Sfx::Confirm);
+                if (p.kind == PackStatus::NotInstalled) startJob([this, p, base = a.base] { install(base, {p}, false); });
+                else openDetail(p);
             }
         }
-        if (in.back() && !busy) {
+        if (in.back()) {
             sfxPlay(Sfx::Cancel);
             a.change(makeFreeplay());
         }
@@ -129,29 +193,57 @@ public:
             current = sh_->currentFile;
             busy = sh_->busy;
         }
-        const auto list = packs();
-        float y = 130;
-        auto row = [&](int i, const std::string& label, const std::string& right) {
-            const bool on = i == sel_;
-            if (on) DrawRectangleRounded({200, y - 6, 880, 36}, 0.3f, 6, Color{255, 255, 255, 30});
-            gfx::text(FontId::Ui, label, 220, y, 26, on ? gfx::rgb(0xFFFFFF) : gfx::fade(WHITE, 0.7f));
-            gfx::text(FontId::Ui, right, 1060, y, 22, gfx::fade(WHITE, 0.6f), Align::Right);
-            y += 38;
-        };
-        if (!list.empty()) {
-            int missing = 0;
-            for (const Pack& p : list) missing += !installed(p);
-            row(0, "Download every missing pack", std::to_string(missing) + " missing");
-            const int first = std::max(1, std::min(sel_ - 6, int(list.size()) - 11));
-            for (int i = first; i < int(list.size()) + 1 && y < 600; ++i) {
-                const Pack& p = list[size_t(i - 1)];
-                row(i, prettyName(p.folder), installed(p) ? "installed" : (p.zips.size() > 1 ? std::to_string(p.zips.size()) + " parts" : ""));
+        if (detail_) {
+            drawDetail();
+        } else {
+            float y = 130;
+            auto row = [&](int i, const std::string& label, const std::string& right, Color rc) {
+                const bool on = i == sel_;
+                if (on) DrawRectangleRounded({120, y - 6, 1040, 36}, 0.3f, 6, Color{255, 255, 255, 30});
+                gfx::text(FontId::Ui, label, 140, y, 26, on ? gfx::rgb(0xFFFFFF) : gfx::fade(WHITE, 0.7f));
+                gfx::text(FontId::Ui, right, 1140, y + 3, 20, rc, Align::Right);
+                y += 38;
+            };
+            if (!rows_.empty()) {
+                int missing = 0, changed = 0;
+                for (const PackStatus& p : rows_) {
+                    missing += p.kind == PackStatus::NotInstalled;
+                    changed += p.kind == PackStatus::Changed || p.kind == PackStatus::Gone;
+                }
+                row(0, "Download every missing pack",
+                    std::to_string(missing) + " missing" + (changed ? ", " + std::to_string(changed) + " changed" : ""),
+                    gfx::fade(WHITE, 0.6f));
+                const int first = std::max(1, std::min(sel_ - 6, int(rows_.size()) - 11));
+                for (int i = first; i < int(rows_.size()) + 1 && y < 600; ++i) {
+                    const PackStatus& p = rows_[size_t(i - 1)];
+                    Color rc = gfx::fade(WHITE, 0.6f);
+                    std::string right;
+                    switch (p.kind) {
+                        case PackStatus::NotInstalled: right = p.zips.size() > 1 ? std::to_string(p.zips.size()) + " parts" : ""; break;
+                        case PackStatus::UpToDate: right = "installed"; break;
+                        case PackStatus::Changed:
+                            right = "CHANGED: " + (p.diffKnown ? p.diff.summary() : std::string("new version"));
+                            rc = gfx::rgb(0xFFD25A);
+                            break;
+                        case PackStatus::Gone:
+                            right = "TAKEN OFF THE RELEASE";
+                            rc = gfx::rgb(0xFF7A7A);
+                            break;
+                        case PackStatus::Unknown: right = "installed (not compared)"; break;
+                    }
+                    if (right.size() > 58) right = right.substr(0, 55) + "...";
+                    row(i, prettyName(p.folder), right, rc);
+                }
+            } else if (checking_) {
+                gfx::text(FontId::Ui, "Looking at the mods release...", gfx::W / 2, 300, 24, gfx::fade(WHITE, 0.7f), Align::Center);
             }
         }
-        if (busy && !current.empty())
-            status += TextFormat("  (%.1f MB)", double(fileSizeOf(current)) / 1e6);
+        if (busy && !current.empty()) status += TextFormat("  (%.1f MB)", double(fileSizeOf(current)) / 1e6);
         gfx::text(FontId::Ui, status, gfx::W / 2, 620, 20, gfx::fade(WHITE, 0.8f), Align::Center);
-        const char* help = busy ? "Working... please wait" : a.touchMode ? "OK download" : "UP/DOWN select   ENTER download   ESC back";
+        const char* help = busy      ? "Working... please wait"
+                           : detail_ ? (a.touchMode ? "LEFT/RIGHT choose   OK do it   BACK" : "LEFT/RIGHT choose   ENTER do it   ESC back")
+                           : a.touchMode ? "OK download / details"
+                                         : "UP/DOWN select   ENTER download or see the changes   ESC back";
         gfx::text(FontId::Ui, help, gfx::W / 2, 670, 20, gfx::fade(WHITE, 0.55f), Align::Center);
         gfx::endCanvas();
     }
@@ -161,15 +253,153 @@ public:
     }
 
 private:
-    std::vector<Pack> packs() {
-        std::lock_guard<std::mutex> lk(sh_->m);
-        return sh_->packs;
+    enum class Act { Install, Undo, Remove, Back };
+
+    // The rows follow the last check (the packs of the release, then those gone from it).
+    void pullCheck() {
+        App& a = app();
+        std::lock_guard<std::mutex> lk(a.packCheck->m);
+        checking_ = a.packCheck->running;
+        if (a.packCheck->generation == seenGeneration_) return;
+        seenGeneration_ = a.packCheck->generation;
+        rows_ = a.packCheck->packs;
+        sel_ = std::min(sel_, int(rows_.size()));
+        std::lock_guard<std::mutex> lk2(sh_->m);
+        if (!a.packCheck->ok) {
+            sh_->status = a.packCheck->message;
+        } else if (sh_->status.rfind("Looking", 0) == 0 || sh_->status.empty()) {
+            const int changed = a.packCheck->changed();
+            sh_->status = std::to_string(rows_.size()) + " packs" +
+                          (changed ? ": " + std::to_string(changed) + " changed on the release since you installed them." : ".");
+        }
+        if (detail_) {
+            for (const PackStatus& p : rows_)
+                if (p.folder == detailPack_.folder) detailPack_ = p;
+            actions_ = actionsFor(detailPack_);
+            act_ = std::min(act_, int(actions_.size()) - 1);
+        }
     }
-    bool canDownload() const { return platform::kAndroid || !curl_.empty(); }
-    bool installed(const Pack& p) const {
-        std::error_code ec;
-        return fs::is_directory(toPath(app().base + "mods/" + p.folder), ec);
+
+    std::vector<Act> actionsFor(const PackStatus& p) const {
+        std::vector<Act> v;
+        if (p.kind == PackStatus::Changed || p.kind == PackStatus::Unknown || p.legacy) v.push_back(Act::Install);
+        if (undo_.exists) v.push_back(Act::Undo);
+        modsync::Record r;
+        if (modsync::loadRecord(app().base + "mods/", p.folder, r)) v.push_back(Act::Remove);
+        v.push_back(Act::Back);
+        return v;
     }
+    static const char* label(Act a) {
+        switch (a) {
+            case Act::Install: return "INSTALL CHANGES";
+            case Act::Undo: return "REMOVE CHANGES";
+            case Act::Remove: return "REMOVE PACK";
+            default: return "BACK";
+        }
+    }
+
+    void openDetail(const PackStatus& p) {
+        detail_ = true;
+        detailPack_ = p;
+        undo_ = modsync::undoInfo(app().base + "mods/", p.folder);
+        actions_ = actionsFor(p);
+        act_ = 0;
+        confirm_ = false;
+    }
+
+    void updateDetail() {
+        App& a = app();
+        Input& in = a.input;
+        const int n = int(actions_.size());
+        if (in.left()) { act_ = (act_ + n - 1) % n; confirm_ = false; sfxPlay(Sfx::Scroll); }
+        if (in.right()) { act_ = (act_ + 1) % n; confirm_ = false; sfxPlay(Sfx::Scroll); }
+        if (in.back()) {
+            sfxPlay(Sfx::Cancel);
+            detail_ = false;
+            return;
+        }
+        if (!in.accept()) return;
+        const Act act = actions_[size_t(act_)];
+        if (act == Act::Back) {
+            sfxPlay(Sfx::Cancel);
+            detail_ = false;
+            return;
+        }
+        if (act == Act::Remove && !confirm_) {  // ENTER twice: it deletes files
+            confirm_ = true;
+            sfxPlay(Sfx::Scroll);
+            return;
+        }
+        sfxPlay(Sfx::Confirm);
+        const PackStatus p = detailPack_;
+        const std::string base = a.base;
+        detail_ = false;
+        if (act == Act::Install) startJob([this, p, base] { install(base, {p}, true); });
+        else if (act == Act::Undo) startJob([this, p, base] { undo(base, p.folder); });
+        else startJob([this, p, base] { remove(base, p.folder); });
+    }
+
+    void drawDetail() {
+        const PackStatus& p = detailPack_;
+        DrawRectangleRounded({100, 120, 1080, 480}, 0.05f, 8, Color{10, 6, 24, 220});
+        gfx::text(FontId::Title, prettyName(p.folder), gfx::W / 2, 132, 34, gfx::rgb(0xFFE08A), Align::Center, 2);
+        float y = 182;
+        auto line = [&](const std::string& s, Color c, float size = 20) {
+            if (y > 520) return;
+            gfx::text(FontId::Ui, s.size() > 100 ? s.substr(0, 97) + "..." : s, 130, y, size, c);
+            y += size + 6;
+        };
+        switch (p.kind) {
+            case PackStatus::Changed:
+                line("Changed on the release since it was installed: " + (p.diffKnown ? p.diff.summary() : std::string("a new version")),
+                     gfx::rgb(0xFFD25A), 22);
+                break;
+            case PackStatus::Gone: line("No longer on the mods release.", gfx::rgb(0xFF7A7A), 22); break;
+            case PackStatus::UpToDate: line("Installed, the same as on the release.", gfx::fade(WHITE, 0.85f), 22); break;
+            case PackStatus::Unknown:
+                line("Installed; not compared with the release" + (p.note.empty() ? std::string(".") : " (" + p.note + ")."),
+                     gfx::fade(WHITE, 0.85f), 22);
+                break;
+            default: break;
+        }
+        if (p.legacy) line("Installed before the game kept a record of the packs' files: installing it again starts one.", gfx::fade(WHITE, 0.6f));
+        auto names = [](const std::vector<std::string>& v) {
+            std::string s;
+            for (size_t i = 0; i < v.size() && i < 8; ++i) s += (i ? ", " : "") + prettyName(v[i]);
+            if (v.size() > 8) s += " and " + std::to_string(v.size() - 8) + " more";
+            return s;
+        };
+        if (p.diffKnown) {
+            if (!p.diff.songsAdded.empty()) line("Songs added: " + names(p.diff.songsAdded), gfx::rgb(0x9CFF9C));
+            if (!p.diff.songsRemoved.empty()) line("Songs removed: " + names(p.diff.songsRemoved), gfx::rgb(0xFF9C9C));
+            int shown = 0;
+            const int room = 9;
+            for (const std::string& f : p.diff.added)
+                if (shown++ < room) line("+ " + f, gfx::rgb(0x9CFF9C), 18);
+            for (const std::string& f : p.diff.changed)
+                if (shown++ < room) line("~ " + f, gfx::rgb(0xFFE08A), 18);
+            for (const std::string& f : p.diff.removed)
+                if (shown++ < room) line("- " + f, gfx::rgb(0xFF9C9C), 18);
+            if (shown > room) line("... and " + std::to_string(shown - room) + " more files", gfx::fade(WHITE, 0.6f), 18);
+        }
+        y = std::max(y, 470.0f);
+        if (undo_.exists)
+            gfx::text(FontId::Ui, "Last change installed (" + dateOf(undo_.when) + "): " + undo_.summary + "  -  REMOVE CHANGES puts it back",
+                      gfx::W / 2, 500, 17, gfx::fade(WHITE, 0.6f), Align::Center);
+        float x = 0, total = 0;
+        for (const Act a : actions_) total += gfx::measure(FontId::Ui, label(a), 26).x + 60;
+        x = gfx::W / 2 - total / 2;
+        for (size_t i = 0; i < actions_.size(); ++i) {
+            std::string l = label(actions_[i]);
+            if (actions_[i] == Act::Remove && confirm_ && int(i) == act_) l = "SURE? ENTER";
+            const float w = gfx::measure(FontId::Ui, l, 26).x + 40;
+            const bool on = int(i) == act_;
+            DrawRectangleRounded({x, 536, w, 44}, 0.4f, 6, on ? Color{255, 210, 90, 220} : Color{255, 255, 255, 40});
+            gfx::text(FontId::Ui, l, x + w / 2, 545, 26, on ? Color{20, 10, 30, 255} : gfx::fade(WHITE, 0.8f), Align::Center);
+            x += w + 20;
+        }
+    }
+
     void startJob(std::function<void()> fn) {
         if (worker_.joinable()) worker_.join();
         {
@@ -181,92 +411,114 @@ private:
             std::lock_guard<std::mutex> lk(sh_->m);
             sh_->busy = false;
             sh_->currentFile.clear();
+            sh_->done = true;
         });
     }
     void setStatus(const std::string& s) {
         std::lock_guard<std::mutex> lk(sh_->m);
         sh_->status = s;
     }
-    bool fetch(const std::string& url, const std::string& dest) {
+
+    // A pack's zip, downloaded and checked against what GitHub says of it.
+    bool fetchZip(const modsync::RemoteZip& z, const std::string& dest, std::string& err) {
         {
             std::lock_guard<std::mutex> lk(sh_->m);
             sh_->currentFile = dest + ".part";
         }
+        if (!http_.get(z.url, dest, err)) return false;
         std::error_code ec;
-        fs::create_directories(toPath(dest).parent_path(), ec);
-        bool ok;
-        if (platform::kAndroid) {
-            std::string err;
-            ok = false;
-            for (int attempt = 0; attempt < 3 && !ok; ++attempt) ok = platform::download(url, dest + ".part", err);
-        } else {
-            ok = runProcess(curl_, {"-L", "--fail", "--silent", "--show-error", "--retry", "3", "-o", dest + ".part", url}) == 0;
-        }
-        if (!ok) {
-            fs::remove(toPath(dest + ".part"), ec);
+        if (z.size && fileSizeOf(dest) != z.size) {
+            err = "incomplete download";
+            fs::remove(toPath(dest), ec);
             return false;
         }
-        fs::rename(toPath(dest + ".part"), toPath(dest), ec);
-        return !ec;
+        std::string hex;
+        if (!z.sha256.empty() && (!sha256File(dest, hex) || hex != z.sha256)) {
+            err = "damaged download (its SHA-256 differs from GitHub's)";
+            fs::remove(toPath(dest), ec);
+            return false;
+        }
+        return true;
     }
-    void fetchManifest(const std::string& base) {
-        setStatus("Fetching the list of mod packs...");
-        const std::string dest = base + "cache/mod-packs.txt";
-        if (!fetch(std::string(kReleaseUrl) + "mod-packs.txt", dest)) {
-            setStatus("Could not reach the Releases page (no internet?).");
-            return;
-        }
-        std::string text;
-        if (FILE* f = std::fopen(dest.c_str(), "rb")) {
-            char buf[4096];
-            size_t n;
-            while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
-            std::fclose(f);
-        }
-        std::vector<Pack> list;
-        size_t p = 0;
-        while (p < text.size()) {
-            size_t e = text.find('\n', p);
-            if (e == std::string::npos) e = text.size();
-            const std::string line = text.substr(p, e - p);
-            p = e + 1;
-            const size_t tab = line.find('\t');
-            if (tab == std::string::npos) continue;
-            Pack pk;
-            pk.folder = line.substr(0, tab);
-            size_t q = tab + 1;
-            while (q < line.size()) {
-                size_t sp = line.find(' ', q);
-                if (sp == std::string::npos) sp = line.size();
-                const std::string z = trim(line.substr(q, sp - q));
-                if (!z.empty() && z.find('/') == std::string::npos && z.find('\\') == std::string::npos) pk.zips.push_back(z);
-                q = sp + 1;
-            }
-            if (!pk.folder.empty() && !pk.zips.empty() && pk.folder.find("..") == std::string::npos) list.push_back(pk);
-        }
-        std::lock_guard<std::mutex> lk(sh_->m);
-        sh_->packs = list;
-        sh_->manifestOk = true;
-        sh_->status = std::to_string(list.size()) + " packs available.";
-    }
-    void download(const std::string& base, const std::vector<Pack>& todo) {
+
+    // Downloads each pack's zips and installs them (a pack installed before
+    // gets its changes; the last change can be removed again).
+    void install(const std::string& base, const std::vector<PackStatus>& packs, bool update) {
+        const std::string mods = base + "mods/", dl = mods + ".installed/dl/";
         int ok = 0, failed = 0;
-        for (const Pack& p : todo) {
-            for (const std::string& z : p.zips) {
-                setStatus("Downloading " + z + "...");
-                if (fetch(std::string(kReleaseUrl) + z, base + "mods/" + z)) ++ok;
-                else ++failed;
+        std::string last;
+        for (const PackStatus& p : packs) {
+            std::vector<std::string> paths;
+            modsync::InstallOptions opt;
+            opt.wholePack = true;
+            opt.source = "pack";
+            bool good = !p.zips.empty();
+            std::string err;
+            for (const modsync::RemoteZip& z : p.zips) {
+                setStatus("Downloading " + z.name + "...");
+                if (!fetchZip(z, dl + z.name, err)) {
+                    good = false;
+                    break;
+                }
+                paths.push_back(dl + z.name);
+                opt.zipInfo.push_back({z.name, z.sha256, z.size});
+            }
+            modsync::Record before;
+            const bool hadRecord = modsync::loadRecord(mods, p.folder, before);
+            modsync::InstallResult res;
+            if (good) {
+                setStatus("Installing " + prettyName(p.folder) + "...");
+                good = modsync::installZips(mods, paths, opt, res);
+                err = res.message;
+            }
+            std::error_code ec;
+            if (good) {
+                // The zips are kept with the others installed (as the game always did); parts the pack no longer has go.
+                for (const modsync::RemoteZip& z : p.zips) {
+                    fs::remove(toPath(mods + ".installed/" + z.name), ec);
+                    fs::rename(toPath(dl + z.name), toPath(mods + ".installed/" + z.name), ec);
+                    if (ec) fs::remove(toPath(dl + z.name), ec);
+                }
+                if (hadRecord)
+                    for (const modsync::ZipInfo& z : before.zips) {
+                        bool still = false;
+                        for (const modsync::RemoteZip& n : p.zips) still = still || n.name == z.name;
+                        if (!still) fs::remove(toPath(mods + ".installed/" + z.name), ec);
+                    }
+                ++ok;
+                last = update ? res.message : prettyName(p.folder) + " installed";
+            } else {
+                for (const std::string& path : paths) fs::remove(toPath(path), ec);
+                ++failed;
+                last = prettyName(p.folder) + ": " + (err.empty() ? "failed" : err);
             }
         }
-        std::lock_guard<std::mutex> lk(sh_->m);
-        sh_->status = std::to_string(ok) + " file(s) downloaded" + (failed ? ", " + std::to_string(failed) + " failed." : ".");
-        sh_->done = ok > 0;
+        setStatus(packs.size() == 1 ? last
+                                    : std::to_string(ok) + " pack(s) installed" + (failed ? ", " + std::to_string(failed) + " failed." : "."));
+    }
+    void undo(const std::string& base, const std::string& folder) {
+        std::string msg;
+        modsync::undoChanges(base + "mods/", folder, msg);
+        setStatus(msg);
+    }
+    void remove(const std::string& base, const std::string& folder) {
+        std::string msg;
+        modsync::removeMod(base + "mods/", folder, msg);
+        setStatus(msg);
     }
 
     std::shared_ptr<Shared> sh_ = std::make_shared<Shared>();
+    net::Http http_{app().base};
     std::thread worker_;
-    std::string curl_;
+    std::vector<PackStatus> rows_;
+    int seenGeneration_ = -1;
+    bool checking_ = false;
     int sel_ = 0;
+    bool detail_ = false, confirm_ = false;
+    PackStatus detailPack_;
+    modsync::UndoInfo undo_;
+    std::vector<Act> actions_;
+    int act_ = 0;
 };
 
 std::unique_ptr<State> makeModPacks() { return std::make_unique<ModPacksState>(); }

@@ -116,6 +116,9 @@ Every version
   - Lua 5.4: MIT license, Copyright (C) 1994-2024 Lua.org, PUC-Rio
   - miniz: MIT license, Copyright 2013-2014 RAD Game Tools and Valve Software
   - pl_mpeg: MIT license, Copyright Dominic Szablewski
+  - Zstandard (fetched at build time; the .thr charts): BSD license,
+    Copyright (c) Meta Platforms, Inc. and affiliates, see
+    licenses/zstd-BSD.txt
   - The GLSL of JS Engine's screen effects in src/effects.cpp, taken from
     the Shaders.hx file of JS Engine
     (https://github.com/JordanSantiagoYT/FNF-JS-Engine): Apache License 2.0,
