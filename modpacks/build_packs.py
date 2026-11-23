@@ -115,10 +115,7 @@ NOTES = (
     "-part2... must all be downloaded.\n\n"
     "Not all of these mods are by deatuamae67-crypto: some are, and the others belong to their original "
     "creators, who keep every right to them. They are shared so they can be played in God's Hand, and "
-    "they are not covered by the game's license.\n\n"
-    "*Nem todos estes mods são de deatuamae67-crypto: alguns são, e os outros pertencem aos seus criadores "
-    "originais, que mantêm todos os direitos sobre eles. Estão aqui para se poderem jogar no God's Hand e "
-    "não estão abrangidos pela licença do jogo.*")
+    "they are not covered by the game's license.")
 
 
 def main():
