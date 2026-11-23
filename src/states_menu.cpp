@@ -1332,10 +1332,11 @@ private:
         const Color col = gfx::rgb(c.color);
         const auto it = photos_.find(c.photo);
         if (it != photos_.end()) {
+            // A round picture (assets/credits/ keeps them round, see its README) in a ring of their colour.
             const Texture2D& t = it->second;
             const float side = float(std::min(t.width, t.height));
             const Rectangle src{(t.width - side) * 0.5f, (t.height - side) * 0.5f, side, side};
-            DrawRectangleRec({cx - size / 2 - 3, cy - size / 2 - 3, size + 6, size + 6}, fade(col, alpha));
+            DrawCircleV({cx, cy}, size / 2 + 3, fade(col, alpha));
             DrawTexturePro(t, src, {cx - size / 2, cy - size / 2, size, size}, {0, 0}, 0, fade(WHITE, alpha));
             return;
         }
