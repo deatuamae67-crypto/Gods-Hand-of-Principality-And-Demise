@@ -430,7 +430,7 @@ void PlayState::setup() {
     // Lanes no key reaches (a chart of more keys than the keyboard has): the
     // bot plays them, unless the lanes are touched (each one is a column then).
     cfg_.keylessLanes.reset();
-    if (!a.touchMode && !a.settings.touchControls)
+    if (!a.touchMode)
         for (int l = 0; l < chart_.keysOf(1) && l < kMaxKeys; ++l)
             if (size_t(l) >= lk.size() || lk[size_t(l)].empty()) cfg_.keylessLanes.set(size_t(l));
 
@@ -567,7 +567,6 @@ void PlayState::restart() {
         for (int l = 0; l < kMaxKeys; ++l) confirmAt_[s][l] = confirmUntil_[s][l] = 0;
     for (bool& b : confirmHeld_) b = false;
     for (int& h : heldCount_) h = 0;
-    for (bool& t : touchDown_) t = false;
     record_.events.clear();
     replayIdx_ = 0;
     leadMs_ = 60000.0 / chart_.bpmAt(0) * 5.0;
@@ -678,7 +677,6 @@ void PlayState::handleInput() {
             laneUp(lane, t);
         }
     }
-    if (a.settings.touchControls && !a.touchMode && !replaying_) handleTouch();
     // Replays feed the recorded presses at their song times.
     while (replaying_ && replayIdx_ < playback_.events.size() && playback_.events[replayIdx_].t <= songMs_) {
         const ReplayEvent& ev = playback_.events[replayIdx_++];
@@ -751,32 +749,6 @@ TouchLayout PlayState::touchLayout() const {
 // Back from the background: wait in the pause menu instead of throwing notes at the player.
 void PlayState::onResume() {
     if (phase_ == Phase::Playing && !cutscene_) pause();
-}
-
-// Touch controls option (desktop): each player lane is a full-height column around its strum.
-void PlayState::handleTouch() {
-    bool want[kMaxKeys] = {};
-    const int K = chart_.keysOf(1);
-    const float half = laneWidth(K) * 0.5f + 4.0f;
-    for (const TouchPoint& tp : touchPoints()) {  // fingers, or the mouse while clicked
-        const float x = gfx::toCanvas(tp.pos).x;
-        int best = -1;
-        float bestD = 1e9f;
-        for (int l = 0; l < K; ++l) {
-            const float d = std::fabs(x - strumCenter(1, l).x);
-            if (d < bestD) { bestD = d; best = l; }
-        }
-        if (best >= 0 && bestD <= half * 1.6f) want[best] = true;
-    }
-    for (int l = 0; l < K; ++l) {
-        if (want[l] && !touchDown_[l]) {
-            touchDown_[l] = true;
-            if (heldCount_[l]++ == 0) laneDown(l, songMs_);
-        } else if (!want[l] && touchDown_[l]) {
-            touchDown_[l] = false;
-            if (heldCount_[l] > 0 && --heldCount_[l] == 0) laneUp(l, songMs_);
-        }
-    }
 }
 
 void PlayState::popup(const std::string& text, Color c, const std::string& timing) {
@@ -1808,14 +1780,6 @@ void PlayState::drawHud() {
         if (!(psychText && ui.text(label, gfx::W / 2, L.botY, 32, fade(WHITE, al), 0, 1.25f)))
             gfx::text(FontId::Title, label, gfx::W / 2, s.downscroll ? 560 : 150, 40, fade(kGold, 0.55f + 0.35f * std::sin(float(now) * 3.0f)),
                       Align::Center, 2.0f);
-    }
-    if (s.touchControls && !a.touchMode && !replaying_) {
-        const float half = laneWidth(chart_.keysOf(1)) * 0.5f;
-        for (int l = 0; l < chart_.keysOf(1); ++l) {
-            const Vector2 c = strumCenter(1, l);
-            const Color col = gfx::dirColor(gfx::laneDir(chart_.keysOf(1), l));
-            DrawRectangleRec({c.x - half, gfx::H * 0.55f, half * 2 - 4, gfx::H * 0.45f}, fade(col, touchDown_[l] ? 0.28f : 0.09f));
-        }
     }
     if (cfg_.practice && !replaying_ && !(s.noteCounter > 0 && scoreShown))
         gfx::text(FontId::Ui, "PRACTICE MODE", gfx::W / 2, home.y + 67, 20, fade(kGold, 0.8f), Align::Center, 1.5f);

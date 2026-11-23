@@ -5,6 +5,7 @@
 // lengths and assets shared between mods.
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1075,6 +1076,48 @@ void testGhnCharts() {
             sameNotes = std::fabs(g.notes[i].time - small.notes[i].time) < 1e-6 && g.notes[i].lane == small.notes[i].lane &&
                         g.notes[i].side == small.notes[i].side && g.countOf(g.notes[i]) == small.countOf(small.notes[i]);
         SCHECK(sameNotes);
+        // Sides with their own key counts (Leather): the opponent's as
+        // keyCount and the player's as playerKeyCount, once each, through
+        // .ghc and back (a second keyCount used to hide the opponent's).
+        Chart lea = small;
+        lea.keys = 6;
+        lea.sideKeys[0] = 4;
+        lea.sideKeys[1] = 6;
+        lea.notes[2].lane = 5;  // a player note past the opponent's 4 keys
+        SCHECK(writeGhn(str(base / "lea.ghn"), lea, err) && convertChartFile(str(base / "lea.ghn"), str(base / "lea.ghc")) == 0);
+        Chart lg;
+        SCHECK(loadChartFile(str(base / "lea.ghc"), "Normal", lg, err) && lg.sideKeys[0] == 4 && lg.sideKeys[1] == 6);
+        if (lg.notes.size() == 3) SCHECK(lg.notes[2].side == 1 && lg.notes[2].lane == 5 && lg.notes[1].side == 0 && lg.notes[1].lane == 2);
+        // The camera on the side with more keys, and on the one with fewer:
+        // every lane of the other side comes back on that side (Leather
+        // takes the values under the focused side's keys for that side).
+        for (int focus = 0; focus < 2; ++focus) {
+            Chart wide;
+            wide.title = "Wide";
+            wide.keys = 6;
+            wide.sideKeys[0] = 4;
+            wide.sideKeys[1] = 6;
+            wide.focus = {{0, uint8_t(1 - focus)}};
+            double t = 100;
+            for (int side = 0; side < 2; ++side)
+                for (int l = 0; l < wide.keysOf(side); ++l) {
+                    Note n;
+                    n.time = t;
+                    t += 100;
+                    n.side = uint8_t(side);
+                    n.lane = uint16_t(l);
+                    wide.notes.push_back(n);
+                }
+            wide.finalize(120);
+            const std::string w = str(base / ("wide" + std::to_string(focus)));
+            SCHECK(writeGhn(w + ".ghn", wide, err) && convertChartFile(w + ".ghn", w + ".ghc") == 0);
+            Chart wg;
+            SCHECK(loadChartFile(w + ".ghc", "Normal", wg, err) && wg.notes.size() == wide.notes.size());
+            bool same = wg.notes.size() == wide.notes.size();
+            for (size_t i = 0; same && i < wg.notes.size(); ++i)
+                same = wg.notes[i].side == wide.notes[i].side && wg.notes[i].lane == wide.notes[i].lane;
+            SCHECK(same);
+        }
         // Counts no .ghc can list: refused, nothing written.
         SCHECK(convertChartFile(str(base / "song.ghn"), str(base / "huge.ghc")) != 0 && !fs::exists(base / "huge.ghc"));
     }
@@ -1285,12 +1328,40 @@ void testThrCharts() {
     add(500, 3, 0, 750, "", 1);
     add(1000, 2, 1, 0, "Hurt Note", 1);
     add(1500, 1, 1, 0, "", 70000);  // past one filter block of 65,536
+    c.tempo = {{0, 150, 0}, {2000, 180, 0}};  // a change inside the second 4-beat section
     c.finalize(150);
     SCHECK(writeThrChart(str(base / "a.thr"), c, err) && isThrChart(str(base / "a.thr")) && countChartKind(str(base / "a.thr")) == CountChartKind::Thr);
     Chart r;
     SCHECK(loadChartFile(str(base / "a.thr"), "Normal", r, err) && r.title == "Thr Song" && r.keys == 4 && std::fabs(r.speed - 2.7) < 1e-9);
     SCHECK(r.notes.size() == 4 && r.playerNotes == Count(70002) && r.opponentNotes == Count(1) && r.events.size() == 1 &&
            std::fabs(r.bpmAt(0) - 150) < 1e-9);
+    // The tempo map comes back from the sections, the change where it was.
+    SCHECK(std::fabs(r.bpmAt(1999) - 150) < 1e-9 && std::fabs(r.bpmAt(2001) - 180) < 1e-9 && std::fabs(r.bpmAt(9000) - 180) < 1e-9);
+    SCHECK(std::fabs(r.msAtBeat(10) - c.msAtBeat(10)) < 1e-6);
+    {
+        // A change a fraction of a millisecond after a section starts (the
+        // second section starts at 1600 ms) comes back there, not a section later.
+        Chart near = c;
+        near.tempo = {{0, 150, 0}, {1600.3, 180, 0}};
+        near.finalize(150);
+        Chart nr;
+        SCHECK(writeThrChart(str(base / "near.thr"), near, err) && loadChartFile(str(base / "near.thr"), "Normal", nr, err));
+        SCHECK(std::fabs(nr.bpmAt(1600.2) - 150) < 1e-9 && std::fabs(nr.bpmAt(1600.4) - 180) < 1e-9 && std::fabs(nr.bpmAt(3000) - 180) < 1e-9);
+        // 200,000 changes: written in one pass over the tempo map (it used to
+        // be searched from its start for every section).
+        Chart many = c;
+        many.tempo.clear();
+        for (int i = 0; i < 200000; ++i) many.tempo.push_back({i * 10.0, i % 2 ? 151.0 : 150.0, 0});
+        many.finalize(150);
+        const auto t0 = std::chrono::steady_clock::now();
+        SCHECK(writeThrChart(str(base / "many.thr"), many, err));
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        SCHECK(secs < 5.0);
+        Chart mr;
+        SCHECK(loadChartFile(str(base / "many.thr"), "Normal", mr, err) && mr.tempo.size() == 200000 &&
+               std::fabs(mr.bpmAt(1234567.0) - 150) < 1e-9 && std::fabs(mr.bpmAt(1234577.0) - 151) < 1e-9);
+        if (mr.tempo.size() != 200000) std::printf("    many.thr: %zu tempo points back\n", mr.tempo.size());
+    }
     if (r.notes.size() == 4) {
         SCHECK(r.notes[1].side == 0 && r.notes[1].lane == 3 && std::fabs(r.notes[1].length - 750) < 1e-3);
         SCHECK(r.notes[2].kind == kMine && r.noteTypes[r.notes[2].type] == "Hurt Note");

@@ -245,6 +245,14 @@ bool loadThrChart(const std::string& path, Chart& out, std::string& err) {
         unfilter(sec.data() + kHeader, plain.data() + kHeader, secCount, kSecRec);
         sec.swap(plain);
     }
+    // The tempo map: every section (with notes or not) holds its start and
+    // the BPM in force there; a change wherever it differs from the one before.
+    for (size_t i = 0; i < secCount; ++i) {
+        const uint8_t* p = sec.data() + kHeader + i * kSecRec;
+        const double t0 = rdf64(p), b = rdf64(p + 16);
+        if (!std::isfinite(t0) || !std::isfinite(b) || !(b > 0)) continue;
+        if (b != out.tempo.back().bpm) out.tempo.push_back({std::max(0.0, t0), b, 0});
+    }
     size_t section = 0;
     uint64_t secLeft = 0;
     bool must = false;
@@ -330,16 +338,29 @@ bool writeThrChart(const std::string& path, const Chart& c, std::string& err) {
     std::vector<uint8_t> recs, packed;
     size_t noteIdx = 0;
     uint64_t copyIdx = 0;
-    // Sections of four beats with the side the camera follows; each knows its notes.
+    // Sections of four beats with the side the camera follows; each knows its
+    // notes. A tempo change ends a section there, so every section has one BPM
+    // (and the reader gets each change back where it was).
     struct Sec {
         double t0;
         bool must;
         uint64_t notes = 0;
+        double beats = 4;
     };
     std::vector<Sec> secs;
-    for (double t = 0; t <= c.lengthMs + 1.0;) {
-        const double len = 4 * 60000.0 / c.bpmAt(t + 0.01);
-        secs.push_back({t, c.focusAt(t + 1) == 1});
+    const double endMs = std::max(c.lengthMs, c.tempo.empty() ? 0.0 : c.tempo.back().timeMs) + 1.0;  // the last change too
+    // One pass over the tempo map: `ti` is the first change after the
+    // section's start (a change within a millionth of a millisecond of it -
+    // rounding - is at it), so a change however close after a start still
+    // ends a section there.
+    constexpr double kSame = 1e-6;
+    size_t ti = 0;
+    for (double t = 0; t <= endMs;) {
+        while (ti < c.tempo.size() && c.tempo[ti].timeMs <= t + kSame) ++ti;
+        const double bpm = ti ? c.tempo[ti - 1].bpm : c.tempo.empty() ? 120.0 : c.tempo.front().bpm;
+        double len = 4 * 60000.0 / bpm;
+        if (ti < c.tempo.size() && c.tempo[ti].timeMs < t + len) len = c.tempo[ti].timeMs - t;
+        secs.push_back({t, c.focusAt(t + 1) == 1, 0, len * bpm / 60000.0});
         t += len;
     }
     for (const Note& n : c.notes) {
@@ -386,7 +407,7 @@ bool writeThrChart(const std::string& path, const Chart& c, std::string& err) {
             wr32(p + 8, uint32_t(secs[i].notes));
             wr32(p + 12, secs[i].must ? kSecMustHit : 0);
             wrf64(p + 16, c.bpmAt(secs[i].t0 + 0.01));
-            wrf64(p + 24, 4.0);
+            wrf64(p + 24, secs[i].beats);
             wr32(p + 32, uint32_t(secs[i].notes >> 32));
         }
         ok = mz_zip_writer_add_mem(&zip, "notes/sections.bin", s.data(), s.size(), MZ_DEFAULT_LEVEL);

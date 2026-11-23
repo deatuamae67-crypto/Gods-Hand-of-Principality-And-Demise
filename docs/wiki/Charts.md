@@ -61,7 +61,7 @@ The file layout is described at the top of `src/bigit_chart.hpp`.
 
 ## Threadripper charts (.thr)
 
-The threadripper engine's charts, as buatedz's strand engine reads them:
+The threadripper engine's charts, as buatedz's [strand](https://github.com/buatedz/strand) engine reads them:
 
 - a zip archive (zip64 too) with `<song>-metadata.json` and `notes/<prefix>sections.bin`, `notes-00000.bin`...;
 - entries stored, deflated or packed with Zstandard (LZMA-packed ones are refused, saying so);

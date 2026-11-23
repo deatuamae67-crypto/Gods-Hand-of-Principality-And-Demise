@@ -178,10 +178,12 @@ public:
     }
 
 private:
-    // Psych's TitleState: on black, the bumping logo (logoBumpin, at -150,
-    // -100), GF dancing (gfDanceTitle, at 512, 40: left and right on
-    // alternate beats) and "Press Enter to Begin" (titleEnter, at 100, 576),
-    // its colour swaying between cyan and deep blue until it is pressed.
+    // Psych's TitleState: the bumping logo (logoBumpin, at -150, -100), GF
+    // dancing (gfDanceTitle, at 512, 40: left and right on alternate beats)
+    // and "Press Enter to Begin" (titleEnter, at 100, 576), its colour
+    // swaying between cyan and deep blue until it is pressed. Psych has them
+    // on black; here (issue #36) on menuDesat in a deep violet that bumps a
+    // little on the beat, darkened so they stand out as they do on black.
     void drawPsych() {
         App& a = app();
         const double now = a.now;
@@ -189,6 +191,8 @@ private:
         const double beat = a.menuBeat(), sinceBeat = std::max(0.0, now - lastBeatTime());
         gfx::beginCanvas();
         DrawRectangleRec({0, 0, gfx::W, gfx::H}, BLACK);
+        pm::background(pm::kDesat, Color{124, 88, 232, 255}, 0, 1.0f + 0.015f * menuPulse(), 1.0f);
+        DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(BLACK, 0.42f));
         if (pa.gfTitle.ok()) {
             const std::vector<int> all = pa.gfTitle.anim("gfDance");
             const bool left = (long long)std::floor(beat) % 2 == 0;
@@ -197,6 +201,11 @@ private:
             for (int i = left ? 0 : 15; i <= (left ? 14 : 29); ++i) idx.push_back(i);
             const int k = idx[size_t(std::min(int(sinceBeat * 24.0), int(idx.size()) - 1))];
             if (!all.empty()) pa.gfTitle.draw(all[size_t(std::min(k, int(all.size()) - 1))], {512, 40}, 1.0f, WHITE);
+        } else {  // without the copy's GF: Principal P dancing where she stands
+            CharacterState p;
+            p.id = CharId::Principality;
+            p.beatAt = lastBeatTime();
+            drawCharacter(p, {1030, 700}, 0.95f, now, true);
         }
         if (pa.logo.ok()) {
             const int f = pa.logo.frameAt(pa.logo.anim("logo bumpin"), sinceBeat, false);
@@ -309,11 +318,10 @@ public:
                     case MainItem::ModPacks: a.change(makeModPacks()); break;
                     case MainItem::Update:
                         if (platform::kAndroid) {
-                            // The system installer, with the APK the updater downloaded.
-                            const int r = platform::installApk(a.updater.status().file);
-                            a.notify(r == 1   ? "The installer is open: confirm the update there."
-                                     : r == 2 ? "Allow installing apps from God's Hand, then choose UPDATE again."
-                                              : "The installer could not be opened.",
+                            // The browser downloads the new APK; it installs from there.
+                            a.notify(platform::openUrl(a.updater.status().url)
+                                         ? "The download opens in the browser: install the new version from there."
+                                         : "No browser could open the download: get it from the Releases page.",
                                      10.0);
                             chosen_ = -1;
                         } else {

@@ -265,19 +265,19 @@ void takeTouchEvents(std::vector<TouchEvent>& out) {
 
 void log(const std::string& s) { logInfo(s); }
 
-int installApk(const std::string& path) {
+bool openUrl(const std::string& url) {
     Jni j;
-    if (!j.env) return 0;
+    if (!j.env) return false;
     jclass cls = activityClass(j.env);
-    if (!cls) return 0;
-    jmethodID m = j.env->GetMethodID(cls, "installApk", "(Ljava/lang/String;)I");
-    int r = 0;
+    if (!cls) return false;
+    jmethodID m = j.env->GetMethodID(cls, "openUrl", "(Ljava/lang/String;)Z");
+    bool r = false;
     if (m) {
-        jstring jp = j.env->NewStringUTF(path.c_str());
-        r = j.env->CallIntMethod(GetAndroidApp()->activity->clazz, m, jp);
+        jstring ju = j.env->NewStringUTF(url.c_str());
+        r = j.env->CallBooleanMethod(GetAndroidApp()->activity->clazz, m, ju) == JNI_TRUE;
         std::string err;
-        if (j.failed(err, "installer")) r = 0;
-        j.env->DeleteLocalRef(jp);
+        if (j.failed(err, "browser")) r = false;
+        j.env->DeleteLocalRef(ju);
     }
     j.env->ExceptionClear();
     j.env->DeleteLocalRef(cls);
@@ -608,7 +608,11 @@ bool download(const std::string&, const std::string&, std::string& err, const st
     return false;
 }
 bool pickModZips() { return false; }
-int installApk(const std::string&) { return 0; }
+bool openUrl(const std::string& url) {
+    if (url.rfind("https://", 0) != 0) return false;
+    OpenURL(url.c_str());
+    return true;
+}
 std::string pickFolder(const std::string& title) { return pickFolderNative(title); }
 std::vector<std::string> pickFiles(const std::string& title, const std::string& pattern) { return pickFilesNative(title, pattern); }
 std::vector<std::string> pickedFiles() { return {}; }

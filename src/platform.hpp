@@ -96,10 +96,9 @@ std::string displayPath(const std::string& path);
 // (net.hpp). range: "first-last" or "-n" bytes ("" = the whole file).
 bool download(const std::string& url, const std::string& dest, std::string& err, const std::string& range = "");
 
-// Android: the system installer opens with this APK (the game updating
-// itself). 1: it opened; 2: Android's "install unknown apps" page opened
-// first (allow it, then try again); 0: neither. Desktop: 0.
-int installApk(const std::string& path);
+// A web page or download link in the system's browser. False when none
+// could open it.
+bool openUrl(const std::string& url);
 
 // Android: the system file picker copies the chosen mod zips into mods/.
 enum class Import { Idle, Picking, Copying, Done, Nothing };

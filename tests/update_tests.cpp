@@ -290,6 +290,146 @@ void testModChanges() {
     fs::remove_all(root, ec);
 }
 
+// Files that cannot be written, moved or put back (here: something else in
+// their place) stay out of the record, the zip's digest is forgotten so the
+// next check offers the change again, and an undo keeps what it could not do.
+void testModFailures() {
+    const fs::path root = fs::temp_directory_path() / "gh_modfail_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    const std::string mods = str(root / "mods") + "/";
+    fs::create_directories(root / "mods");
+    const fs::path v1 = root / "dl" / "GodsHand-mod-pack.zip", v2 = root / "dl2" / "GodsHand-mod-pack.zip";
+    makeZip(v1, {{"Pack/images/a.png", "a v1"}, {"Pack/images/b.png", "b v1"}});
+    makeZip(v2, {{"Pack/images/a.png", "a v2"}, {"Pack/images/b.png", "b v1"}, {"Pack/images/c/c.png", "c new"}});
+    modsync::InstallOptions opt;
+    opt.wholePack = true;
+    opt.source = "pack";
+    opt.zipInfo = {{"GodsHand-mod-pack.zip", "aaaa", 10}};
+    modsync::InstallResult res;
+    UCHECK(modsync::installZips(mods, {str(v1)}, opt, res) && res.written == 2);
+
+    // images/c is a file where v2 needs a folder: c.png cannot be written.
+    put(root / "mods" / "Pack" / "images" / "c", "in the way");
+    opt.zipInfo = {{"GodsHand-mod-pack.zip", "bbbb", 20}};
+    UCHECK(modsync::installZips(mods, {str(v2)}, opt, res));
+    UCHECK(res.written == 1 && res.skipped == 1 && get(root / "mods" / "Pack" / "images" / "a.png") == "a v2");
+    modsync::Record rec;
+    UCHECK(modsync::loadRecord(mods, "Pack", rec) && rec.files.count("images/a.png") && !rec.files.count("images/c/c.png"));
+    UCHECK(rec.zips.size() == 1 && rec.zips[0].sha256.empty());  // not "bbbb": not up to date
+    // Out of the way, the same version again installs what was missing.
+    fs::remove(root / "mods" / "Pack" / "images" / "c", ec);
+    UCHECK(modsync::installZips(mods, {str(v2)}, opt, res) && res.written == 1 && res.skipped == 0);
+    UCHECK(get(root / "mods" / "Pack" / "images" / "c" / "c.png") == "c new");
+    UCHECK(modsync::loadRecord(mods, "Pack", rec) && rec.files.count("images/c/c.png") && rec.zips[0].sha256 == "bbbb");
+
+    // From v1 again (a.png changes back): then REMOVE CHANGES, with a folder
+    // where a.png goes back, cannot put it back - and keeps its copy.
+    opt.zipInfo = {{"GodsHand-mod-pack.zip", "aaaa", 10}};
+    UCHECK(modsync::installZips(mods, {str(v1)}, opt, res) && get(root / "mods" / "Pack" / "images" / "a.png") == "a v1");
+    fs::remove(root / "mods" / "Pack" / "images" / "a.png", ec);
+    put(root / "mods" / "Pack" / "images" / "a.png" / "inside.txt", "in the way");
+    std::string msg;
+    UCHECK(!modsync::undoChanges(mods, "Pack", msg) && msg.find("try again") != std::string::npos);
+    UCHECK(modsync::undoInfo(mods, "Pack").exists && get(root / "mods" / "Pack" / "images" / "c" / "c.png") == "c new");
+    UCHECK(modsync::loadRecord(mods, "Pack", rec) && rec.zips[0].sha256 == "aaaa");  // the record waits for the whole undo
+    fs::remove_all(root / "mods" / "Pack" / "images" / "a.png", ec);
+    UCHECK(modsync::undoChanges(mods, "Pack", msg) && get(root / "mods" / "Pack" / "images" / "a.png") == "a v2");
+    UCHECK(!modsync::undoInfo(mods, "Pack").exists && modsync::loadRecord(mods, "Pack", rec) && rec.zips[0].sha256 == "bbbb");
+    fs::remove_all(root, ec);
+}
+
+// Bytes that do not compress, so the zip keeps them as they are (and a test
+// can spoil one).
+std::string noise(size_t n, uint32_t seed) {
+    std::string s(n, '\0');
+    for (char& c : s) {
+        seed = seed * 1664525u + 1013904223u;
+        c = char(seed >> 24);
+    }
+    return s;
+}
+
+// A pack of two zips; a file of the second cannot be replaced (its new copy
+// is spoilt), so the old one stays - and stays the second zip's.
+void testModFailureOwner() {
+    const fs::path root = fs::temp_directory_path() / "gh_modowner_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    const std::string mods = str(root / "mods") + "/";
+    fs::create_directories(root / "mods");
+    const fs::path p1 = root / "dl" / "GodsHand-mod-pack-part1.zip", p2 = root / "dl" / "GodsHand-mod-pack-part2.zip";
+    makeZip(p1, {{"Pack/images/a.png", "a v1"}});
+    makeZip(p2, {{"Pack/images/b.png", "b v1"}});
+    modsync::InstallOptions opt;
+    opt.wholePack = true;
+    opt.source = "pack";
+    modsync::InstallResult res;
+    UCHECK(modsync::installZips(mods, {str(p1), str(p2)}, opt, res) && res.written == 2);
+    // The second zip's b.png anew, but spoilt: its check fails when it is unpacked.
+    const std::string fresh = noise(256, 7);
+    std::string z2 = zipBytes({{"Pack/images/b.png", fresh}});
+    const size_t at = z2.find(fresh.substr(100, 32));
+    UCHECK(at != std::string::npos);
+    if (at != std::string::npos) z2[at + 8] = char(z2[at + 8] ^ 0x5A);
+    makeZip(p1, {{"Pack/images/a.png", "a v2"}});
+    std::ofstream(p2, std::ios::binary | std::ios::trunc) << z2;
+    UCHECK(modsync::installZips(mods, {str(p1), str(p2)}, opt, res) && res.skipped == 1);
+    UCHECK(get(root / "mods" / "Pack" / "images" / "a.png") == "a v2" && get(root / "mods" / "Pack" / "images" / "b.png") == "b v1");
+    modsync::Record rec;
+    UCHECK(modsync::loadRecord(mods, "Pack", rec) && rec.zips.size() == 2 && rec.zips[1].name == "GodsHand-mod-pack-part2.zip");
+    // Still the second zip's (it used to fall to the first).
+    UCHECK(rec.files.count("images/b.png") && rec.files["images/b.png"].zip == 1 && rec.files["images/b.png"].size == 4);
+    fs::remove_all(root, ec);
+}
+
+// REMOVE CHANGES when a copy is gone, when a file was put back already, and
+// when the pack's record cannot be put back.
+void testUndoChecks() {
+    const fs::path root = fs::temp_directory_path() / "gh_undocheck_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    const std::string mods = str(root / "mods") + "/";
+    fs::create_directories(root / "mods");
+    const fs::path v1 = root / "dl" / "GodsHand-mod-pack.zip", v2 = root / "dl2" / "GodsHand-mod-pack.zip";
+    makeZip(v1, {{"Pack/images/a.png", "a v1"}, {"Pack/images/b.png", "b v1"}});
+    makeZip(v2, {{"Pack/images/a.png", "a v2"}, {"Pack/images/b.png", "b v1"}});
+    modsync::InstallOptions opt;
+    opt.wholePack = true;
+    opt.source = "pack";
+    opt.zipInfo = {{"GodsHand-mod-pack.zip", "aaaa", 10}};
+    modsync::InstallResult res;
+    UCHECK(modsync::installZips(mods, {str(v1)}, opt, res));
+    opt.zipInfo = {{"GodsHand-mod-pack.zip", "bbbb", 20}};
+    UCHECK(modsync::installZips(mods, {str(v2)}, opt, res) && get(root / "mods" / "Pack" / "images" / "a.png") == "a v2");
+    const fs::path undoCopy = root / "mods" / ".installed" / "undo" / "Pack" / "files" / "images" / "a.png";
+    UCHECK(get(undoCopy) == "a v1");
+
+    // a.png's copy gone and a.png not as it was: not taken for put back.
+    fs::remove(undoCopy, ec);
+    std::string msg;
+    modsync::Record rec;
+    UCHECK(!modsync::undoChanges(mods, "Pack", msg) && msg.find("copies gone") != std::string::npos);
+    UCHECK(modsync::undoInfo(mods, "Pack").exists && modsync::loadRecord(mods, "Pack", rec) && rec.zips[0].sha256 == "bbbb");
+    // Put back by hand as it was: found put back, and left where it is.
+    put(root / "mods" / "Pack" / "images" / "a.png", "a v1");
+    UCHECK(modsync::undoChanges(mods, "Pack", msg) && get(root / "mods" / "Pack" / "images" / "a.png") == "a v1");
+    UCHECK(!modsync::undoInfo(mods, "Pack").exists && modsync::loadRecord(mods, "Pack", rec) && rec.zips[0].sha256 == "aaaa");
+
+    // The record cannot be put back (a folder in its place): the files go
+    // back, the undo stays, and a second try finishes it.
+    UCHECK(modsync::installZips(mods, {str(v2)}, opt, res) && get(root / "mods" / "Pack" / "images" / "a.png") == "a v2");
+    const fs::path recFile = root / "mods" / ".installed" / "records" / "Pack.pack";
+    fs::remove(recFile, ec);
+    put(recFile / "in-the-way.txt", "x");
+    UCHECK(!modsync::undoChanges(mods, "Pack", msg) && msg.find("record") != std::string::npos);
+    UCHECK(get(root / "mods" / "Pack" / "images" / "a.png") == "a v1" && modsync::undoInfo(mods, "Pack").exists);
+    fs::remove_all(recFile, ec);
+    UCHECK(modsync::undoChanges(mods, "Pack", msg) && !modsync::undoInfo(mods, "Pack").exists);
+    UCHECK(modsync::loadRecord(mods, "Pack", rec) && rec.zips[0].sha256 == "aaaa");
+    fs::remove_all(root, ec);
+}
+
 void testPackCompare() {
     const fs::path root = fs::temp_directory_path() / "gh_packcmp_test";
     std::error_code ec;
@@ -532,5 +672,8 @@ void runUpdateTests() {
     testStageAndApply();
     testZipDirectory();
     testModChanges();
+    testModFailures();
+    testModFailureOwner();
+    testUndoChecks();
     testPackCompare();
 }
