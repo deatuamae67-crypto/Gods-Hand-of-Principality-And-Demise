@@ -275,6 +275,32 @@ if(GH_BUILD_GAME)
     file(WRITE ${gh_raudio} "${gh_src}")
     message(STATUS "Patched raylib's raudio.c: the audio device stops before it closes")
   endif()
+  # Textures clamp at their edges instead of repeating (raylib's default):
+  # drawn with smoothing, a picture's edge otherwise picks up the colours of
+  # its opposite edge - a thin line of the wrong colour along the left and
+  # right sides of note atlases and of the camera layers (issue #36, seen on
+  # phones, where the scale makes it show). Nothing in the game tiles a
+  # texture by repeating it. Applied once, in raylib's own source.
+  set(gh_rlgl ${raylib_SOURCE_DIR}/src/rlgl.h)
+  file(READ ${gh_rlgl} gh_src)
+  if(NOT gh_src MATCHES "GhClampByDefault")
+    set(gh_wrap_s "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);       // Set texture to repeat on x-axis")
+    set(gh_wrap_t "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);       // Set texture to repeat on y-axis")
+    string(FIND "${gh_src}" "${gh_wrap_s}" gh_at1)
+    string(FIND "${gh_src}" "${gh_wrap_t}" gh_at2)
+    if(gh_at1 EQUAL -1 OR gh_at2 EQUAL -1)
+      message(FATAL_ERROR "Could not patch ${gh_rlgl} (raylib 5.5 expected)")
+    endif()
+    string(REPLACE "${gh_wrap_s}" "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);  // GhClampByDefault (God's Hand)" gh_src "${gh_src}")
+    string(REPLACE "${gh_wrap_t}" "glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);  // GhClampByDefault (God's Hand)" gh_src "${gh_src}")
+    string(REGEX MATCHALL "GhClampByDefault" gh_found "${gh_src}")
+    list(LENGTH gh_found gh_count)
+    if(NOT gh_count EQUAL 4)  # both branches of rlLoadTexture, S and T
+      message(FATAL_ERROR "Could not patch ${gh_rlgl}: ${gh_count} of 4 places (raylib 5.5 expected)")
+    endif()
+    file(WRITE ${gh_rlgl} "${gh_src}")
+    message(STATUS "Patched raylib's rlgl.h: textures clamp at their edges")
+  endif()
   if(ANDROID)
     # Android: make raylib follow the window when it changes size (see
     # cmake/raylib_android_resize.c). Applied once, in raylib's own source.
