@@ -1285,9 +1285,12 @@ bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::str
     j = "{\"song\":{\"song\":" + esc(c.title) + ",\"bpm\":" + num(bpm0) + ",\"speed\":" + num(c.speed) +
                     ",\"player1\":" + esc(c.player.empty() ? "bf" : c.player) + ",\"player2\":" + esc(c.opponent.empty() ? "dad" : c.opponent) +
                     ",\"gfVersion\":" + esc(c.gf) + ",\"stage\":" + esc(c.stage) + ",\"needsVoices\":true";
-    if (c.keys != 4) j += ",\"keyCount\":" + std::to_string(c.keys);
+    // One keyCount: the opponent's beside the player's (Leather) when the
+    // sides differ, else the chart's (JSON keeps the first of two).
     if (c.sideKeys[0] && c.sideKeys[1] && c.sideKeys[0] != c.sideKeys[1])
         j += ",\"keyCount\":" + std::to_string(c.sideKeys[0]) + ",\"playerKeyCount\":" + std::to_string(c.sideKeys[1]);
+    else if (c.keys != 4)
+        j += ",\"keyCount\":" + std::to_string(c.keys);
     j += ",\"notes\":[";
     // Sections: the chart's own, else four beats each over the whole chart.
     struct Sec {

@@ -1075,6 +1075,18 @@ void testGhnCharts() {
             sameNotes = std::fabs(g.notes[i].time - small.notes[i].time) < 1e-6 && g.notes[i].lane == small.notes[i].lane &&
                         g.notes[i].side == small.notes[i].side && g.countOf(g.notes[i]) == small.countOf(small.notes[i]);
         SCHECK(sameNotes);
+        // Sides with their own key counts (Leather): the opponent's as
+        // keyCount and the player's as playerKeyCount, once each, through
+        // .ghc and back (a second keyCount used to hide the opponent's).
+        Chart lea = small;
+        lea.keys = 6;
+        lea.sideKeys[0] = 4;
+        lea.sideKeys[1] = 6;
+        lea.notes[2].lane = 5;  // a player note past the opponent's 4 keys
+        SCHECK(writeGhn(str(base / "lea.ghn"), lea, err) && convertChartFile(str(base / "lea.ghn"), str(base / "lea.ghc")) == 0);
+        Chart lg;
+        SCHECK(loadChartFile(str(base / "lea.ghc"), "Normal", lg, err) && lg.sideKeys[0] == 4 && lg.sideKeys[1] == 6);
+        if (lg.notes.size() == 3) SCHECK(lg.notes[2].side == 1 && lg.notes[2].lane == 5 && lg.notes[1].side == 0 && lg.notes[1].lane == 2);
         // Counts no .ghc can list: refused, nothing written.
         SCHECK(convertChartFile(str(base / "song.ghn"), str(base / "huge.ghc")) != 0 && !fs::exists(base / "huge.ghc"));
     }
@@ -1285,12 +1297,16 @@ void testThrCharts() {
     add(500, 3, 0, 750, "", 1);
     add(1000, 2, 1, 0, "Hurt Note", 1);
     add(1500, 1, 1, 0, "", 70000);  // past one filter block of 65,536
+    c.tempo = {{0, 150, 0}, {2000, 180, 0}};  // a change inside the second 4-beat section
     c.finalize(150);
     SCHECK(writeThrChart(str(base / "a.thr"), c, err) && isThrChart(str(base / "a.thr")) && countChartKind(str(base / "a.thr")) == CountChartKind::Thr);
     Chart r;
     SCHECK(loadChartFile(str(base / "a.thr"), "Normal", r, err) && r.title == "Thr Song" && r.keys == 4 && std::fabs(r.speed - 2.7) < 1e-9);
     SCHECK(r.notes.size() == 4 && r.playerNotes == Count(70002) && r.opponentNotes == Count(1) && r.events.size() == 1 &&
            std::fabs(r.bpmAt(0) - 150) < 1e-9);
+    // The tempo map comes back from the sections, the change where it was.
+    SCHECK(std::fabs(r.bpmAt(1999) - 150) < 1e-9 && std::fabs(r.bpmAt(2001) - 180) < 1e-9 && std::fabs(r.bpmAt(9000) - 180) < 1e-9);
+    SCHECK(std::fabs(r.msAtBeat(10) - c.msAtBeat(10)) < 1e-6);
     if (r.notes.size() == 4) {
         SCHECK(r.notes[1].side == 0 && r.notes[1].lane == 3 && std::fabs(r.notes[1].length - 750) < 1e-3);
         SCHECK(r.notes[2].kind == kMine && r.noteTypes[r.notes[2].type] == "Hurt Note");

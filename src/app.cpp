@@ -696,9 +696,12 @@ void App::frame() {
         gfx::drawLetterbox();
         gfx::endFrameTarget();
         bool whole = true;  // a video frame is complete: sent with its audio
+        int parts = 1;
+        const int sub = subframe_;  // which subframe of its video frame this is
         if (subs > 1 && blurTargets(renderer.target().texture.width, renderer.target().texture.height)) {
             // Real motion blur: the subframes of one video frame averaged
             // (the k-th weighs 1/(k+1)), the average sent as the frame.
+            parts = subs;
             gfx::blendFrame(mbAccum_, renderer.target(), 1.0f / float(subframe_ + 1));
             if (++subframe_ < subs) {
                 whole = false;
@@ -707,14 +710,21 @@ void App::frame() {
                 gfx::blendFrame(renderer.target(), mbAccum_, 1.0f);
             }
         }
+        // Each subframe mixes its share of the frame's sound: the song (its
+        // clock is the sound mixed so far) moves on between subframes, so
+        // each shows its own moment, and the frame goes out with all of it.
+        const unsigned frameN = renderer.audioFramesFor(renderer.frames());
+        const unsigned from = unsigned(uint64_t(frameN) * unsigned(sub) / unsigned(parts));
+        const unsigned to = unsigned(uint64_t(frameN) * unsigned(sub + 1) / unsigned(parts));
+        if (sub == 0) renderAudio_.clear();
+        const size_t at = renderAudio_.size();
+        renderAudio_.resize(at + size_t(to - from) * 2);
+        mixer.mixOffline(renderAudio_.data() + at, to - from);
         if (!whole) {
         } else if (!renderer.captureFrame()) {
             stopRender();
         } else {
-            const unsigned n = renderer.audioFramesFor(renderer.frames() - 1);
-            renderAudio_.resize(size_t(n) * 2);
-            mixer.mixOffline(renderAudio_.data(), n);
-            renderer.addAudio(renderAudio_.data(), n);
+            renderer.addAudio(renderAudio_.data(), unsigned(renderAudio_.size() / 2));
         }
         if (renderer.active()) {
             const Texture2D& tex = renderer.target().texture;
