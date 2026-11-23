@@ -98,31 +98,62 @@ struct Xf {
     Vector2 o{};
     float s = 1, sx = 1, sy = 1, rot = 0;
     bool flip = false;
+    mutable float turned_ = 0, cos_ = 1, sin_ = 0;  // cos and sin of rot, worked out once for all the points
     Vector2 operator()(float x, float y) const {
         if (flip) x = -x;
         x *= sx * s;
         y *= sy * s;
-        const float c = std::cos(rot), n = std::sin(rot);
-        return {o.x + x * c - y * n, o.y + x * n + y * c};
+        if (rot != turned_) {
+            cos_ = std::cos(rot);
+            sin_ = std::sin(rot);
+            turned_ = rot;
+        }
+        return {o.x + x * cos_ - y * sin_, o.y + x * sin_ + y * cos_};
     }
     float len(float v) const { return v * s * (sx + sy) * 0.5f; }
 };
 
 void poly(const Xf& X, std::initializer_list<Vector2> pts, Color c) {
-    std::vector<Vector2> v;
-    v.reserve(pts.size());
-    for (const Vector2& p : pts) v.push_back(X(p.x, p.y));
-    gfx::convex(v, c);
+    Vector2 v[16];
+    if (pts.size() > 16) {
+        std::vector<Vector2> w;
+        for (const Vector2& p : pts) w.push_back(X(p.x, p.y));
+        gfx::convex(w, c);
+        return;
+    }
+    size_t n = 0;
+    for (const Vector2& p : pts) v[n++] = X(p.x, p.y);
+    gfx::convex(v, n, c);
+}
+
+// The points of an ellipse's outline (cos and sin of each step worked out
+// once for all ellipses with that many points).
+struct Circle {
+    static constexpr int kMax = 64;
+    float c[kMax], s[kMax];
+    explicit Circle(int seg) {
+        for (int i = 0; i < seg && i < kMax; ++i) {
+            const float a = float(i) / float(seg) * 2.0f * kPi;
+            c[i] = std::cos(a);
+            s[i] = std::sin(a);
+        }
+    }
+};
+// The characters use 30 and 34 points (kept); any other count is worked out
+// each time.
+const Circle* knownCircle(int seg) {
+    static const Circle k30(30), k34(34);
+    return seg == 34 ? &k34 : seg == 30 ? &k30 : nullptr;
 }
 
 void ell(const Xf& X, float cx, float cy, float rx, float ry, Color c, int seg = 30) {
-    std::vector<Vector2> v;
-    v.reserve(size_t(seg));
-    for (int i = 0; i < seg; ++i) {
-        const float a = float(i) / float(seg) * 2.0f * kPi;
-        v.push_back(X(cx + std::cos(a) * rx, cy + std::sin(a) * ry));
-    }
-    gfx::convex(v, c);
+    seg = std::clamp(seg, 3, Circle::kMax);
+    const Circle* known = knownCircle(seg);
+    const Circle own(known ? 0 : seg);
+    const Circle& k = known ? *known : own;
+    Vector2 v[Circle::kMax];
+    for (int i = 0; i < seg; ++i) v[i] = X(cx + k.c[i] * rx, cy + k.s[i] * ry);
+    gfx::convex(v, size_t(seg), c);
 }
 
 void cap(const Xf& X, float ax, float ay, float bx, float by, float r, Color c) {
@@ -130,7 +161,7 @@ void cap(const Xf& X, float ax, float ay, float bx, float by, float r, Color c) 
 }
 
 void line(const Xf& X, float ax, float ay, float bx, float by, float w, Color c) {
-    DrawLineEx(X(ax, ay), X(bx, by), X.len(w), c);
+    gfx::thickLine(X(ax, ay), X(bx, by), X.len(w), c);
 }
 
 // ----------------------------------------------------------- the finish --
@@ -226,11 +257,12 @@ void fillShade(const Xf& X, const std::vector<Vector2>& shape, Color col) {
 }
 
 std::vector<Vector2> ellipsePts(float cx, float cy, float rx, float ry, int seg = 34) {
-    std::vector<Vector2> v;
-    for (int i = 0; i < seg; ++i) {
-        const float a = float(i) / float(seg) * 2.0f * kPi;
-        v.push_back({cx + std::cos(a) * rx, cy + std::sin(a) * ry});
-    }
+    seg = std::clamp(seg, 3, Circle::kMax);
+    const Circle* known = knownCircle(seg);
+    const Circle own(known ? 0 : seg);
+    const Circle& k = known ? *known : own;
+    std::vector<Vector2> v(static_cast<size_t>(seg));
+    for (int i = 0; i < seg; ++i) v[size_t(i)] = {cx + k.c[i] * rx, cy + k.s[i] * ry};
     return v;
 }
 
@@ -318,7 +350,7 @@ private:
                 }
                 const float w = X_.len(o);
                 for (size_t i = 0; i < v.size(); ++i) {
-                    DrawLineEx(v[i], v[(i + 1) % v.size()], w * 2.0f, col);
+                    gfx::thickLine(v[i], v[(i + 1) % v.size()], w * 2.0f, col);
                     DrawCircleV(v[i], w, col);
                 }
                 break;

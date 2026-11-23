@@ -48,6 +48,13 @@ void drawBlurred(const std::function<void()>& scene, float spread = 1.6f);
 int targetWidth();   // pixels of what is drawn into now (window or frame target)
 int targetHeight();
 void beginCanvas(float zoom = 1.0f, Vector2 focus = {W / 2, H / 2}, float rotationDeg = 0.0f);
+// What the picture being drawn shows now, in the coordinates being drawn in
+// (the camera and render target that are on; not an rlPushMatrix
+// transform): what lies wholly outside it need not be drawn.
+Rectangle visibleArea();
+inline bool inArea(const Rectangle& a, Vector2 c, float r) {
+    return c.x + r >= a.x && c.x - r <= a.x + a.width && c.y + r >= a.y && c.y - r <= a.y + a.height;
+}
 void endCanvas();
 void drawLetterbox();
 // The part of the canvas shown in the window: x from 0 to viewWidth(), like
@@ -78,6 +85,19 @@ void tri(Vector2 a, Vector2 b, Vector2 c, Color col);
 void triColors(Vector2 a, Vector2 b, Vector2 c, Color ca, Color cb, Color cc);  // blended corner colours
 void quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color col);
 void convex(const std::vector<Vector2>& pts, Color col);  // convex polygon
+void convex(const Vector2* pts, size_t n, Color col);
+// A thick line: raylib's DrawLineEx (the same four corners), drawn the way
+// the other shapes are, so lines between them do not split their batch.
+void thickLine(Vector2 a, Vector2 b, float thick, Color col);
+// A filled circle with as many sides as its size needs (never more than a
+// quarter of a pixel off a true circle; raylib's DrawCircleV always takes 36).
+void disc(Vector2 c, float r, Color col);
+// raylib's DrawCircleGradient (inner colour at the centre, outer at the edge)
+// with as many sides as its size needs.
+void circleGradient(Vector2 c, float r, Color inner, Color outer);
+// raylib's DrawSplineCatmullRom (through points 1 to n-2, round ends), cut
+// into as many pieces as its length needs instead of 24 between each pair.
+void splineCatmullRom(const Vector2* pts, int n, float thick, Color col);
 void capsule(Vector2 a, Vector2 b, float radius, Color col);
 void gradientRect(Rectangle r, Color top, Color bottom);
 void glow(Vector2 c, float radius, Color col);  // additive soft light
@@ -88,7 +108,6 @@ void star(Vector2 c, float r, Color col);
 // A glassy cube turning in the air (ax, ay: its angles); mirror draws its
 // reflection in a floor at floorY (flipped, flattened, faint).
 void cube(Vector2 at, float size, float ax, float ay, Color base, float alpha, bool mirror, float floorY);
-Texture2D& glowTexture();
 
 // ---- notes
 enum NoteDir { kLeft = 0, kDown = 1, kUp = 2, kRight = 3, kCenter = 4 };

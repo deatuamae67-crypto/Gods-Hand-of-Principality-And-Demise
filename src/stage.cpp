@@ -55,7 +55,7 @@ void speaker(Rectangle r, float pump) {
 void amp(Rectangle r) {
     inkRect(r, Color{30, 26, 36, 255});
     DrawRectangleRec({r.x + 10, r.y + 34, r.width - 20, r.height - 44}, Color{56, 50, 62, 255});
-    for (float y = r.y + 40; y < r.y + r.height - 12; y += 8) DrawLineEx({r.x + 12, y}, {r.x + r.width - 12, y}, 1.5f, fade(kInk, 0.35f));
+    for (float y = r.y + 40; y < r.y + r.height - 12; y += 8) gfx::thickLine({r.x + 12, y}, {r.x + r.width - 12, y}, 1.5f, fade(kInk, 0.35f));
     DrawRectangleRec({r.x + 10, r.y + 8, r.width - 20, 18}, Color{206, 186, 124, 255});
     for (int k = 0; k < 5; ++k) DrawCircleV({r.x + 24 + float(k) * (r.width - 48) / 4, r.y + 17}, 5, kInk);
 }
@@ -201,48 +201,48 @@ void Stage::drawRooftop(float t) const {
     for (const Block& b : near_) {
         const float top = 548 - b.h;
         DrawRectangleRec({b.x, top, b.w, b.h}, Color{70, 32, 96, 255});
-        DrawLineEx({b.x + b.w * 0.7f, top}, {b.x + b.w * 0.7f, top - 34}, 3, Color{70, 32, 96, 255});
+        gfx::thickLine({b.x + b.w * 0.7f, top}, {b.x + b.w * 0.7f, top - 34}, 3, Color{70, 32, 96, 255});
     }
     // the water tower
     {
         const float x = 70, base = 520;
-        for (int l = 0; l < 4; ++l) DrawLineEx({x - 52 + float(l) * 34.0f, base}, {x - 40 + float(l) * 26.0f, base - 124}, 7, kInk);
-        DrawLineEx({x - 46, base - 56}, {x + 46, base - 56}, 4, kInk);
+        for (int l = 0; l < 4; ++l) gfx::thickLine({x - 52 + float(l) * 34.0f, base}, {x - 40 + float(l) * 26.0f, base - 124}, 7, kInk);
+        gfx::thickLine({x - 46, base - 56}, {x + 46, base - 56}, 4, kInk);
         inkRect({x - 64, base - 232, 128, 110}, Color{110, 66, 132, 255});
-        for (int s = 0; s < 3; ++s) DrawLineEx({x - 64, base - 204 + float(s) * 32.0f}, {x + 64, base - 204 + float(s) * 32.0f}, 3, fade(kInk, 0.5f));
+        for (int s = 0; s < 3; ++s) gfx::thickLine({x - 64, base - 204 + float(s) * 32.0f}, {x + 64, base - 204 + float(s) * 32.0f}, 3, fade(kInk, 0.5f));
         gfx::tri({x - 78, base - 230}, {x + 78, base - 230}, {x, base - 292}, kInk);
         gfx::tri({x - 68, base - 234}, {x + 68, base - 234}, {x, base - 284}, Color{140, 80, 150, 255});
     }
     // the fence on the roof's low wall
     const Color wire = fade(Color{60, 40, 80, 255}, 0.55f);
     for (float x = kFull.x; x < kFull.x + kFull.width + 130; x += 22) {
-        DrawLineEx({x, 400}, {x - 120, 520}, 1.4f, wire);
-        DrawLineEx({x - 120, 400}, {x, 520}, 1.4f, wire);
+        gfx::thickLine({x, 400}, {x - 120, 520}, 1.4f, wire);
+        gfx::thickLine({x - 120, 400}, {x, 520}, 1.4f, wire);
     }
     for (float x = kFull.x + 60; x < kFull.x + kFull.width; x += 220) DrawRectangleRec({x - 5, 384, 10, 136}, Color{70, 46, 92, 255});
-    DrawLineEx({kFull.x, 400}, {kFull.x + kFull.width, 400}, 5, Color{70, 46, 92, 255});
+    gfx::thickLine({kFull.x, 400}, {kFull.x + kFull.width, 400}, 5, Color{70, 46, 92, 255});
     DrawRectangleRec({kFull.x, 512, kFull.width, 52}, Color{176, 138, 168, 255});
     DrawRectangleRec({kFull.x, 512, kFull.width, 10}, Color{206, 170, 196, 255});
-    DrawLineEx({kFull.x, 512}, {kFull.x + kFull.width, 512}, 3, kInk);
-    DrawLineEx({kFull.x, 564}, {kFull.x + kFull.width, 564}, 3, kInk);
+    gfx::thickLine({kFull.x, 512}, {kFull.x + kFull.width, 512}, 3, kInk);
+    gfx::thickLine({kFull.x, 564}, {kFull.x + kFull.width, 564}, 3, kInk);
     // an air conditioner, its fan turning
     inkRect({1090, 440, 150, 72}, Color{190, 180, 204, 255});
     const Vector2 fan{1130, 476};
     inkCircle(fan, 26, Color{92, 86, 112, 255}, 3);
     for (int b = 0; b < 3; ++b) {
         const float a = t * 9.0f + float(b) * 2.094f;
-        DrawLineEx(fan, {fan.x + std::cos(a) * 22, fan.y + std::sin(a) * 22}, 6, Color{204, 200, 218, 255});
+        gfx::thickLine(fan, {fan.x + std::cos(a) * 22, fan.y + std::sin(a) * 22}, 6, Color{204, 200, 218, 255});
     }
-    for (int g = 0; g < 4; ++g) DrawLineEx({1170, 454 + float(g) * 14.0f}, {1228, 454 + float(g) * 14.0f}, 3, fade(kInk, 0.5f));
+    for (int g = 0; g < 4; ++g) gfx::thickLine({1170, 454 + float(g) * 14.0f}, {1228, 454 + float(g) * 14.0f}, 3, fade(kInk, 0.5f));
     // string lights between two poles
-    DrawLineEx({-40, 200}, {-40, 512}, 8, kInk);
-    DrawLineEx({1320, 200}, {1320, 512}, 8, kInk);
+    gfx::thickLine({-40, 200}, {-40, 512}, 8, kInk);
+    gfx::thickLine({1320, 200}, {1320, 512}, 8, kInk);
     static const Color kBulbs[4] = {{255, 230, 90, 255}, {255, 110, 190, 255}, {90, 230, 255, 255}, {150, 255, 120, 255}};
     Vector2 prev{-40, 206};
     for (int i = 0; i <= 40; ++i) {
         const float u = float(i) / 40.0f;
         const Vector2 p{-40 + u * 1360, 206 + std::sin(u * 3.14159265f) * 92};
-        DrawLineEx(prev, p, 2, kInk);
+        gfx::thickLine(prev, p, 2, kInk);
         prev = p;
         const bool on = (i + beat_) % 2 == 0;
         const Color bc = kBulbs[i % 4];
@@ -251,10 +251,10 @@ void Stage::drawRooftop(float t) const {
     }
     // the roof's floor
     gfx::gradientRect({kFull.x, 566, kFull.width, kFull.y + kFull.height - 566}, Color{150, 116, 150, 255}, Color{66, 46, 80, 255});
-    for (int i = -26; i <= 26; ++i) DrawLineEx({640 + float(i) * 90.0f, 566}, {640 + float(i) * 290.0f, 1000}, 2, fade(kInk, 0.18f));
+    for (int i = -26; i <= 26; ++i) gfx::thickLine({640 + float(i) * 90.0f, 566}, {640 + float(i) * 290.0f, 1000}, 2, fade(kInk, 0.18f));
     for (int r = 0; r < 6; ++r) {
         const float y = 566 + std::pow(1.55f, float(r)) * 22 - 10;
-        DrawLineEx({kFull.x, y}, {kFull.x + kFull.width, y}, 2, fade(kInk, 0.18f));
+        gfx::thickLine({kFull.x, y}, {kFull.x + kFull.width, y}, 2, fade(kInk, 0.18f));
     }
 }
 
@@ -282,7 +282,7 @@ void Stage::drawClub(float t) const {
     }
     // the mirror ball and the light it throws
     const Vector2 ball{640, -60};
-    DrawLineEx({640, -230}, {640, ball.y - 70}, 3, Color{160, 160, 180, 255});
+    gfx::thickLine({640, -230}, {640, ball.y - 70}, 3, Color{160, 160, 180, 255});
     inkCircle(ball, 70, Color{150, 156, 186, 255});
     for (int i = 0; i < 7; ++i) {
         const float lat = -1.2f + float(i) * 0.4f;
@@ -313,8 +313,8 @@ void Stage::drawClub(float t) const {
             const float a = (left ? 0.9f : 2.24f) + std::sin(t * 1.4f + float(i) * 0.8f) * 0.35f;
             const Vector2 e{o.x + std::cos(a) * 1700, o.y + std::sin(a) * 1700};
             const Color lc = i % 2 ? Color{60, 255, 120, 255} : Color{255, 60, 160, 255};
-            DrawLineEx(o, e, 3, fade(lc, 0.45f + 0.4f * pulse_));
-            DrawLineEx(o, e, 10, fade(lc, 0.12f));
+            gfx::thickLine(o, e, 3, fade(lc, 0.45f + 0.4f * pulse_));
+            gfx::thickLine(o, e, 10, fade(lc, 0.12f));
         }
         EndBlendMode();
     }
@@ -338,12 +338,12 @@ void Stage::drawClub(float t) const {
             gfx::quad({vp.x + float(c) * tw * s0, y0}, {vp.x + float(c + 1) * tw * s0, y0}, {vp.x + float(c + 1) * tw * s1, y1},
                       {vp.x + float(c) * tw * s1, y1}, col);
         }
-        DrawLineEx({kFull.x, y0}, {kFull.x + kFull.width, y0}, 3, kInk);
+        gfx::thickLine({kFull.x, y0}, {kFull.x + kFull.width, y0}, 3, kInk);
         y0 = y1;
     }
     for (int c = -14; c <= 14; ++c) {
         const float s1 = (y0 - vp.y) / (fy - vp.y);
-        DrawLineEx({vp.x + float(c) * 130, fy}, {vp.x + float(c) * 130 * s1, y0}, 3, kInk);
+        gfx::thickLine({vp.x + float(c) * 130, fy}, {vp.x + float(c) * 130 * s1, y0}, 3, kInk);
     }
 }
 
@@ -353,8 +353,10 @@ void Stage::drawClub(float t) const {
 // a fire barrel, puddles that hold the moon.
 void Stage::drawAlley(float t) const {
     gfx::gradientRect({kFull.x, kFull.y, kFull.width, 580 - kFull.y}, Color{8, 4, 18, 255}, Color{86, 14, 44, 255});
+    const Rectangle seen = gfx::visibleArea();  // most of the sky is off screen
     for (const Star& s : stars_)
-        if (s.y < 260) DrawCircleV({s.x, s.y}, s.s * 0.4f, fade(WHITE, 0.25f + 0.35f * (0.5f + 0.5f * std::sin(t * 2 + s.ph))));
+        if (s.y < 260 && gfx::inArea(seen, {s.x, s.y}, s.s * 0.5f))
+            gfx::disc({s.x, s.y}, s.s * 0.4f, fade(WHITE, 0.25f + 0.35f * (0.5f + 0.5f * std::sin(t * 2 + s.ph))));
     const Vector2 moon{640, 110};
     gfx::glow(moon, 300, Color{255, 50, 70, (unsigned char)(90 + 60 * pulse_)});
     DrawCircleV(moon, 110, Color{226, 52, 72, 255});
@@ -363,23 +365,23 @@ void Stage::drawAlley(float t) const {
     DrawCircleV({662, 66}, 12, Color{196, 38, 60, 255});
     // the walls: the back one, and the tall side buildings
     bricks({160, 250, 960, 330}, Color{116, 42, 58, 255}, Color{58, 20, 36, 255}, 64, 24, !low_);
-    DrawLineEx({160, 250}, {1120, 250}, 6, kInk);
+    gfx::thickLine({160, 250}, {1120, 250}, 6, kInk);
     bricks({kFull.x, -60, 170 - kFull.x, 640}, Color{72, 30, 54, 255}, Color{36, 14, 30, 255}, 70, 26, !low_);
     bricks({1110, -60, kFull.x + kFull.width - 1110, 640}, Color{72, 30, 54, 255}, Color{36, 14, 30, 255}, 70, 26, !low_);
-    DrawLineEx({170, -60}, {170, 580}, 6, kInk);
-    DrawLineEx({1110, -60}, {1110, 580}, 6, kInk);
+    gfx::thickLine({170, -60}, {170, 580}, 6, kInk);
+    gfx::thickLine({1110, -60}, {1110, 580}, 6, kInk);
     for (int w = 0; w < 4; ++w) {  // windows, one lit violet
         const float x = w < 2 ? -190.0f + float(w) * 170 : 1180.0f + float(w - 2) * 170;
         inkRect({x, 0, 70, 90}, w == 1 ? Color{150, 90, 220, 255} : Color{24, 14, 30, 255});
-        DrawLineEx({x + 35, 0}, {x + 35, 90}, 3, kInk);
+        gfx::thickLine({x + 35, 0}, {x + 35, 90}, 3, kInk);
     }
     // a fire escape on the left building
     for (int f = 0; f < 3; ++f) {
         const float y = 120 + float(f) * 150.0f;
-        DrawLineEx({-170, y}, {150, y}, 6, kInk);
-        DrawLineEx({-170, y - 46}, {150, y - 46}, 3, kInk);
-        for (float x = -170; x <= 150; x += 32) DrawLineEx({x, y}, {x, y - 46}, 2, kInk);
-        if (f < 2) DrawLineEx({f % 2 ? -150.0f : 130.0f, y}, {f % 2 ? 130.0f : -150.0f, y + 150}, 6, kInk);
+        gfx::thickLine({-170, y}, {150, y}, 6, kInk);
+        gfx::thickLine({-170, y - 46}, {150, y - 46}, 3, kInk);
+        for (float x = -170; x <= 150; x += 32) gfx::thickLine({x, y}, {x, y - 46}, 2, kInk);
+        if (f < 2) gfx::thickLine({f % 2 ? -150.0f : 130.0f, y}, {f % 2 ? 130.0f : -150.0f, y + 150}, 6, kInk);
     }
     // graffiti: looping spray tags with a dark shadow
     static const Color kSpray[3] = {{90, 255, 120, 255}, {255, 220, 60, 255}, {60, 200, 255, 255}};
@@ -393,7 +395,7 @@ void Stage::drawAlley(float t) const {
                 const float u = float(s) / 40.0f;
                 const float a = u * 6.2831853f * 2.0f + float(g);
                 const Vector2 q{kTagX[g] + u * 120 + std::cos(a) * 14 + off, 520 + std::sin(a) * 18 - u * 10 + off};
-                if (s > 0) DrawLineEx(prev, q, 6, c);
+                if (s > 0) gfx::thickLine(prev, q, 6, c);
                 prev = q;
             }
             DrawCircleV({prev.x + 8, prev.y - 2}, 4, c);
@@ -408,7 +410,7 @@ void Stage::drawAlley(float t) const {
     // a dumpster and the fire barrel
     inkRect({24, 476, 170, 100}, Color{44, 120, 80, 255});
     inkRect({16, 462, 186, 16}, Color{34, 96, 64, 255});
-    for (int i = 0; i < 4; ++i) DrawLineEx({54 + float(i) * 36.0f, 488}, {54 + float(i) * 36.0f, 566}, 3, fade(kInk, 0.4f));
+    for (int i = 0; i < 4; ++i) gfx::thickLine({54 + float(i) * 36.0f, 488}, {54 + float(i) * 36.0f, 566}, 3, fade(kInk, 0.4f));
     const Vector2 bar{1190, 580};
     gfx::glow({bar.x, bar.y - 130}, 170 + 24 * pulse_, Color{255, 120, 40, 120});
     for (int k = 0; k < 3; ++k) {
@@ -421,10 +423,10 @@ void Stage::drawAlley(float t) const {
         gfx::tri({bar.x, top}, {bar.x + w * 0.9f, top}, {bar.x + w * 0.6f + std::cos(t * 10 + float(k)) * 6, top - h * 0.65f}, fc);
     }
     inkRect({bar.x - 40, bar.y - 96, 80, 96}, Color{126, 72, 50, 255});
-    for (int r = 0; r < 3; ++r) DrawLineEx({bar.x - 40, bar.y - 80 + float(r) * 30}, {bar.x + 40, bar.y - 80 + float(r) * 30}, 4, fade(kInk, 0.6f));
+    for (int r = 0; r < 3; ++r) gfx::thickLine({bar.x - 40, bar.y - 80 + float(r) * 30}, {bar.x + 40, bar.y - 80 + float(r) * 30}, 4, fade(kInk, 0.6f));
     // wet asphalt and puddles
     gfx::gradientRect({kFull.x, 578, kFull.width, kFull.y + kFull.height - 578}, Color{48, 32, 54, 255}, Color{12, 8, 18, 255});
-    DrawLineEx({kFull.x, 578}, {kFull.x + kFull.width, 578}, 4, kInk);
+    gfx::thickLine({kFull.x, 578}, {kFull.x + kFull.width, 578}, 4, kInk);
     for (Vector2 c : {Vector2{150, 690}, Vector2{640, 660}, Vector2{1170, 700}}) {
         DrawEllipse(int(c.x), int(c.y), 120, 20, Color{30, 20, 44, 255});
         DrawEllipse(int(c.x + 10), int(c.y), 46, 8, fade(Color{226, 52, 72, 255}, 0.35f + 0.2f * pulse_));
@@ -440,8 +442,9 @@ void Stage::drawSynthwave(float t) const {
     constexpr float horizon = 560;
     const Color skyTop = mix(Color{6, 4, 22, 255}, tint, 0.10f), skyLow = mix(Color{70, 18, 86, 255}, tint, 0.40f);
     gfx::gradientRect({kFull.x, kFull.y, kFull.width, horizon - kFull.y + 2}, skyTop, skyLow);
+    const Rectangle seen = gfx::visibleArea();  // most of the sky is off screen
     for (const Star& s : stars_) {
-        if (s.y > horizon - 90) continue;
+        if (s.y > horizon - 90 || !gfx::inArea(seen, {s.x, s.y}, s.s * 3.2f)) continue;  // rays reach 2.4 x 1.25 x its size
         const float tw = 0.5f + 0.5f * std::sin(t * (1.0f + s.s * 0.25f) + s.ph);
         gfx::star({s.x, s.y}, s.s * (0.7f + 0.3f * tw + 0.25f * pulse_), fade(WHITE, 0.3f + 0.7f * tw));
     }
@@ -463,12 +466,12 @@ void Stage::drawSynthwave(float t) const {
         const float z = float(i) + 1.0f - run;
         const float y = horizon + 320.0f / z - 8.0f;
         if (y < horizon || y > kFull.y + kFull.height) continue;
-        DrawLineEx({kFull.x, y}, {kFull.x + kFull.width, y}, 1.5f + 1.5f / z, fade(line, std::min(0.75f, 0.12f + 0.9f / z) * (0.8f + 0.4f * pulse_)));
+        gfx::thickLine({kFull.x, y}, {kFull.x + kFull.width, y}, 1.5f + 1.5f / z, fade(line, std::min(0.75f, 0.12f + 0.9f / z) * (0.8f + 0.4f * pulse_)));
     }
     for (int i = -40; i <= 40; ++i)
-        DrawLineEx({640.0f + float(i) * 40.0f, horizon}, {640.0f + float(i) * 330.0f, kFull.y + kFull.height}, 1.6f,
+        gfx::thickLine({640.0f + float(i) * 40.0f, horizon}, {640.0f + float(i) * 330.0f, kFull.y + kFull.height}, 1.6f,
                    fade(line, 0.32f + 0.2f * pulse_));
-    DrawLineEx({kFull.x, horizon}, {kFull.x + kFull.width, horizon}, 2.5f, fade(line, 0.9f));
+    gfx::thickLine({kFull.x, horizon}, {kFull.x + kFull.width, horizon}, 2.5f, fade(line, 0.9f));
     EndBlendMode();
     static const Color kCubeColors[5] = {{255, 79, 163, 255}, {40, 220, 255, 255}, {130, 255, 90, 255}, {170, 100, 255, 255}, {255, 222, 64, 255}};
     for (int i = 0; i < 7; ++i) {
@@ -504,7 +507,7 @@ void Stage::drawFront(double now) const {
             const float x = -220 + float(i) * 112.0f + float(i % 2) * 30;
             const float y = 716 + float(i % 3) * 12 - 14 * pulse_ * ((i + beat_) % 2 ? 1.0f : 0.35f);
             const Color body{14, 8, 26, 255};
-            if (hash3(i, beat_ / 2, 1) % 3 == 0) DrawLineEx({x + 30, y + 40}, {x + 56, y - 56}, 18, body);
+            if (hash3(i, beat_ / 2, 1) % 3 == 0) gfx::thickLine({x + 30, y + 40}, {x + 56, y - 56}, 18, body);
             DrawRectangleRounded({x - 46, y + 28, 92, 140}, 0.5f, 8, body);
             DrawCircleV({x, y}, 34, body);
             DrawRing({x, y}, 31, 35, 200, 340, 12, fade(i % 2 ? Color{255, 80, 200, 255} : Color{60, 220, 255, 255}, 0.6f));
