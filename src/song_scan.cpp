@@ -13,6 +13,7 @@
 
 #include "basegame.hpp"
 #include "chart.hpp"
+#include "bigit_chart.hpp"
 #include "chart_binary.hpp"
 #include "count_charts.hpp"
 #include "chart_stream.hpp"
@@ -184,6 +185,10 @@ bool hasChartFile(const fs::path& dir) {
         const std::string n = toLower(pathStr(f.filename()));
         if (countChartName(n)) {
             if (isCountChart(pathStr(f))) return true;
+            continue;
+        }
+        if (endsWithI(n, kBigitChartExt)) {
+            if (isBigitChart(pathStr(f))) return true;
             continue;
         }
         if (endsWithI(n, kBinaryChartExt) ? isBinaryChart(pathStr(f)) : chartName(n) && chartContent(f)) return true;
@@ -474,6 +479,10 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
             if (isBinaryChart(pathStr(f))) charts.push_back(f);
             continue;
         }
+        if (endsWithI(n, kBigitChartExt)) {  // and its bigit chart (.ghb)
+            if (isBigitChart(pathStr(f))) charts.push_back(f);
+            continue;
+        }
         if (countChartName(n)) {  // the iutk engine's Chart.bin and other count charts
             if (isCountChart(pathStr(f))) charts.push_back(f);
             continue;
@@ -485,17 +494,21 @@ void scanSongFolder(std::vector<SongEntry>& songs, const std::string& dirS, cons
         charts.push_back(f);
     }
     // The same chart as .ghc and as .json: the binary one (it loads faster);
-    // as .ghn too: the count chart (the editor saves its stacks there whole).
-    std::vector<std::string> binaryStems, countStems;
+    // as .ghb and .ghc: the .ghc (the same notes, unpacked faster); as .ghn
+    // too: the count chart (the editor saves its stacks there whole).
+    std::vector<std::string> binaryStems, bigitStems, countStems;
     for (const fs::path& c : charts) {
         if (endsWithI(pathStr(c.filename()), kBinaryChartExt)) binaryStems.push_back(toLower(pathStr(c.stem())));
+        if (endsWithI(pathStr(c.filename()), kBigitChartExt)) bigitStems.push_back(toLower(pathStr(c.stem())));
         if (endsWithI(pathStr(c.filename()), kCountChartExt)) countStems.push_back(toLower(pathStr(c.stem())));
     }
     auto has = [](const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); };
     charts.erase(std::remove_if(charts.begin(), charts.end(),
                                 [&](const fs::path& c) {
                                     const std::string n = pathStr(c.filename()), stem = toLower(pathStr(c.stem()));
-                                    if (endsWithI(n, ".json")) return has(binaryStems, stem) || has(countStems, stem);
+                                    if (endsWithI(n, ".json"))
+                                        return has(binaryStems, stem) || has(bigitStems, stem) || has(countStems, stem);
+                                    if (endsWithI(n, kBigitChartExt)) return has(binaryStems, stem) || has(countStems, stem);
                                     return endsWithI(n, kBinaryChartExt) && has(countStems, stem);
                                 }),
                  charts.end());

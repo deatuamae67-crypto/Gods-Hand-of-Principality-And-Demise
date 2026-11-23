@@ -5,6 +5,8 @@
 // an update in place) and the mods kept in step with their zips (records,
 // zip directories read from their end, changes installed and removed again,
 // the mods release compared with what is installed).
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -14,6 +16,9 @@
 #include <string>
 #include <vector>
 
+#include "bigit_chart.hpp"
+#include "chart_binary.hpp"
+#include "chart_stream.hpp"
 #include "miniz.h"
 #include "mod_sync.hpp"
 #include "sha256.hpp"
@@ -377,9 +382,150 @@ void testPackCompare() {
     fs::remove_all(root, ec);
 }
 
+// The arithmetic coder alone: learnt chances, given chances and plain bits,
+// mixed, come back as they went in.
+void testBigitCoder() {
+    uint32_t r = 12345;
+    auto rnd = [&] {
+        r = r * 1103515245u + 12345u;
+        return r >> 8;
+    };
+    struct Step {
+        int kind, bit, p, n;
+        uint64_t v;
+    };
+    std::vector<Step> steps;
+    std::string out;
+    {
+        bigit::Encoder e(out);
+        std::vector<uint16_t> probs(64, bigit::kHalf);
+        for (int i = 0; i < 30000; ++i) {
+            Step s{int(rnd() % 3), 0, 0, 0, 0};
+            if (s.kind == 0) {
+                s.bit = rnd() % 100 < 85;
+                e.bit(probs[size_t(i % 64)], s.bit);
+            } else if (s.kind == 1) {
+                s.p = int(1 + rnd() % 4095);
+                s.bit = int(rnd() % 2);
+                e.bitP(s.p, s.bit);
+            } else {
+                s.n = int(1 + rnd() % 48);
+                s.v = (uint64_t(rnd()) << 24 ^ rnd()) & ((uint64_t(1) << s.n) - 1);
+                e.direct(s.v, s.n);
+            }
+            steps.push_back(s);
+        }
+        e.finish();
+    }
+    const auto* p = reinterpret_cast<const uint8_t*>(out.data());
+    bigit::Decoder d(p, p + out.size());
+    std::vector<uint16_t> probs(64, bigit::kHalf);
+    bool same = true;
+    for (size_t i = 0; i < steps.size() && same; ++i) {
+        const Step& s = steps[i];
+        if (s.kind == 0) same = d.bit(probs[i % 64]) == s.bit;
+        else if (s.kind == 1) same = d.bitP(s.p) == s.bit;
+        else same = d.direct(s.n) == s.v;
+    }
+    UCHECK(same && !d.overrun());
+    // Bits that are ones 85% of the time cost about 0.61 bits each (their
+    // entropy), not 1: the learnt chance pays off.
+    std::string skewed;
+    {
+        bigit::Encoder e(skewed);
+        uint16_t pr = bigit::kHalf;
+        for (int i = 0; i < 20000; ++i) e.bit(pr, rnd() % 100 < 85);
+        e.finish();
+    }
+    UCHECK(skewed.size() > 20000 * 55 / 800 && skewed.size() < 20000 * 66 / 800);
+}
+
+// A chart as .ghb: the same notes as .ghc gives back, smaller.
+void testBigitCharts() {
+    const fs::path root = fs::temp_directory_path() / "gh_ghb_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root);
+    StreamedNotes sn;
+    sn.types = {"Hurt Note", "Alt Animation"};
+    uint32_t r = 777;
+    auto rnd = [&] {
+        r = r * 1664525u + 1013904223u;
+        return r >> 8;
+    };
+    const size_t total = 600000;  // two blocks
+    double t = 1000.0;
+    std::vector<StreamedNote> section;
+    for (size_t i = 0; i < total; ++i) {
+        StreamedNote n;
+        if (i >= 200000 && i < 260000 && !section.empty()) {
+            n = section[(i - 200000) % section.size()];  // a copied section, later in the song
+            n.time += 200000.0 * 13.0;
+        } else {
+            const int k = int(i % 4);
+            // 16ths at 290 BPM, written with 4 decimals as charts are: the gaps tremble.
+            if (k == 0 || rnd() % 3) t += 3750.0 / 290.0;
+            n.time = std::round(t * 1e4) / 1e4;
+            n.setNoteData(i >= 400000 && i < 420000 ? int(rnd() % 2048) : int((i * 3 + i / 7) % 8));
+            n.length = rnd() % 50 == 0 ? float(rnd() % 4000) / 10.0f : 0.0f;
+            n.stack = rnd() % 200 == 0 ? uint8_t(2 + rnd() % 200) : 1;
+            if (rnd() % 100 == 0) n.setTypeIdx(uint16_t(1 + rnd() % 2));
+            if (rnd() % 500 == 0) n.type = uint16_t(n.type | StreamedNote::kAltBit);
+            if (i >= 100000 && i < 110000) section.push_back(n);
+        }
+        if (i >= 300000 && i < 300010) n.time -= 5.0;  // notes out of order, as some files have
+        sn.notes.push_back(n);
+        sn.maxData = std::max(sn.maxData, n.noteData());
+        ++sn.dataCount[size_t(n.noteData())];
+    }
+    for (size_t i = 0; i <= total; i += 1000) sn.rangeStart.push_back(uint32_t(std::min(i, total)));
+    if (sn.rangeStart.back() != total) sn.rangeStart.push_back(uint32_t(total));
+    sn.rawCount = total + 1234;
+    const std::string skeleton = R"({"song":{"song":"Bigits","bpm":290,"notes":[{"__gh_stream":0}],"events":[]}})";
+    const std::string ghb = str(root / "c.ghb"), ghc = str(root / "c.ghc");
+    std::string err;
+    UCHECK(writeBigitChart(ghb, skeleton, sn, err) && writeBinaryChart(ghc, skeleton, sn, 3, err));
+    UCHECK(isBigitChart(ghb) && !isBinaryChart(ghb) && !isBigitChart(ghc));
+    std::string sb, sc;
+    StreamedNotes nb, nc;
+    UCHECK(readBigitChart(ghb, sb, nb, err) && readBinaryChart(ghc, sc, nc, err));
+    UCHECK(sb == skeleton && sc == skeleton);
+    bool same = nb.notes.size() == nc.notes.size() && nb.notes.size() == total;
+    for (size_t i = 0; same && i < total; ++i) {
+        const StreamedNote &a = nb.notes[i], &b = nc.notes[i];
+        same = a.time == b.time && a.length == b.length && a.noteData() == b.noteData() && a.stack == b.stack && a.type == b.type;
+    }
+    UCHECK(same);
+    UCHECK(nb.rangeStart == sn.rangeStart && nb.types == sn.types && nb.maxData == sn.maxData && nb.rawCount == sn.rawCount);
+    UCHECK(nb.dataCount == sn.dataCount);
+    std::string head;
+    UCHECK(readBigitSkeleton(ghb, head) && head == skeleton);
+    UCHECK(fs::file_size(ghb) < fs::file_size(ghc));
+    std::printf("  bigits: %zu notes, .ghc %ju bytes, .ghb %ju bytes\n", total, uintmax_t(fs::file_size(ghc)), uintmax_t(fs::file_size(ghb)));
+    // A damaged file is refused, not read wrong.
+    {
+        std::string bytes = get(root / "c.ghb");
+        bytes.resize(bytes.size() / 2);
+        std::ofstream(root / "half.ghb", std::ios::binary) << bytes;
+        StreamedNotes nh;
+        std::string sh;
+        UCHECK(!readBigitChart(str(root / "half.ghb"), sh, nh, err) && nh.notes.empty());
+    }
+    // No notes at all.
+    StreamedNotes none;
+    none.rangeStart = {0};
+    UCHECK(writeBigitChart(str(root / "e.ghb"), "{}", none, err));
+    StreamedNotes ne;
+    std::string se;
+    UCHECK(readBigitChart(str(root / "e.ghb"), se, ne, err) && ne.notes.empty() && se == "{}" && ne.rangeStart == none.rangeStart);
+    fs::remove_all(root, ec);
+}
+
 }  // namespace
 
 void runUpdateTests() {
+    testBigitCoder();
+    testBigitCharts();
     testSha256();
     testVersions();
     testReleaseJson();

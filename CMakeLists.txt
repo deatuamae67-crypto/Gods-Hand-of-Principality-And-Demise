@@ -117,6 +117,7 @@ add_library(gh_core STATIC
   src/chart.cpp
   src/chart_stream.cpp
   src/chart_binary.cpp
+  src/bigit_chart.cpp
   src/basegame.cpp
   src/builtin_events.cpp
   src/shader_glsl.cpp

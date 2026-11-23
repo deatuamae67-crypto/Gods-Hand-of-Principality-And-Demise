@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "bigit_chart.hpp"
 #include "chart_binary.hpp"
 #include "thr_chart.hpp"
 #include "chart_stream.hpp"
@@ -1264,22 +1265,24 @@ bool writeFnc1(const std::string& path, const Chart& chart, std::string& err) {
 // A chart as God's Hand's binary chart (.ghc): a Psych chart's JSON
 // without its notes, and the notes, each counted note listed (a .ghc stacks
 // up to 255 notes on one), so up to 2^31 notes in all.
-bool writeChartAsGhc(const std::string& path, const Chart& c, std::string& err, uint64_t* notesOut) {
+namespace {
+// A chart as the JSON part and the listed notes a .ghc or .ghb keeps.
+bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::string& err, uint64_t* notesOut) {
     using ghnfmt::esc;
     using ghnfmt::num;
     const Count total = c.playerNotes + c.opponentNotes;
     if (!total.fits64() || total.w[0] > (uint64_t(1) << 31)) {
-        err = "a .ghc lists its notes, and this chart counts " + total.grouped() + ": keep it as .ghn";
+        err = "a .ghc or .ghb lists its notes, and this chart counts " + total.grouped() + ": keep it as .ghn";
         return false;
     }
     if (c.autoCharted) {
         err = "an AutoChart chart plays only in God's Hand: it stays .ghac";
         return false;
     }
-    StreamedNotes sn;
+    sn = StreamedNotes{};
     StreamedNotesBuilder b(sn);
     const double bpm0 = c.tempo.empty() ? 120.0 : c.tempo.front().bpm;
-    std::string j = "{\"song\":{\"song\":" + esc(c.title) + ",\"bpm\":" + num(bpm0) + ",\"speed\":" + num(c.speed) +
+    j = "{\"song\":{\"song\":" + esc(c.title) + ",\"bpm\":" + num(bpm0) + ",\"speed\":" + num(c.speed) +
                     ",\"player1\":" + esc(c.player.empty() ? "bf" : c.player) + ",\"player2\":" + esc(c.opponent.empty() ? "dad" : c.opponent) +
                     ",\"gfVersion\":" + esc(c.gf) + ",\"stage\":" + esc(c.stage) + ",\"needsVoices\":true";
     if (c.keys != 4) j += ",\"keyCount\":" + std::to_string(c.keys);
@@ -1343,7 +1346,20 @@ bool writeChartAsGhc(const std::string& path, const Chart& c, std::string& err, 
     }
     j += "]}}";
     if (notesOut) *notesOut = listed;
-    return writeBinaryChart(path, j, sn, 3, err);
+    return true;
+}
+}  // namespace
+
+bool writeChartAsGhc(const std::string& path, const Chart& c, std::string& err, uint64_t* notesOut) {
+    std::string j;
+    StreamedNotes sn;
+    return chartToStreamed(c, j, sn, err, notesOut) && writeBinaryChart(path, j, sn, 3, err);
+}
+
+bool writeChartAsGhb(const std::string& path, const Chart& c, std::string& err, uint64_t* notesOut) {
+    std::string j;
+    StreamedNotes sn;
+    return chartToStreamed(c, j, sn, err, notesOut) && writeBigitChart(path, j, sn, err);
 }
 
 int convertChartFile(const std::string& in, const std::string& out) {
@@ -1354,15 +1370,16 @@ int convertChartFile(const std::string& in, const std::string& out) {
         std::fprintf(stderr, "%s: an AutoChart chart plays only in God's Hand; it can only be saved as .ghac\n", in.c_str());
         return 1;
     }
-    if (endsWithI(out, kBinaryChartExt) && isCountChart(in)) {
-        // A count chart (.ghn, the iutk engine's .bin, .raid): read, then its notes listed.
+    const bool toBigit = endsWithI(out, kBigitChartExt);
+    if ((endsWithI(out, kBinaryChartExt) || toBigit) && (isCountChart(in) || isThrChart(in))) {
+        // A count chart (.ghn, the iutk engine's .bin, .raid) or a .thr: read, then its notes listed.
         Chart c;
         if (!loadChartFile(in, "Normal", c, err)) {
             std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
             return 1;
         }
         uint64_t listed = 0;
-        if (!writeChartAsGhc(out, c, err, &listed)) {
+        if (!(toBigit ? writeChartAsGhb(out, c, err, &listed) : writeChartAsGhc(out, c, err, &listed))) {
             std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
             return 1;
         }
@@ -1370,9 +1387,9 @@ int convertChartFile(const std::string& in, const std::string& out) {
                     Count(fileSize(out)).grouped().c_str(), seconds());
         return 0;
     }
-    if (endsWithI(out, kBinaryChartExt)) {
+    if (endsWithI(out, kBinaryChartExt) || toBigit) {
         ConvertStats st;
-        if (!convertChartToBinary(in, out, err, &st)) {
+        if (!(toBigit ? convertChartToBigit(in, out, err, &st) : convertChartToBinary(in, out, err, &st))) {
             std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
             return 1;
         }

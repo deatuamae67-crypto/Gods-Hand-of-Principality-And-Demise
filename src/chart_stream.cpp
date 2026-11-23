@@ -34,6 +34,7 @@
 #include "chart.hpp"
 #include "chart_stream.hpp"
 
+#include "bigit_chart.hpp"
 #include "chart_binary.hpp"
 #include "count_charts.hpp"
 #include "common.hpp"
@@ -1259,6 +1260,12 @@ bool loadChartFile(const std::string& path, const std::string& difficulty, Chart
         if (!readBinaryChart(path, skeleton, sn, err)) return false;
         return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
     }
+    if (isBigitChart(path)) {  // its bigit chart (.ghb): the notes as one big number
+        std::string skeleton;
+        StreamedNotes sn;
+        if (!readBigitChart(path, skeleton, sn, err)) return false;
+        return parseChartStreamed(skeleton, sn, difficulty, out, err, extraKeys);
+    }
     if (isCountChart(path)) {  // a chart of counts: the iutk engine's, R-Slice's, God's Hand's
         if (!loadCountChart(path, out, err)) return false;
         out.difficulty = difficulty;
@@ -1338,8 +1345,8 @@ ChartPeek peekChart(const std::string& path) {
     if (isCountChart(path)) return pk;  // counts only: no song fields
     constexpr size_t kWin = 96 * 1024;
     std::string head, tail;
-    if (isBinaryChart(path)) {  // its JSON part holds the song's fields
-        if (!readBinarySkeleton(path, head)) return pk;
+    if (isBinaryChart(path) || isBigitChart(path)) {  // its JSON part holds the song's fields
+        if (!(isBinaryChart(path) ? readBinarySkeleton(path, head) : readBigitSkeleton(path, head))) return pk;
         if (head.size() > 2 * kWin) {
             tail = head.substr(head.size() - kWin);
             head.resize(kWin);

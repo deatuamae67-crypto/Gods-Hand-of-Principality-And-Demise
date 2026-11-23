@@ -88,6 +88,8 @@ bool writeGhn(const std::string& path, const Chart& chart, std::string& err, Ghn
 // A chart as God's Hand's binary chart (.ghc), each counted note listed:
 // up to 2^31 notes (more: keep it .ghn). notes: how many were listed.
 bool writeChartAsGhc(const std::string& path, const Chart& chart, std::string& err, uint64_t* notes = nullptr);
+// The same notes as a bigit chart (.ghb, bigit_chart.hpp).
+bool writeChartAsGhb(const std::string& path, const Chart& chart, std::string& err, uint64_t* notes = nullptr);
 
 // godshand --convert <chart> <out>: any chart the game reads to .ghn, .ghc,
 // the iutk engine's .bin or the threadripper engine's .thr, by the output's

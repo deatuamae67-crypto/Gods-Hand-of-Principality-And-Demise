@@ -20,6 +20,8 @@
 // read.
 #include "chart_binary.hpp"
 
+#include "bigit_chart.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -172,6 +174,9 @@ int workerCount(int threads) {
 }
 
 }  // namespace
+
+std::string ghcColumns(const StreamedNote* notes, size_t count) { return encodeBlock(notes, count); }
+bool ghcFromColumns(const std::string& raw, StreamedNote* out, size_t count) { return decodeBlock(raw, out, count, kVersion); }
 
 bool isBinaryChart(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -416,6 +421,8 @@ bool convertChartToBinary(const std::string& src, const std::string& dst, std::s
     StreamedNotes sn;
     if (isBinaryChart(src)) {
         if (!readBinaryChart(src, skeleton, sn, err)) return false;
+    } else if (isBigitChart(src)) {
+        if (!readBigitChart(src, skeleton, sn, err)) return false;
     } else if (!streamChartSkeleton(src, skeleton, sn, err)) {
         return false;
     }
