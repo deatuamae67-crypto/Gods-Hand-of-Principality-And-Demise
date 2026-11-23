@@ -44,6 +44,7 @@ struct Settings {
     // 1 full (every pixel).
     int noteDetail = 0;
     int noteRenderer = 3;  // 0 GPU, 1 CPU with x86-64 assembly, 2 CPU with C++, 3 Auto
+    int motionBlur = 0;    // songs: 0 off, 1 light, 2 medium, 3 strong (frames blended; recording: 2/4/8 subframes a frame)
     bool luaNoteCallbacks = true;  // goodNoteHit, opponentNoteHit, noteMiss... (OFF: faster spam charts)
     // Rendering mode (desktop): songs play by themselves and are recorded to a
     // video with ffmpeg, frame by frame (render_mode.hpp).

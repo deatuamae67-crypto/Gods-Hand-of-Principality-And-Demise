@@ -161,6 +161,27 @@ bool frameTargetActive() { return g_frameRt.id != 0; }
 
 void beginTexture(const RenderTexture2D& rt) { BeginTextureMode(rt); }
 
+namespace {
+// A picture's alpha to 1, its colours untouched (rgb = dst, alpha = 1).
+void makeOpaque(const RenderTexture2D& rt) {
+    BeginTextureMode(rt);
+    rlSetBlendFactorsSeparate(RL_ZERO, RL_ONE, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    DrawRectangle(0, 0, rt.texture.width, rt.texture.height, BLACK);
+    EndBlendMode();
+    EndTextureMode();
+}
+}  // namespace
+
+void blendFrame(const RenderTexture2D& into, const RenderTexture2D& from, float a) {
+    const Texture2D& t = from.texture;
+    makeOpaque(from);  // so a is the weight everywhere
+    BeginTextureMode(into);
+    DrawTextureRec(t, {0, 0, float(t.width), -float(t.height)}, {0, 0}, Fade(WHITE, std::clamp(a, 0.0f, 1.0f)));
+    EndTextureMode();
+    makeOpaque(into);  // blending lowered its alpha (a^2 + (1 - a)): back to 1
+}
+
 void endTexture() {
     EndTextureMode();
     if (g_frameRt.id) BeginTextureMode(g_frameRt);  // back to the frame being rendered

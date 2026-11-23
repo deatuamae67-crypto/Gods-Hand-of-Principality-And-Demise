@@ -43,6 +43,8 @@ public:
     // A song: the pictures of the last one may stay uploaded for it (other
     // screens free them; see SceneRenderer::releaseKept).
     virtual bool keepsPictures() const { return false; }
+    // A song: Options > Motion blur applies to it.
+    virtual bool motionBlurred() const { return false; }
 };
 
 struct Modifiers {
@@ -229,6 +231,14 @@ private:
     void drawRenderBadge();
     void backgroundNotices();  // what the updater and the mod pack check found, said once
     void autoPress();          // --press
+    // Options > Motion blur: frames drawn into mbFrame_ and blended into
+    // mbAccum_ (songs); while recording, the subframes of a video frame
+    // averaged there.
+    int renderSubframes() const;
+    bool blurTargets(int w, int h);
+    RenderTexture2D mbFrame_{}, mbAccum_{};
+    bool mbPrimed_ = false;
+    int subframe_ = 0;
     bool packNoticePending_ = false;  // the check at start: what it finds is said once
     update::Stage noticedStage_ = update::Stage::Idle;
     double backgroundAt_ = 0;

@@ -38,6 +38,7 @@ public:
     std::string perfInfo() const override;
     TouchLayout touchLayout() const override;
     bool keepsPictures() const override { return true; }
+    bool motionBlurred() const override { return true; }
     static constexpr int kPauseItems = 4;  // Resume, Restart, Options, Exit to menu
     void openChartEditor();
     void openOptions();

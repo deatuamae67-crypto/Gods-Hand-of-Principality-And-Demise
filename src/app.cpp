@@ -531,10 +531,12 @@ int App::run(int argc, char** argv) {
         if (renderer.active()) {
             // Rendering mode: one video frame of game time per loop, as fast
             // as the computer goes (no frame limit, no waiting for the screen).
-            renderClock_ += renderer.frameTime();
+            // Motion blur: several subframes make up one video frame.
+            const double step = renderer.frameTime() / double(renderSubframes());
+            renderClock_ += step;
             now = renderClock_;
             input.poll(now);
-            dt = renderer.frameTime();
+            dt = step;
             last = now;
             const double real = nowSec();
             if (real > lastReal) fps = fps * 0.95f + float(1.0 / (real - lastReal)) * 0.05f;
@@ -594,6 +596,8 @@ int App::run(int argc, char** argv) {
     mixer.shutdown();
     psychUi().unload();
     sfxShutdown();
+    if (mbFrame_.id) UnloadRenderTexture(mbFrame_);
+    if (mbAccum_.id) UnloadRenderTexture(mbAccum_);
     gfx::shutdown();
     CloseAudioDevice();
     CloseWindow();
@@ -661,17 +665,50 @@ void App::frame() {
     // Rendering mode: the frame is drawn into the video's picture, sent to
     // ffmpeg with this frame's audio, and shown scaled in the window.
     const bool rendering = renderer.active();
+    const int subs = renderSubframes();
+    // Options > Motion blur in a song: the frame is drawn aside and blended in.
+    const bool blurLive = !rendering && settings.motionBlur > 0 && state_->motionBlurred() &&
+                          blurTargets(GetScreenWidth(), GetScreenHeight());
+    if (!blurLive) mbPrimed_ = false;
+    if (subs == 1) subframe_ = 0;
     BeginDrawing();
     ClearBackground(BLACK);
     if (rendering) {
         gfx::beginFrameTarget(renderer.target());
         ClearBackground(BLACK);
+    } else if (blurLive) {
+        gfx::beginFrameTarget(mbFrame_);
+        ClearBackground(BLACK);
     }
     state_->draw();
+    if (blurLive) {
+        gfx::endFrameTarget();
+        // The part of each frame that stays: the same whatever the frame rate.
+        static const float kKeep[3] = {0.45f, 0.62f, 0.78f};
+        const float keep = kKeep[clampv(settings.motionBlur, 1, 3) - 1];
+        const float a = mbPrimed_ ? 1.0f - std::pow(keep, float(clampv(dt, 0.0, 0.1) * 60.0)) : 1.0f;
+        gfx::blendFrame(mbAccum_, mbFrame_, a);
+        mbPrimed_ = true;
+        const Texture2D& t = mbAccum_.texture;
+        DrawTextureRec(t, {0, 0, float(t.width), -float(t.height)}, {0, 0}, WHITE);
+    }
     if (rendering) {
         gfx::drawLetterbox();
         gfx::endFrameTarget();
-        if (!renderer.captureFrame()) {
+        bool whole = true;  // a video frame is complete: sent with its audio
+        if (subs > 1 && blurTargets(renderer.target().texture.width, renderer.target().texture.height)) {
+            // Real motion blur: the subframes of one video frame averaged
+            // (the k-th weighs 1/(k+1)), the average sent as the frame.
+            gfx::blendFrame(mbAccum_, renderer.target(), 1.0f / float(subframe_ + 1));
+            if (++subframe_ < subs) {
+                whole = false;
+            } else {
+                subframe_ = 0;
+                gfx::blendFrame(renderer.target(), mbAccum_, 1.0f);
+            }
+        }
+        if (!whole) {
+        } else if (!renderer.captureFrame()) {
             stopRender();
         } else {
             const unsigned n = renderer.audioFramesFor(renderer.frames() - 1);
@@ -1001,6 +1038,24 @@ void App::stopRender() {
     renderLabel.clear();
     if (path.empty()) notify("Rendering mode: " + err, 10.0);
     else std::printf("[render] %s\n", path.c_str());
+}
+
+int App::renderSubframes() const {
+    if (!renderer.active() || settings.motionBlur <= 0 || !state_ || !state_->motionBlurred()) return 1;
+    return 1 << clampv(settings.motionBlur, 1, 3);  // 2, 4, 8
+}
+
+// The motion blur's two pictures, at this size (made again when it changes).
+bool App::blurTargets(int w, int h) {
+    if (w <= 0 || h <= 0) return false;
+    if (mbFrame_.id && mbFrame_.texture.width == w && mbFrame_.texture.height == h) return true;
+    if (mbFrame_.id) UnloadRenderTexture(mbFrame_);
+    if (mbAccum_.id) UnloadRenderTexture(mbAccum_);
+    mbFrame_ = LoadRenderTexture(w, h);
+    mbAccum_ = LoadRenderTexture(w, h);
+    mbPrimed_ = false;
+    subframe_ = 0;
+    return mbFrame_.id && mbAccum_.id;
 }
 
 // --press: one key at a time, held for a frame.

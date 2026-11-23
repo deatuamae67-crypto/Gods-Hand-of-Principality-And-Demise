@@ -131,6 +131,10 @@ public:
             {Row::Bool, "Shaders", "Mod shaders and screen effects. OFF is faster on weak devices.", &s.shaders},
             {Row::Bool, "Anti-aliasing", "Smooth scaling of mod pictures. OFF: sharp pixels and a little faster (Psych's Anti-Aliasing).",
              &s.antialiasing},
+            {Row::Choice, "Motion blur", "Songs: each frame keeps a little of the ones before, so fast notes leave a trail and "
+             "high scroll speeds look smoother (the same at any frame rate). Rendering mode: real motion blur, each video frame "
+             "the average of 2, 4 or 8 drawn between it and the next (that many times slower to record).",
+             nullptr, nullptr, 0, 0, 0, &s.motionBlur, {0, 1, 2, 3}, {"Off", "Light", "Medium", "Strong"}},
             {Row::Choice, "Note detail", "Spam charts: Adaptive draws notes stacked a few pixels apart once while the frame rate is "
              "under 60 (every note is still played). Full: every pixel.", nullptr, nullptr, 0, 0, 0, &s.noteDetail, {0, 1},
              {"Adaptive", "Full"}},

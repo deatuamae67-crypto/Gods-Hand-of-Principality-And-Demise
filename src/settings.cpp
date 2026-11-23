@@ -68,6 +68,7 @@ bool Settings::load(const std::string& path) {
         else if (k == "shaders") shaders = b;
         else if (k == "noteDetail") noteDetail = clampv(int(d), 0, 1);
         else if (k == "noteRenderer") noteRenderer = clampv(int(d), 0, 3);
+        else if (k == "motionBlur") motionBlur = clampv(int(d), 0, 3);
         else if (k == "luaNoteCallbacks") luaNoteCallbacks = b;
         else if (k == "renderMode") renderMode = b;
         else if (k == "renderSize") renderSize = clampv(int(d), 0, 3);
@@ -175,7 +176,7 @@ bool Settings::save(const std::string& path) const {
       << "\nnoteSplashes=" << noteSplashes << "\nflashing=" << flashing << "\ncamZoom=" << camZoom
       << "\nshowFps=" << showFps << "\nfpsMemory=" << fpsMemory << "\nfpsFrameTimes=" << fpsFrameTimes << "\nfpsUsage=" << fpsUsage
       << "\nfpsHardware=" << fpsHardware << "\nlowDetail=" << lowDetail << "\nvsync=" << vsync << "\nlowLatency=" << lowLatency << "\naudioLatency=" << audioLatency << "\nshaders=" << shaders << "\nextraKeys=" << extraKeys << "\nnoteCounter=" << noteCounter
-      << "\nnoteDetail=" << noteDetail << "\nnoteRenderer=" << noteRenderer << "\nluaNoteCallbacks=" << luaNoteCallbacks
+      << "\nnoteDetail=" << noteDetail << "\nnoteRenderer=" << noteRenderer << "\nmotionBlur=" << motionBlur << "\nluaNoteCallbacks=" << luaNoteCallbacks
       << "\nrenderMode=" << renderMode << "\nrenderSize=" << renderSize << "\nrenderFps=" << renderFps
       << "\nrenderEncoder=" << renderEncoder << "\nrenderBitrate=" << renderBitrate << "\nrenderAudio=" << renderAudio
       << "\nluaErrors=" << luaErrors << "\nluaWarnings=" << luaWarnings << "\nhitPopups=" << hitPopups

@@ -33,6 +33,10 @@ void endFrameTarget();
 bool frameTargetActive();
 void beginTexture(const RenderTexture2D& rt);
 void endTexture();
+// into = into * (1 - a) + from * a, as if `from` were fully opaque (its
+// translucent drawing left its alpha below 1): motion blur's blend. a = 1
+// copies. Both the same size, outside any frame target.
+void blendFrame(const RenderTexture2D& into, const RenderTexture2D& from, float a);
 // A fragment shader for the OpenGL the game runs on (3.3, ES 2 or 2.1): the
 // body is written once, with GH_VARYING, GH_TEX and GH_FRAG for the words
 // the GLSL versions spell differently. 0 in .id when it does not compile.
