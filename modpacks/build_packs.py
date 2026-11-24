@@ -226,6 +226,8 @@ def main():
         write_manifest()
         drop_unused(old)
     for folder in [f for f in todo if f in local]:
+        # Its media are in Git LFS (.gitattributes): the checkout has their pointers.
+        run('git', 'lfs', 'pull', '--include', 'modpacks/' + folder + '/**', cwd=os.path.dirname(HERE))
         parts = pack(os.path.join(HERE, folder), folder, work)
         for p in parts:
             run('gh', 'release', 'upload', TAG, p, '--clobber')

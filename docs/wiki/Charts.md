@@ -103,10 +103,11 @@ SNIFF reads one pattern of a project charted for it (its keys C3–D#3 and C4–
 - **Lanes**: SNIFF's keys C, C#, D and D# are left, down, up and right; the same keys of every octave give the same lanes (the pitch modulo 4), so no note is left out.
 - **Sides**: a channel and its "(Alt)" twin are one instrument; the first instrument with notes in the channel rack plays the player's side, the next the opponent's.
 - **Holds**, as SNIFF makes them: a note played softly (velocity under 64) or a beat long or more holds for its length less a step. **Alt Animation**: the notes of "(Alt)" channels, and portamento notes (as SNIFF's Rust version marks them).
-- **The playlist**: each pattern clip plays its window of the pattern (FL Studio 20 and later keep it in whole ticks), at its place in the song. A project without a playlist plays its patterns one after another, a bar each at least. Bars of four beats; the camera on the side with more notes in each.
-- **Every note counted**: the project is read a piece at a time (it can be gigabytes); each pattern keeps its distinct notes with how many times each is there, and each clip adds its notes' counts to the chart's cells. Nothing is multiplied: each count is how many notes of the project are there. Notes on the same lane less than 1 ms apart are one note that counts as all of them, as in every chart the game plays.
+- **The playlist**: each pattern clip plays its window of the pattern (FL Studio 20 and later keep it in whole ticks), at its place in the song. A project without a playlist plays its patterns one after another, a bar each at least (a playlist of audio clips alone plays no notes). Bars of four beats; the camera on the side with more notes in each.
+- **The beat**: the tempo counts beats, and a beat is the PPQ times the time signature's *steps per beat* over 4 (Project → General settings): with FL Studio's 4 steps, a quarter note; with 16, four of them. Both FL Studio readers (one pattern, the whole song) and AutoChart time notes so.
+- **Every note counted**: the project is read a piece at a time (it can be gigabytes); each pattern keeps its distinct notes with how many times each is there, and each clip adds its notes' counts to the chart's cells. Nothing is multiplied: each count is how many notes of the project are there. Notes on the same lane less than 1 ms apart are one note that counts as all of them, as in every chart the game plays. A project that ends before its data says it does (cut short while copying, say) is refused, not converted in part.
 - **FL Studio 20 to 26**: playlist clips of 32, 60 and 88 bytes, and FL Studio 25's event 0xAC (a dword, then text a byte long).
-- **Issue #36's song** (FL Studio 26.1.3.5570, 4.08 GB): 57 patterns, 168,623,461 note records, 50,056 clips — **3,560,023,825,730 notes** (1,780,028,092,421 the player's, 1,779,995,733,309 the opponent's) in 1,559,568 notes of the chart, read in about 6 s. As `.ghn` 404 KB, `.ghc` 444 KB, `.ghb` 346 KB, iutk FNC1 20.3 MB (1.4 MB zipped); it is in the "charts made in sniff" mod pack. Not as `.thr` (every note listed: terabytes) or `.raid` (65,535 notes an event: 55,725,072 events; God's Hand reads `.raid` but does not write it).
+- **Issue #36's song** (FL Studio 26.1.3.5570, 4.08 GB, 295 BPM, PPQ 768 with 16 steps a beat): 57 patterns, 168,623,461 note records, 50,056 clips — **3,560,023,825,730 notes** (1,780,028,092,421 the player's, 1,779,995,733,309 the opponent's) from 0:26 to 6:40 of its 7:10, in 627,826 notes of the chart, read in about 6 s. As `.ghn` 213 KB, `.ghc` 244 KB, `.ghb` 159 KB, iutk FNC1 8.2 MB; it is in the "charts made in sniff" mod pack, with the song's audio and video. Not as `.thr` (every note listed: terabytes) or `.raid` (65,535 notes an event: 55,725,072 events; God's Hand reads `.raid` but does not write it).
 - **Making one**: `godshand --convert "song.flp#playlist" <out.ghn|.ghc|.ghb|.bin>`; the chart loader reads `song.flp#playlist` too.
 
 ## Max-notes charts (--max-notes)
@@ -118,7 +119,7 @@ SNIFF reads one pattern of a project charted for it (its keys C3–D#3 and C4–
 | Andromeda Galaxy (the omniverse) | 0:36 to 2:05 | 356,004 | 18.3 KB | 40.1 KB | 8.7 KB |
 | Hopeless (Pixelified) (vs. redacted fantrack) | 2:22 to 3:40 | 312,004 | 28.0 KB | 35.4 KB | 7.8 KB |
 
-The pack's charts come without audio: put the song in `songs/<song>/Inst.ogg`, or install a mod with the same song (the game uses its audio when the folders' names match). Without audio, a song ends just after its last note.
+The pack's songs play their own instrumentals with their videos as the background (no stage, no characters: see [Mods](Mods.md#a-songs-background-video)).
 
 ## AutoChart (.ghac)
 

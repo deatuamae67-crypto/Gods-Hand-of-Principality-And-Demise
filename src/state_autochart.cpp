@@ -550,7 +550,7 @@ private:
             StudioTrack t;
             t.name = (ch.name.empty() ? "Channel " + std::to_string(ch.index + 1) : ch.name) + " (FLP)";
             t.flp = std::move(notes);
-            t.ppqn = p.ppqn;
+            t.ppqn = std::max(1, int(std::lround(p.ticksPerBeat())));  // ticks a beat (FL's steps per beat included)
             // The FPC channel with SNIFF's keys is a chart already: read it as one.
             int keys = 0;
             for (const FlpNote& n : t.flp) keys += ((n.pitch >= 48 && n.pitch <= 51) || (n.pitch >= 60 && n.pitch <= 63)) ? 1 : 0;

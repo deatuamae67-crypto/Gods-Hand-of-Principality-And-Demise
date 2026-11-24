@@ -350,6 +350,12 @@ private:
         bool loop = false, skippable = true, waiting = false, fit = false;  // fit: stretched over the screen
     };
     std::unique_ptr<VideoSlot> cutscene_;
+    // The song's own background video (Background.mpg beside its audio or
+    // chart): it plays in time with the song in place of the stage and the
+    // characters (issue #36's "charts made in sniff").
+    std::unique_ptr<VideoPlayer> bgVideo_;
+    void openBackgroundVideo();
+    void drawBackgroundVideo();
     std::map<std::string, VideoSlot> videoSprites_;
     bool openVideo(VideoSlot& v);
     bool updateVideos(double dt);  // true while a cutscene holds the game

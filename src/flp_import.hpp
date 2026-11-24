@@ -11,6 +11,7 @@
 // beat or more, or played softly (velocity under 64), becomes a hold.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -48,7 +49,13 @@ struct FlpClip {
 };
 
 struct FlpProject {
-    int ppqn = 96;          // ticks per beat
+    int ppqn = 96;          // ticks per quarter note (the header's PPQ)
+    // FL Studio's "steps per beat" (Project > General settings > Time
+    // signature). A step is always a quarter of the PPQ, so a beat - what the
+    // tempo counts - is ppqn * stepsPerBeat / 4 ticks: with 16 steps a beat,
+    // four times the PPQ (issue #36's song is saved so).
+    int stepsPerBeat = 4;
+    double ticksPerBeat() const { return double(ppqn) * double(std::max(1, stepsPerBeat)) / 4.0; }
     double bpm = 0;         // 0: not in the file (.fsc scores)
     std::string title;
     int chartChannel = 0;   // the FPC channel (SNIFF's choice), else the first

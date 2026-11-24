@@ -528,8 +528,10 @@ void testFlpSong() {
 // dword, then text a byte long), clips of 88 bytes whose window in the
 // pattern is in whole ticks (-1: from its start), the player's and the
 // opponent's instruments each with an "(Alt)" twin, stacked notes, holds and
-// portamento. Without `playlist`, its patterns play one after another.
-std::string makeFl26Song(bool playlist) {
+// portamento. Without `playlist`, its patterns play one after another;
+// `audioOnly`: a playlist with an audio clip and no pattern clips;
+// `stepsPerBeat`: the time signature's steps per beat (0: not saved, 4).
+std::string makeFl26Song(bool playlist, bool audioOnly = false, int stepsPerBeat = 0) {
     std::string ev;
     auto word = [&](uint8_t id, uint16_t v) { ev += char(id); ev += char(v & 255); ev += char(v >> 8); };
     auto dword = [&](uint8_t id, uint32_t v) {
@@ -559,6 +561,10 @@ std::string makeFl26Song(bool playlist) {
     };
     array(0xC7, "26.1.3.5570");
     dword(0x9C, 150000);  // 150 BPM
+    if (stepsPerBeat) {
+        ev += char(0x12);  // steps per beat (a byte event)
+        ev += char(stepsPerBeat);
+    }
     {
         const std::string t = utf16("Arp");  // read as a plain dword, the stream would be lost here
         ev += char(0xAC);
@@ -609,10 +615,12 @@ std::string makeFl26Song(bool playlist) {
             c.replace(28, 4, le(uint32_t(end), 4));
             clips += c;
         };
-        clip(0, 20481, 384, -1, -1);    // pattern 1, whole
-        clip(384, 20481, 96, 48, 144);  // pattern 1's ticks 48 to 144
-        clip(500, 3, 200, -1, -1);      // an audio clip: no notes
-        clip(768, 20482, 384, -1, -1);  // pattern 2
+        if (!audioOnly) {
+            clip(0, 20481, 384, -1, -1);    // pattern 1, whole
+            clip(384, 20481, 96, 48, 144);  // pattern 1's ticks 48 to 144
+        }
+        clip(500, 3, 200, -1, -1);  // an audio clip: no notes
+        if (!audioOnly) clip(768, 20482, 384, -1, -1);  // pattern 2
         array(0xE9, clips);
     }
     array(0xE1, std::string(16, '\0'));  // the mixer: no channels after it
@@ -701,6 +709,43 @@ void testFlpWholeSong() {
         SCHECK(convertChartFile(str(base / "song.flp") + "#playlist", out) == 0);
         Chart back;
         SCHECK(loadChartFile(out, "Normal", back, err) && back.playerNotes == Count(8) && back.opponentNotes == Count(3));
+        if (std::string(ext) != ".bin") {  // the (Alt) channel's notes and the portamento one keep their alt animation (FNC1 keeps none)
+            size_t alts = 0;
+            for (const Note& n : back.notes) alts += (n.flags & kFlagAlt) ? 1 : 0;
+            SCHECK(alts == 3);
+        }
+    }
+    // FL Studio's steps per beat: at 16, a beat is 4 PPQs, so the same ticks
+    // come 4 times sooner (issue #36's song: 6:40 of notes, not 26:40).
+    {
+        FlpProject p16;
+        SCHECK(readFlp(makeFl26Song(true, false, 16), p16, err) && p16.stepsPerBeat == 16 && p16.ticksPerBeat() == 384);
+        put(base / "spb16.flp", makeFl26Song(true, false, 16));
+        Chart q;
+        FlpSongStats qs;
+        SCHECK(flpSongToChart(str(base / "spb16.flp"), q, err, {}, &qs) && qs.stepsPerBeat == 16 && q.notes.size() == 9 &&
+               q.playerNotes == Count(8));
+        if (q.notes.size() == 9) SCHECK(std::fabs(q.notes.back().time - 800) < 1e-6 && std::fabs(q.notes[3].length - 175) < 1e-3);
+        SCHECK(q.sections.size() == 1);  // 4 beats of 384 ticks hold the whole song
+        // The pattern reader (SNIFF's one-pattern charts) times them the same way.
+        Chart pat;
+        SCHECK(flpToChart(p16, 1, pat, err) && !pat.notes.empty() && std::fabs(pat.notes.back().time - 200) < 1e-6);
+    }
+    // A playlist of audio clips alone plays no notes: no pattern is played for it.
+    put(base / "audio.flp", makeFl26Song(true, true));
+    Chart none;
+    SCHECK(!flpSongToChart(str(base / "audio.flp"), none, err) && err == "the playlist plays no notes");
+    // Cut short anywhere - in a note event, a name, the playlist - it is
+    // refused, never converted in part.
+    {
+        const std::string whole = makeFl26Song(true);
+        bool refused = true;
+        for (size_t at = 0; at < whole.size() && refused; ++at) {
+            put(base / "cut.flp", whole.substr(0, at));
+            Chart part;
+            refused = !flpSongToChart(str(base / "cut.flp"), part, err);
+        }
+        SCHECK(refused);
     }
     // Not a project, a project cut short, a project with no notes.
     Chart bad;
@@ -1400,6 +1445,50 @@ void testMaxNotesCharts() {
     SCHECK(convertChartFile(str(base / "max.ghn"), str(base / "max2.thr")) != 0 && !fs::exists(base / "max2.thr"));
     spec.toMs = 10;  // before it starts
     SCHECK(!makeMaxNotesChart(spec, c, err) && !err.empty());
+    // A count past 2^256 - 1 in a .ghc's table is refused, as .ghn refuses
+    // one, not read as no count: 2^256 written over 2^256 - 1 (37 bytes each).
+    {
+        Chart one;
+        Note n;
+        n.time = 100;
+        n.side = 1;
+        one.notes.push_back(n);
+        one.setCount(one.notes.back(), Count::max());
+        one.finalize(120);
+        SCHECK(writeChartAsGhc(str(base / "one.ghc"), one, err));
+        std::ifstream in(base / "one.ghc", std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        // The table: u64 1 (notes), u64 38 (bytes: an index gap and the count), u64 packed, the packed bytes.
+        std::string key(16, '\0');
+        key[0] = 1;
+        key[8] = 38;
+        const size_t at = bytes.find(key);
+        SCHECK(at != std::string::npos && at + 24 <= bytes.size());
+        if (at != std::string::npos && at + 24 <= bytes.size()) {
+            uint64_t packed = 0;
+            std::memcpy(&packed, bytes.data() + at + 16, 8);
+            std::string raw(38, '\0');
+            mz_ulong rawLen = 38;
+            SCHECK(packed <= bytes.size() - at - 24 &&
+                   mz_uncompress(reinterpret_cast<unsigned char*>(raw.data()), &rawLen,
+                                 reinterpret_cast<const unsigned char*>(bytes.data() + at + 24), mz_ulong(packed)) == MZ_OK &&
+                   rawLen == 38 && uint8_t(raw[1]) == 0xFF && uint8_t(raw[37]) == 0x0F);
+            for (size_t k = 1; k < 37; ++k) raw[k] = char(0x80);
+            raw[37] = char(0x10);
+            mz_ulong zLen = mz_compressBound(38);
+            std::string z(size_t(zLen), '\0');
+            SCHECK(mz_compress(reinterpret_cast<unsigned char*>(z.data()), &zLen, reinterpret_cast<const unsigned char*>(raw.data()), 38) ==
+                   MZ_OK);
+            z.resize(size_t(zLen));
+            const uint64_t zl = z.size();
+            std::string patched = bytes.substr(0, at + 16);
+            patched.append(reinterpret_cast<const char*>(&zl), 8);
+            patched += z + bytes.substr(at + 24 + size_t(std::min<uint64_t>(packed, bytes.size() - at - 24)));
+            put(base / "past.ghc", patched);
+            Chart past;
+            SCHECK(!loadChartFile(str(base / "past.ghc"), "Normal", past, err) && err.find("2^256") != std::string::npos);
+        }
+    }
     fs::remove_all(base);
 }
 

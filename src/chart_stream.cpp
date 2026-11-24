@@ -1040,12 +1040,13 @@ void StreamedNotesBuilder::add(double time, int noteData, double length, const s
     out_.notes.push_back(n);
 }
 
-void StreamedNotesBuilder::addCount(double time, int noteData, double length, const std::string& type, const Count& count) {
+void StreamedNotesBuilder::addCount(double time, int noteData, double length, const std::string& type, const Count& count, bool alt) {
     if (!std::isfinite(time) || noteData < 0 || noteData >= kNoteDataValues || out_.rangeStart.empty() || count.isZero()) return;
     StreamedNote n;
     n.time = time;
     n.length = std::isfinite(length) && length > 0 ? float(length) : 0.0f;
     if (!type.empty()) n.setTypeIdx(out_.typeIndex(type));
+    if (alt) n.type |= StreamedNote::kAltBit;
     n.setNoteData(noteData);
     out_.maxData = std::max(out_.maxData, noteData);
     // The totals saturate (a file of more than 2^64 notes says so in its counts).

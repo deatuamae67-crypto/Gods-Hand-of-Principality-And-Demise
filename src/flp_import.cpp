@@ -46,6 +46,7 @@ enum : uint8_t {
     kPatStart = 0x41,    // word: the pattern the next events belong to
     kOldTempo = 0x42,    // word: tempo of old versions
     kTempo = 0x9C,       // dword: tempo x 1000
+    kStepsPerBeat = 0x12,  // byte: the time signature's steps per beat (4 unless changed)
     kPatName = 0xC1,
     kTitle = 0xC2,
     kPlugName = 0xC9,
@@ -196,6 +197,7 @@ bool readFlp(std::string_view bytes, FlpProject& out, std::string& err) {
                 }
                 break;
             case kTempo: out.bpm = value / 1000.0; break;
+            case kStepsPerBeat: if (value >= 1 && value <= 64) out.stepsPerBeat = int(value); break;
             case kOldTempo: if (out.bpm <= 0) out.bpm = value; break;
             case kTitle: out.title = flString(data, len); break;
             case kPlugName: {
@@ -303,7 +305,7 @@ bool flpToChart(const FlpProject& p, int pattern, Chart& out, std::string& err, 
         if (q.number == pattern) pat = &q;
     if (!pat) { err = "no pattern " + std::to_string(pattern); return false; }
     const double bpm = bpmIn > 0 ? bpmIn : p.bpm > 0 ? p.bpm : 120.0;
-    const double msPerTick = 60000.0 / (bpm * p.ppqn);
+    const double msPerTick = 60000.0 / (bpm * p.ticksPerBeat());
 
     std::vector<FlpNote> notes;
     for (const FlpNote& n : pat->notes)
@@ -314,7 +316,7 @@ bool flpToChart(const FlpProject& p, int pattern, Chart& out, std::string& err, 
         return isSpecial(a.pitch) && !isSpecial(b.pitch);
     });
 
-    const uint32_t sectionTicks = uint32_t(p.ppqn) * 4;
+    const uint32_t sectionTicks = std::max<uint32_t>(1, uint32_t(std::lround(p.ticksPerBeat() * 4)));
     struct Sec { bool mustHit = true, altOpp = false, altPlayer = false; };
     std::vector<Sec> secs;
     bool mustHit = true;

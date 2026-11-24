@@ -15,17 +15,17 @@ them - combo, score and note counts include them all. Nothing is multiplied:
 each count is how many notes are there, so the counts add up to exactly the
 totals below.
 
-Audio: the charts come without audio. Put the song's audio in
-songs/<the song's folder>/Inst.ogg (and Voices.ogg, if it has one), or
-install a mod with the same song: the game uses that mod's audio when the
-folder names match. Without audio, a song ends just after its last note.
+Each song plays its own instrumental (songs/<song>/Inst.ogg) with its video
+as the background (songs/<song>/Background.mpg, in time with the song): no
+stage and no characters.
 
 
 Amfoternost (Preobrazovanyi) - data/amfoternost
 -----------------------------------------------
-Made from the song's FL Studio project (FL Studio 26.1.3.5570, 295 BPM, 768
-ticks a beat) by God's Hand's SNIFF converter, through the whole playlist:
-57 patterns, 168,623,461 note records, 50,056 pattern clips.
+Made from the song's FL Studio project (FL Studio 26.1.3.5570, 295 BPM, PPQ
+768 with 16 steps a beat, so 3,072 ticks a beat) by God's Hand's SNIFF
+converter, through the whole playlist: 57 patterns, 168,623,461 note
+records, 50,056 pattern clips.
 
   3,560,023,825,730 notes
     1,780,028,092,421 the player's
@@ -40,9 +40,12 @@ ticks a beat) by God's Hand's SNIFF converter, through the whole playlist:
   beat long or more, holds for its length less a step.
 - Alt Animation: the notes of the (Alt) channels, and portamento notes.
 - Notes on the same lane less than 1 ms apart are one note that counts as
-  all of them (the game times notes to the millisecond): 1,559,568 notes in
+  all of them (the game times notes to the millisecond): 627,826 notes in
   the files; the most at one time on one lane is 19,313,960.
-- The notes start at 1:44; nearly all of them are between 16:00 and 23:30.
+- The notes run from 0:26 to 6:40 of the song's 7:10; nearly all of them
+  are between 4:00 and 5:50.
+- Audio: the instrumental of the AMFOTERNOST mod (songs/amphotercity in it);
+  background: the song's animation video.
 
 Made with:
   godshand --convert "Amfoternost (Preobrazovanyi).flp#playlist" amfoternost-GHN.ghn
@@ -57,7 +60,8 @@ does not write it).
 Andromeda Galaxy - data/andromeda-galaxy (the omniverse, 0:36 to 2:05)
 Hopeless (Pixelified) - data/hopeless-pixelified (vs. redacted fantrack, 2:22 to 3:40)
 -----------------------------------------------------------------------------------
-Max-notes charts, 4 keys, the player's side alone:
+Max-notes charts, 4 keys, the player's side alone, with each song's
+instrumental and video:
 
   115,792,089,237,316,195,423,570,985,008,687,907,853,269,984,665,640,564,039,457,584,007,913,129,639,935
   notes each: 2^256 - 1, the most notes the game counts.

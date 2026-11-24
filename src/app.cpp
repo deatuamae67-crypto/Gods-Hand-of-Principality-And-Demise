@@ -859,11 +859,21 @@ void App::drawFpsPanel() {
         refreshFpsPanel();
     }
     if (!fpsPanelRt_.id || fpsPanelW_ <= 0) return;
-    // Always the window's top left corner (not the game picture's, which
-    // sits between black bars on screens of other shapes), in window pixels,
-    // below the touch buttons when they sit in that corner.
+    // The window's top left corner on computers (not the game picture's,
+    // which sits between black bars on screens of other shapes), in window
+    // pixels; the game picture's on phones; below the touch buttons when they
+    // sit in that corner.
     const float pw = fpsPanelW_ * cs, ph = fpsPanelH_ * cs;
     float px = 2, py = 2;
+    if (platform::kAndroid) {
+        // A phone's corners are round and its edges can hold a camera: the
+        // window's corner may be out of sight (issue #36). The game picture's
+        // corner, a little in from it, is always on the screen.
+        const Vector2 o = gfx::canvasOrigin();
+        const float m = std::max(8.0f, float(GetScreenHeight()) * 0.03f);
+        px = std::max(px, o.x + m);
+        py = std::max(py, o.y + m);
+    }
     if (touchMode) {
         std::vector<Rectangle> keys;
         touch.buttonRects(keys);

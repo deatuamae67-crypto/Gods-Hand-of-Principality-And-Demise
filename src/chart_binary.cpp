@@ -398,7 +398,11 @@ bool readHead(FILE* f, Head& h, std::string& skeleton, StreamedNotes* sn, std::s
             if (!getVar(q, qe, gap)) { err = "damaged binary chart"; return false; }
             idx += gap;
             i = idx;
-            if (Count::readVarint(q, qe, count) == Count::Read::Truncated) { err = "damaged binary chart"; return false; }
+            switch (Count::readVarint(q, qe, count)) {
+                case Count::Read::Ok: break;
+                case Count::Read::Truncated: err = "damaged binary chart"; return false;
+                case Count::Read::TooLarge: err = "a note counts for more than 2^256 notes, more than this game counts"; return false;
+            }
         }
     }
     return true;

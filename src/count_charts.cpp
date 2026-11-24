@@ -1350,7 +1350,7 @@ bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::str
             }
             const std::string type = n.type < c.noteTypes.size() ? c.noteTypes[n.type] : std::string();
             const Count count = c.countOf(n);
-            b.addCount(n.time, data, n.length, type, count);
+            b.addCount(n.time, data, n.length, type, count, (n.flags & kFlagAlt) != 0);
             const uint64_t many = count.sat64();
             listed = UINT64_MAX - listed < many ? UINT64_MAX : listed + many;
         }

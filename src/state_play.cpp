@@ -215,6 +215,7 @@ void PlayState::update(double dt) {
     // A jump ahead in the editor: the notes in between pass by, unjudged.
     if (req_.preview && previewMs_ - songMs_ > 1500.0) session_.skipTo(previewMs_);
     songMs_ = req_.preview ? previewMs_ : mixer().time(now) * 1000.0 - (rendering_ ? 0.0 : a.settings.offsetMs * rate_);
+    if (bgVideo_) bgVideo_->syncTo(std::max(0.0, songMs_) / 1000.0);
     if (rendering_) {
         const int at = int(std::max(0.0, songMs_) / 1000.0), len = int(std::max(songEndMs(), chart_.lengthMs) / 1000.0);
         a.renderLabel = TextFormat("%d:%02d / %d:%02d", at / 60, at % 60, len / 60, len % 60);
@@ -340,17 +341,23 @@ void PlayState::draw() {
             gfx::setViewWidth(gfx::W);
         }
     } else {
-        gfx::beginCanvas(0.94f * camZoom_, camFocus_);
-        stage_.drawBack(now);
-        const bool demise = left_.id == CharId::Demise;
-        // As large as FNF's cast on its stages (issue #36).
-        drawCharacter(left_, {320, 640}, demise ? 1.14f : 1.2f, now, false);
-        drawCharacter(right_, {960, 652}, 1.2f, now, true);
-        stage_.drawFront(now);
-        gfx::endCanvas();
+        if (bgVideo_) {  // the song's video in place of the stage and the characters
+            gfx::beginCanvas();
+            drawBackgroundVideo();
+            gfx::endCanvas();
+        } else {
+            gfx::beginCanvas(0.94f * camZoom_, camFocus_);
+            stage_.drawBack(now);
+            const bool demise = left_.id == CharId::Demise;
+            // As large as FNF's cast on its stages (issue #36).
+            drawCharacter(left_, {320, 640}, demise ? 1.14f : 1.2f, now, false);
+            drawCharacter(right_, {960, 652}, 1.2f, now, true);
+            stage_.drawFront(now);
+            gfx::endCanvas();
+        }
 
         gfx::beginCanvas();
-        stage_.drawOverlay();
+        if (!bgVideo_) stage_.drawOverlay();
         if (minePulse_ > 0) DrawRectangleRec({0, 0, gfx::W, gfx::H}, fade(Color{200, 0, 30, 255}, minePulse_ * 0.35f));
         gfx::endCanvas();
 
@@ -460,6 +467,7 @@ void PlayState::setup() {
     else
         for (const PcmPtr* t : {&prep_.voiceP, &prep_.voiceO})
             if (*t) audioLenMs_ = std::max(audioLenMs_, double((*t)->frames()) * 1000.0 / Mixer::kRate);
+    openBackgroundVideo();
     creating_ = true;  // onCreate / onCreatePost: no note has come yet
     psych_ = !entry_->builtin && setupPsych();
     creating_ = false;
@@ -983,6 +991,31 @@ void PlayState::stopPauseMusic() {
         UnloadMusicStream(pauseMusic_);
     }
     pauseMusic_ = Music{};
+}
+
+// The song's background video (Background.mpg beside its audio or chart):
+// no sound of its own, in time with the song (bgVideo_->syncTo each frame).
+void PlayState::openBackgroundVideo() {
+    bgVideo_.reset();
+    if (!entry_ || entry_->builtin || req_.preview) return;
+    const std::string path = findBackgroundVideo({entry_->inst, entry_->dataDir});
+    if (path.empty()) return;
+    auto v = std::make_unique<VideoPlayer>();
+    if (!v->open(path, false, false)) {
+        debugNotice("background video does not play: " + path, true, false);
+        return;
+    }
+    v->syncTo(0);
+    bgVideo_ = std::move(v);
+}
+
+void PlayState::drawBackgroundVideo() {
+    if (!bgVideo_ || !bgVideo_->texture().id) return;
+    const Texture2D& t = bgVideo_->texture();
+    // As large as it takes to fill the picture (what is past its edges is cut).
+    const float s = std::max(float(gfx::W) / float(t.width), float(gfx::H) / float(t.height));
+    const float w = float(t.width) * s, h = float(t.height) * s;
+    DrawTexturePro(t, {0, 0, float(t.width), float(t.height)}, {(float(gfx::W) - w) / 2, (float(gfx::H) - h) / 2, w, h}, {0, 0}, 0, WHITE);
 }
 
 void PlayState::freePauseShot() {

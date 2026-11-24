@@ -82,8 +82,9 @@ public:
     std::string beginArray();
     void add(double time, int noteData, double length, const std::string& type = {});
     // A note that stands for `count` notes of the file (a count chart's
-    // cell), kept on its own: not stacked with the notes around it.
-    void addCount(double time, int noteData, double length, const std::string& type, const Count& count);
+    // cell), kept on its own: not stacked with the notes around it. `alt`:
+    // its own alt animation (the note's, not its section's).
+    void addCount(double time, int noteData, double length, const std::string& type, const Count& count, bool alt = false);
     void finish();
 
 private:

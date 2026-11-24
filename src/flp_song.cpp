@@ -195,39 +195,43 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
     bool inMixer = false, havePlaylist = false;
     std::vector<unsigned char> data, chunk;
     double lastProgress = -1;
-    while (in.pos() < dataEnd) {
+    // Every note counts: a project that ends before the size its data says
+    // (cut short while copying, say) is refused, not converted in part.
+    bool cut = false;
+    while (in.pos() < dataEnd && !cut) {
         const int id = in.byte();
-        if (id < 0) break;
+        if (id < 0) { cut = true; break; }
         uint32_t value = 0;
         bool isData = false;
         uint64_t len = 0;
         if (id == 0xAC) {  // FL Studio 25+: a dword, then a string a byte long
             unsigned char b5[5];
-            if (!in.get(b5, 5)) break;
+            if (!in.get(b5, 5)) { cut = true; break; }
             value = rd32(b5);
             len = b5[4];
             isData = true;
         } else if (id < 64) {
             const int v = in.byte();
-            if (v < 0) break;
+            if (v < 0) { cut = true; break; }
             value = uint32_t(v);
         } else if (id < 128) {
             unsigned char b2[2];
-            if (!in.get(b2, 2)) break;
+            if (!in.get(b2, 2)) { cut = true; break; }
             value = rd16(b2);
         } else if (id < 192) {
             unsigned char b4[4];
-            if (!in.get(b4, 4)) break;
+            if (!in.get(b4, 4)) { cut = true; break; }
             value = rd32(b4);
         } else {
             int shift = 0;
             for (;;) {
                 const int c = in.byte();
-                if (c < 0) break;
+                if (c < 0) { cut = true; break; }
                 len |= uint64_t(c & 0x7F) << shift;
                 shift += 7;
                 if (!(c & 0x80) || shift > 56) break;
             }
+            if (cut) break;
             isData = true;
         }
         if (isData && id == 0xE0) {  // a pattern's notes: counted, not kept one by one
@@ -237,7 +241,7 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
             chunk.resize(per * kNoteBytes);
             while (left >= kNoteBytes) {
                 const size_t n = size_t(std::min<uint64_t>(left / kNoteBytes, per));
-                if (!in.get(chunk.data(), n * kNoteBytes)) { left = 0; break; }
+                if (!in.get(chunk.data(), n * kNoteBytes)) { cut = true; break; }
                 left -= uint64_t(n) * kNoteBytes;
                 for (size_t k = 0; k < n; ++k) {
                     const unsigned char* r = chunk.data() + k * kNoteBytes;
@@ -260,16 +264,16 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
                     if (p - lastProgress >= 0.01) { progress(p); lastProgress = p; }
                 }
             }
-            if (left && !in.skip(left)) break;
+            if (!cut && left && !in.skip(left)) cut = true;
             continue;
         }
         if (isData) {
             if (len > (uint64_t(256) << 20)) {  // nothing else this big is needed
-                if (!in.skip(len)) break;
+                if (!in.skip(len)) cut = true;
                 continue;
             }
             data.resize(size_t(len));
-            if (len && !in.get(data.data(), size_t(len))) break;
+            if (len && !in.get(data.data(), size_t(len))) { cut = true; break; }
         }
         switch (id) {
             case 0x41: pattern = int(value); break;           // the pattern the next events belong to
@@ -281,6 +285,7 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
                 break;
             case 0xE1: inMixer = true; break;                  // the mixer: no channels after it
             case 0x9C: st.bpm = value / 1000.0; break;         // tempo x 1000
+            case 0x12: if (value >= 1 && value <= 64) st.stepsPerBeat = int(value); break;  // steps per beat
             case 0x42: if (st.bpm <= 0) st.bpm = value; break; // tempo of old versions
             case 0xC7: st.version = flText(data); break;
             case 0xC2: out.title = flText(data); break;
@@ -318,6 +323,10 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
         }
     }
     std::fclose(f);
+    if (cut || in.pos() < dataEnd) {
+        err = "an FL Studio project cut short";
+        return false;
+    }
     if (progress) progress(1.0);
     if (!(st.bpm > 0)) st.bpm = 120;
     if (patterns.empty()) { err = "no notes in the project"; return false; }
@@ -347,6 +356,10 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
             st.channels.push_back(std::to_string(c) + " " + (channelNames[c].empty() ? std::string("(no name)") : channelNames[c]) +
                                   (side[c] ? " - player" : " - opponent") + (alt[c] ? ", Alt Animation" : ""));
 
+    // A beat, what the tempo counts: ppq * stepsPerBeat / 4 ticks (a step is
+    // always a quarter of the PPQ, so 16 steps a beat make a beat 4 PPQs).
+    const double beatTicks = double(st.ppq) * double(st.stepsPerBeat) / 4.0;
+
     // Each pattern's notes as cells of its own (time in the pattern), sorted by time.
     struct PCell { uint32_t time, hold; uint16_t lane; uint8_t side, alt; uint64_t count; };
     std::map<int, std::vector<PCell>> pcells;
@@ -371,8 +384,9 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
     }
 
     // The playlist plays them: each clip its window of its pattern. A
-    // project without a playlist plays its patterns one after another.
-    if (clips.empty()) {
+    // project without a playlist plays its patterns one after another (one
+    // whose playlist has no pattern clips plays none of them).
+    if (!havePlaylist) {
         uint64_t at = 0;
         for (auto& [num, v] : pcells) {
             uint32_t end = 0;
@@ -380,7 +394,8 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
             Clip c;
             c.position = uint32_t(std::min<uint64_t>(at, UINT32_MAX));
             c.pattern = num;
-            c.length = (end + uint32_t(st.ppq) * 4 - 1) / (uint32_t(st.ppq) * 4) * uint32_t(st.ppq) * 4;
+            const uint32_t bar = std::max<uint32_t>(1, uint32_t(std::lround(beatTicks * 4)));
+            c.length = (end + bar - 1) / bar * bar;
             clips.push_back(c);
             at += c.length;
         }
@@ -408,7 +423,7 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
     if (cells.empty()) { err = "the playlist plays no notes"; return false; }
 
     // The chart: one note per cell, counting as all of the cell's notes.
-    const double msPerTick = 60000.0 / (st.bpm * st.ppq);
+    const double msPerTick = 60000.0 / (st.bpm * beatTicks);
     out.keys = 4;
     out.tempo.push_back({0, st.bpm, 0});
     out.speed = clampv(st.bpm / 50.0, 0.5, 6.0);  // SNIFF's default scroll speed
@@ -416,7 +431,7 @@ bool flpSongToChart(const std::string& path, Chart& out, std::string& err, const
     out.opponent = "dad";
     out.gf = "gf";
     out.notes.reserve(cells.size());
-    const uint64_t secTicks = uint64_t(st.ppq) * 4;
+    const uint64_t secTicks = std::max<uint64_t>(1, uint64_t(std::llround(beatTicks * 4)));
     std::vector<std::array<Count, 2>> perSection;
     for (const Cell& c : cells) {
         Note n;

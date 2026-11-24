@@ -39,6 +39,7 @@ struct FlpSongOptions {
 struct FlpSongStats {
     std::string version;        // FL Studio's, as saved in the project
     int ppq = 0;
+    int stepsPerBeat = 4;       // FL Studio's time signature: a beat is ppq * stepsPerBeat / 4 ticks
     double bpm = 0;
     uint64_t noteRecords = 0;   // notes in the patterns
     uint64_t clips = 0;         // pattern clips in the playlist
