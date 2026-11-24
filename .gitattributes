@@ -1,0 +1,5 @@
+# The media of the mod packs kept in this repository (modpacks/<folder>/) live in
+# Git LFS: a clone or a CI checkout does not download them; the Mod packs
+# workflow pulls them when it packs the folder.
+modpacks/**/*.mpg filter=lfs diff=lfs merge=lfs -text
+modpacks/**/*.ogg filter=lfs diff=lfs merge=lfs -text

@@ -1744,7 +1744,10 @@ void PlayState::psychDraw() {
         renderer_.drawFiltered(sc, cam.filters, camRt_, Rectangle{origin.x, origin.y, float(rw), float(rh)});
         gfx::beginCanvas();
     };
-    pass(scene::Cam::Game, sc.camGame, false);
+    // The song's own background video takes the game camera's place: no
+    // stage, no characters.
+    if (bgVideo_) drawBackgroundVideo();
+    else pass(scene::Cam::Game, sc.camGame, false);
     if (minePulse_ > 0) DrawRectangleRec({0, 0, gfx::W, gfx::H}, gfx::fade(Color{200, 0, 30, 255}, minePulse_ * 0.35f));
     pass(scene::Cam::Hud, sc.camHud, true);
     pass(scene::Cam::Other, sc.camOther, false);

@@ -18,6 +18,7 @@
 #include "thr_chart.hpp"
 #include "chart_stream.hpp"
 #include "common.hpp"
+#include "flp_import.hpp"
 #include "json.hpp"
 #include "keys.hpp"
 #include "miniz.h"
@@ -1262,19 +1263,15 @@ bool writeFnc1(const std::string& path, const Chart& chart, std::string& err) {
     return true;
 }
 
-// A chart as God's Hand's binary chart (.ghc): a Psych chart's JSON
-// without its notes, and the notes, each counted note listed (a .ghc stacks
-// up to 255 notes on one), so up to 2^31 notes in all.
+// A chart as God's Hand's binary chart (.ghc) or bigit chart (.ghb): a
+// Psych chart's JSON without its notes, and the notes - each note of the
+// chart once, with how many notes of the file it stands for (a byte up to
+// 255, the counts of any size beside: .ghc 4, .ghb 2).
 namespace {
 // A chart as the JSON part and the listed notes a .ghc or .ghb keeps.
 bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::string& err, uint64_t* notesOut) {
     using ghnfmt::esc;
     using ghnfmt::num;
-    const Count total = c.playerNotes + c.opponentNotes;
-    if (!total.fits64() || total.w[0] > (uint64_t(1) << 31)) {
-        err = "a .ghc or .ghb lists its notes, and this chart counts " + total.grouped() + ": keep it as .ghn";
-        return false;
-    }
     if (c.autoCharted) {
         err = "an AutoChart chart plays only in God's Hand: it stays .ghac";
         return false;
@@ -1286,12 +1283,15 @@ bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::str
                     ",\"player1\":" + esc(c.player.empty() ? "bf" : c.player) + ",\"player2\":" + esc(c.opponent.empty() ? "dad" : c.opponent) +
                     ",\"gfVersion\":" + esc(c.gf) + ",\"stage\":" + esc(c.stage) + ",\"needsVoices\":true";
     // One keyCount: the opponent's beside the player's (Leather) when the
-    // sides differ, else the chart's (JSON keeps the first of two).
-    const bool leather = c.sideKeys[0] && c.sideKeys[1] && c.sideKeys[0] != c.sideKeys[1];
+    // sides differ, else the one both use (JSON keeps the first of two).
+    // By the keys each side plays: a side without its own count plays the
+    // chart's, and the other side's own count still makes them differ.
+    const int keys0 = c.keysOf(0), keys1 = c.keysOf(1);
+    const bool leather = keys0 != keys1;
     if (leather)
-        j += ",\"keyCount\":" + std::to_string(c.sideKeys[0]) + ",\"playerKeyCount\":" + std::to_string(c.sideKeys[1]);
-    else if (c.keys != 4)
-        j += ",\"keyCount\":" + std::to_string(c.keys);
+        j += ",\"keyCount\":" + std::to_string(keys0) + ",\"playerKeyCount\":" + std::to_string(keys1);
+    else if (keys0 != 4)
+        j += ",\"keyCount\":" + std::to_string(keys0);
     j += ",\"notes\":[";
     // Sections: the chart's own, else four beats each over the whole chart.
     struct Sec {
@@ -1349,9 +1349,10 @@ bool chartToStreamed(const Chart& c, std::string& j, StreamedNotes& sn, std::str
                 }
             }
             const std::string type = n.type < c.noteTypes.size() ? c.noteTypes[n.type] : std::string();
-            const uint64_t times = c.countOf(n).sat64();
-            for (uint64_t r = 0; r < times; ++r) b.add(n.time, data, n.length, type);
-            listed += times;
+            const Count count = c.countOf(n);
+            b.addCount(n.time, data, n.length, type, count, (n.flags & kFlagAlt) != 0);
+            const uint64_t many = count.sat64();
+            listed = UINT64_MAX - listed < many ? UINT64_MAX : listed + many;
         }
     }
     b.finish();
@@ -1378,6 +1379,97 @@ bool writeChartAsGhb(const std::string& path, const Chart& c, std::string& err, 
     return chartToStreamed(c, j, sn, err, notesOut) && writeBigitChart(path, j, sn, err);
 }
 
+namespace {
+// v / d, and v % d in rem, for a divisor of 32 bits (in halves of the words:
+// 32-bit builds have no 128-bit integers).
+Count divide(const Count& v, uint32_t d, uint32_t& rem) {
+    Count q;
+    uint64_t r = 0;
+    for (size_t i = 4; i-- > 0;) {
+        const uint64_t hi = (r << 32) | (v.w[i] >> 32);
+        r = hi % d;
+        const uint64_t lo = (r << 32) | (v.w[i] & 0xFFFFFFFFu);
+        r = lo % d;
+        q.w[i] = (hi / d) << 32 | (lo / d);
+    }
+    rem = uint32_t(r);
+    return q;
+}
+}  // namespace
+
+bool makeMaxNotesChart(const MaxNotesSpec& spec, Chart& out, std::string& err) {
+    const double from = std::ceil(spec.fromMs), to = std::floor(spec.toMs);
+    if (!std::isfinite(from) || !std::isfinite(to) || from < 0 || to < from || spec.lanes < 1 || spec.lanes > kMaxKeys ||
+        !(spec.bpm > 0) || !(spec.speed > 0)) {
+        err = "a max-notes chart needs 0 <= from <= to (ms), 1 to " + std::to_string(kMaxKeys) + " lanes and a tempo";
+        return false;
+    }
+    const uint64_t ms = uint64_t(to - from) + 1;
+    if (ms > UINT32_MAX / uint64_t(spec.lanes)) {
+        err = "a max-notes chart of more than 2^32 notes in the file";
+        return false;
+    }
+    const uint32_t cells = uint32_t(ms * uint64_t(spec.lanes));
+    uint32_t rem = 0;
+    const Count share = divide(Count::max(), cells, rem), more = share + Count(1);
+    out = Chart();
+    out.title = spec.title;
+    out.keys = spec.lanes;
+    out.speed = spec.speed;
+    out.player = "bf";
+    out.opponent = "dad";
+    out.gf = "gf";
+    out.stage = "stage";
+    out.tempo.push_back({0, spec.bpm, 0});
+    out.notes.reserve(cells);
+    uint32_t k = 0;
+    for (uint64_t m = 0; m < ms; ++m)
+        for (int l = 0; l < spec.lanes; ++l, ++k) {
+            Note n;
+            n.time = from + double(m);
+            n.lane = uint16_t(l);
+            n.side = 1;
+            out.notes.push_back(n);
+            out.setCount(out.notes.back(), k < rem ? more : share);
+        }
+    // Bars of four beats, every one the player's.
+    const double bar = 4 * 60000.0 / spec.bpm;
+    for (double t = 0; t <= to; t += bar) out.sections.push_back({t, true, false, false, 4, spec.bpm});
+    out.focus.push_back({0, 1});
+    out.rawNoteCount = cells;
+    out.finalize(spec.bpm);
+    if (out.notes.size() != cells || out.playerNotes != Count::max() || !out.opponentNotes.isZero()) {
+        err = "the notes did not add up to 2^256 - 1";  // never: each millisecond is a note of its own
+        return false;
+    }
+    return true;
+}
+
+int makeMaxNotesChartFile(const std::string& out, const MaxNotesSpec& spec) {
+    const auto t0 = std::chrono::steady_clock::now();
+    std::string err;
+    Chart c;
+    if (!makeMaxNotesChart(spec, c, err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 1;
+    }
+    bool ok;
+    if (endsWithI(out, kCountChartExt)) ok = writeGhn(out, c, err);
+    else if (endsWithI(out, kBinaryChartExt)) ok = writeChartAsGhc(out, c, err);
+    else if (endsWithI(out, kBigitChartExt)) ok = writeChartAsGhb(out, c, err);
+    else {
+        err = "a max-notes chart is saved as .ghn, .ghc or .ghb: the other formats hold counts of 64 bits at most";
+        ok = false;
+    }
+    if (!ok) {
+        std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
+        return 1;
+    }
+    std::printf("%s: %s notes in %s, %s bytes, %.2f s\n", out.c_str(), c.playerNotes.grouped().c_str(), Count(c.notes.size()).grouped().c_str(),
+                Count(fileSize(out)).grouped().c_str(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    return 0;
+}
+
 int convertChartFile(const std::string& in, const std::string& out) {
     const auto t0 = std::chrono::steady_clock::now();
     auto seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
@@ -1387,19 +1479,22 @@ int convertChartFile(const std::string& in, const std::string& out) {
         return 1;
     }
     const bool toBigit = endsWithI(out, kBigitChartExt);
-    if ((endsWithI(out, kBinaryChartExt) || toBigit) && (isCountChart(in) || isThrChart(in))) {
-        // A count chart (.ghn, the iutk engine's .bin, .raid) or a .thr: read, then its notes listed.
+    std::string flpFile;
+    int flpPattern = -1;
+    const bool fromFlp = flpChartPath(in, flpFile, flpPattern);
+    if ((endsWithI(out, kBinaryChartExt) || toBigit) && (isCountChart(in) || isThrChart(in) || fromFlp)) {
+        // A count chart (.ghn, the iutk engine's .bin, .raid), a .thr or an FL
+        // Studio project (a pattern, or song.flp#playlist): read, then its notes listed.
         Chart c;
         if (!loadChartFile(in, "Normal", c, err)) {
             std::fprintf(stderr, "%s: %s\n", in.c_str(), err.c_str());
             return 1;
         }
-        uint64_t listed = 0;
-        if (!(toBigit ? writeChartAsGhb(out, c, err, &listed) : writeChartAsGhc(out, c, err, &listed))) {
+        if (!(toBigit ? writeChartAsGhb(out, c, err) : writeChartAsGhc(out, c, err))) {
             std::fprintf(stderr, "%s: %s\n", out.c_str(), err.c_str());
             return 1;
         }
-        std::printf("%s -> %s: %s notes, %s bytes, %.2f s\n", in.c_str(), out.c_str(), Count(listed).grouped().c_str(),
+        std::printf("%s -> %s: %s notes, %s bytes, %.2f s\n", in.c_str(), out.c_str(), (c.playerNotes + c.opponentNotes).grouped().c_str(),
                     Count(fileSize(out)).grouped().c_str(), seconds());
         return 0;
     }
@@ -1455,7 +1550,7 @@ int convertChartFile(const std::string& in, const std::string& out) {
                     seconds());
         return 0;
     }
-    std::fprintf(stderr, "%s: write .ghn, .ghc, .bin or .thr\n", out.c_str());
+    std::fprintf(stderr, "%s: write .ghn, .ghc, .ghb, .bin or .thr\n", out.c_str());
     return 1;
 }
 

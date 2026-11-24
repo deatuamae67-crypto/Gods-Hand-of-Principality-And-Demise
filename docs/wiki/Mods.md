@@ -6,7 +6,7 @@ God's Hand plays Friday Night Funkin' mods made for Psych Engine (0.4 to 0.7.3 a
 
 - **Computers**: put the mod in the `mods/` folder next to the game, as a folder or a `.zip`. A `.zip` is unpacked into a folder of its own when the game starts; the archive moves to `mods/.installed/`.
 - **Android**: the game's files are in `Android/data/com.godshand.game/files/`, with `mods/` inside. Freeplay → **IMPORT ZIP** installs a `.zip` picked with the system's file picker.
-- **Mod packs**: Freeplay `M` downloads and installs packs from the game's `mods` release (45 packs, 803 songs from JS Engine mods among them). Not all of these mods are by the game's author: they belong to their creators.
+- **Mod packs**: Freeplay `M` downloads and installs packs from the game's `mods` release (46 packs, 803 songs from JS Engine mods among them, and "charts made in sniff": the charts made with the game for issue #36). Not all of these mods are by the game's author: they belong to their creators.
 - **Changes in the packs**: with Options → INTERFACE → **Auto-update** on, the game compares the packs you installed with the `mods` release when it starts (each zip's checksum, and when one differs, its list of files, read from the end of the zip without downloading it). **MOD PACKS** on the main menu then shows the packs that **CHANGED**, with the songs and files added, changed and removed: **INSTALL CHANGES** downloads and installs them, **REMOVE CHANGES** puts back the files they replaced, and **REMOVE PACK** takes the pack off (`ENTER` twice). Files you put in a pack's folder yourself stay.
 
 Freeplay lists every song the game finds; the mod's name comes from its `pack.json` or `mod.json` (`"name"`), else its folder.
@@ -18,7 +18,7 @@ The Psych Engine layout:
 | Folder | What goes there |
 |---|---|
 | `data/<song>/` | Charts (`<song>-<difficulty>.json`), `events.json`, the song's own scripts |
-| `songs/<song>/` | `Inst.ogg` and `Voices.ogg`, or separate voices for each side (`Voices-Player` / `Voices-Opponent`, `Voices-bf` / `Voices-dad`...); `.mp3` and `.wav` work too |
+| `songs/<song>/` | `Inst.ogg` and `Voices.ogg`, or separate voices for each side (`Voices-Player` / `Voices-Opponent`, `Voices-bf` / `Voices-dad`...); `.mp3` and `.wav` work too. `Background.mpg`: the song's own background video (below) |
 | `characters/` | Character JSON files (Psych or V-Slice) and their scripts |
 | `stages/` | Stage JSON files (with Psych 0.7.3 objects) and stage scripts |
 | `images/` | Pictures and atlases (Sparrow `.xml`, Packer `.txt`), `icons/`, note skins |
@@ -27,6 +27,10 @@ The Psych Engine layout:
 | `custom_events/`, `custom_notetypes/` | Events and note types: a `.txt` description and a script |
 | `weeks/` | Psych's week files. God's Hand lists every song of the mod in Freeplay; its Story mode has the game's own songs |
 | `data/settings.json` | The mod's settings, read with `getModSetting` |
+
+### A song's background video
+
+A song with `Background.mpg` (or `.mpeg`, any letter case) in its `songs/<song>/` or `data/<song>/` folder plays it as its background, in time with the song: the video's frame is always the one at the song's position (it seeks with the song and stops with the pause), it fills the picture (what is past its edges is cut), it has no sound of its own, and it takes the place of the stage and of every character (the game camera's sprites). The HUD, notes and scripts' HUD sprites stay over it. It must be MPEG-1, which plays on every system without help, for example `ffmpeg -i video.mp4 -an -vf scale=640:360,fps=30 -c:v mpeg1video -b:v 900k -f mpeg Background.mpg`. The "charts made in sniff" pack's songs play this way.
 
 The game also finds songs in other layouts: mods inside mods; full game builds with charts in `assets/preload/data/` or `assets/shared/data/` and audio in `assets/songs/` (Psych 0.4–0.7, H-Slice, Psych EK); a build's own `mods/` folder; `data/charts/<song>/`; charts loose in `data/`; compiled builds inside source trees; PulseForge projects; and folders with only audio (AutoChart charts them). Identical copies of a chart are listed once.
 

@@ -415,8 +415,10 @@ static bool parsePsych(const json::Document& doc, Chart& out, std::string& err, 
                     if (k >= 0 && size_t(k) + 1 < sn->rangeStart.size()) {
                         for (uint32_t q = sn->rangeStart[size_t(k)]; q < sn->rangeStart[size_t(k) + 1]; ++q) {
                             const StreamedNote& r = sn->notes[q];
+                            const size_t had = out.notes.size();
                             addNote(r.time, r.noteData(), r.length, must, stepMs, altSec, gfSec, {}, false, r.alt(), r.typeIdx(),
-                                    r.stack);
+                                    r.stack ? r.stack : 1);
+                            if (r.stack == 0 && out.notes.size() > had) out.setCount(out.notes.back(), sn->countAt(q));  // a count chart's cell
                         }
                     }
                     continue;
@@ -669,7 +671,9 @@ static bool parsePulseForge(const json::Document& doc, Chart& out, std::string& 
             if (k >= 0 && size_t(k) + 1 < sn->rangeStart.size()) {
                 for (uint32_t q = sn->rangeStart[size_t(k)]; q < sn->rangeStart[size_t(k) + 1]; ++q) {
                     const StreamedNote& r = sn->notes[q];
-                    if (Note* n = add(r.time, r.length, r.noteData() % 20, r.noteData() / 20, r.stack); n && r.typeIdx()) {
+                    Note* n = add(r.time, r.length, r.noteData() % 20, r.noteData() / 20, r.stack ? r.stack : 1);
+                    if (n && r.stack == 0) out.setCount(*n, sn->countAt(q));
+                    if (n && r.typeIdx()) {
                         const uint16_t ct = r.typeIdx() < streamTypes.size() ? streamTypes[r.typeIdx()] : 0;
                         const std::string typeName = ct ? out.noteTypes[ct] : std::string();
                         if (ct) applyNoteType(typeName, *n, out);

@@ -96,6 +96,7 @@ void VideoPlayer::close() {
     tex_ = Texture2D{};
     if (plm_) plm_destroy(plm_);
     plm_ = nullptr;
+    primed_ = false;
     pending_.clear();
 }
 
@@ -128,6 +129,20 @@ void VideoPlayer::update(double dt) {
     }
 }
 
+void VideoPlayer::syncTo(double t) {
+    if (!plm_) return;
+    const double end = plm_get_duration(plm_);
+    t = std::max(0.0, end > 0 ? std::min(t, end) : t);
+    const double now = plm_get_time(plm_);
+    if (!primed_ || t < now - 0.05 || t > now + 2.0) plm_seek(plm_, t, 1);
+    else if (t > now) plm_decode(plm_, t - now);
+    primed_ = true;
+    if (frameDirty_ && tex_.id) {
+        UpdateTexture(tex_, rgba_.data());
+        frameDirty_ = false;
+    }
+}
+
 bool VideoPlayer::ended() const { return !plm_ || plm_has_ended(plm_); }
 double VideoPlayer::duration() const { return plm_ ? plm_get_duration(plm_) : 0.0; }
 
@@ -157,6 +172,20 @@ std::string findFfmpeg(const std::string& baseDir) {
 }
 
 }  // namespace
+
+std::string findBackgroundVideo(const std::vector<std::string>& places) {
+    for (const std::string& place : places) {
+        if (place.empty()) continue;
+        std::error_code ec;
+        fs::path dir = toPath(place);
+        if (!fs::is_directory(dir, ec)) dir = dir.parent_path();
+        for (const auto& f : fs::directory_iterator(dir, ec)) {
+            const std::string n = toLower(pathStr(f.path().filename()));
+            if ((n == "background.mpg" || n == "background.mpeg") && f.is_regular_file(ec)) return pathStr(f.path());
+        }
+    }
+    return {};
+}
 
 VideoSource findVideo(const scene::Files& files, const std::string& nameIn, const std::string& baseDir) {
     VideoSource out;

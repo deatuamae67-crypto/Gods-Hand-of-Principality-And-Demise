@@ -27,6 +27,9 @@ public:
 
     bool open(const std::string& mpgPath, bool loop, bool withAudio = true);
     void update(double dt);  // decodes up to the new time and uploads the frame
+    // Shows the frame at `seconds` (a song's clock): decodes up to it, or
+    // seeks when the clock jumped (a restart, a seek, a long hitch).
+    void syncTo(double seconds);
     bool ended() const;
     const Texture2D& texture() const { return tex_; }
     int width() const { return w_; }
@@ -44,6 +47,7 @@ private:
     Texture2D tex_{};
     std::vector<uint8_t> rgba_;
     bool frameDirty_ = false;
+    bool primed_ = false;  // a frame decoded since open (until then the texture is blank)
     int w_ = 0, h_ = 0;
     AudioStream stream_{};
     bool audio_ = false;
@@ -59,5 +63,10 @@ struct VideoSource {
     bool converting = false;
 };
 VideoSource findVideo(const scene::Files& files, const std::string& name, const std::string& baseDir);
+
+// A song's background video: Background.mpg (or .mpeg, any letter case) in
+// the folder of one of `places` (a song's audio file, its chart folder...).
+// Empty when there is none.
+std::string findBackgroundVideo(const std::vector<std::string>& places);
 
 }  // namespace gh

@@ -11,6 +11,7 @@
 // beat or more, or played softly (velocity under 64), becomes a hold.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -48,7 +49,13 @@ struct FlpClip {
 };
 
 struct FlpProject {
-    int ppqn = 96;          // ticks per beat
+    int ppqn = 96;          // ticks per quarter note (the header's PPQ)
+    // FL Studio's "steps per beat" (Project > General settings > Time
+    // signature). A step is always a quarter of the PPQ, so a beat - what the
+    // tempo counts - is ppqn * stepsPerBeat / 4 ticks: with 16 steps a beat,
+    // four times the PPQ (issue #36's song is saved so).
+    int stepsPerBeat = 4;
+    double ticksPerBeat() const { return double(ppqn) * double(std::max(1, stepsPerBeat)) / 4.0; }
     double bpm = 0;         // 0: not in the file (.fsc scores)
     std::string title;
     int chartChannel = 0;   // the FPC channel (SNIFF's choice), else the first
@@ -63,6 +70,9 @@ struct FlpProject {
 std::vector<FlpNote> flpSongNotes(const FlpProject& p, int channel);
 
 bool readFlp(std::string_view bytes, FlpProject& out, std::string& err);
+// Where a pattern clip starts in its pattern, in ticks, from its playlist
+// record's bytes 24-27 (whole ticks from FL Studio 20, -1 = none; a float before).
+double flpClipOffset(const unsigned char* p);
 bool readFlpFile(const std::string& path, FlpProject& out, std::string& err);
 
 // The patterns holding chart notes, by number. Strict: nearly all of the
@@ -78,6 +88,8 @@ bool flpToChart(const FlpProject& p, int pattern, Chart& out, std::string& err, 
 
 // "song.flp#3" names pattern 3 of song.flp (the library lists each pattern
 // with chart notes as a difficulty). Splits it; pattern -1 when none given.
+// "song.flp#playlist": the whole song (flp_song.hpp), pattern kFlpWholeSong.
+constexpr int kFlpWholeSong = -2;
 bool flpChartPath(const std::string& chartPath, std::string& file, int& pattern);
 
 }  // namespace gh
